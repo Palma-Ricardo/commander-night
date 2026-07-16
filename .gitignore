@@ -1,0 +1,7 @@
+vendor/
+target/
+*.log
+mage-full_*/
+mage-full_*.zip
+bridge/logs/
+bridge/out/
