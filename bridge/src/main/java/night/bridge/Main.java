@@ -1,6 +1,10 @@
 package night.bridge;
 
+import io.javalin.Javalin;
 import night.bridge.config.Config;
+import night.bridge.net.Codec;
+import night.bridge.net.SessionRegistry;
+import night.bridge.net.WsEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,7 +13,8 @@ import java.nio.file.Path;
 
 /**
  * night-bridge entry point: load configuration, wire subsystems, run until
- * shut down. M0 stops after the config stage — the WS endpoint arrives in M1.
+ * shut down. M1 serves the WS skeleton (hello/welcome) and /healthz; the
+ * XMage side arrives in M2.
  */
 public final class Main {
 
@@ -27,7 +32,16 @@ public final class Main {
         log.info("night-bridge starting: bind={} xmage={}:{} keyframeEvery={} callbackTap={}",
                 config.bind(), config.xmage().host(), config.xmage().port(),
                 config.keyframeEvery(), config.callbackTap());
-        log.info("M0 scaffold — nothing to serve yet (WS endpoint lands in M1), exiting");
+
+        SessionRegistry registry = new SessionRegistry();
+        Javalin app = new WsEndpoint(new Codec(), registry).buildApp();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("shutting down");
+            app.stop();
+            registry.close();
+        }, "shutdown"));
+        app.start(config.bindHost(), config.bindPort());
+        log.info("night-bridge listening on {} (WS /ws, GET /healthz)", config.bind());
     }
 
     /** Optional single argument: path to the YAML config. Otherwise ./bridge.yaml if present, else defaults. */

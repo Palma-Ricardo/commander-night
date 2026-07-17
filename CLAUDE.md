@@ -11,8 +11,10 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M0 (Maven scaffold) done 2026-07-16; JDK-26 full-game soak passed. Next: M1 (WS
-skeleton: hello/welcome, codec, healthz). Milestone table in design.md §14.
+**Status:** M1 (WS skeleton) done 2026-07-16 — hello/welcome + session-token mint, codec with
+BAD_MESSAGE hardening, /healthz, conformance corpus seeded. Next: M2 (first playable seat:
+lobby → live game vs AI, ViewTranslator, priority/confirm prompts). Milestone table in
+design.md §14.
 
 ## Layout
 
@@ -20,7 +22,8 @@ skeleton: hello/welcome, codec, healthz). Milestone table in design.md §14.
   `bridge/src/spike/java`, activated by `-Pspike`.
 - `vendor/` (gitignored) — `xmage-dist/` runnable server + client jars; `mage/` shallow source
   clone for reading XMage internals; `tools/`.
-- `docs/` — specs above; `docs/protocol/samples/` will hold the conformance corpus.
+- `docs/` — specs above; `docs/protocol/samples/` is the conformance corpus (bridge tests
+  assert it via `ProtocolSamplesTest`; the TS client will assert the mirror direction).
 
 ## Commands
 
