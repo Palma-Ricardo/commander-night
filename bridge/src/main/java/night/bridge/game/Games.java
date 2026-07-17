@@ -1,0 +1,18 @@
+package night.bridge.game;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/** gameId → coordinator, for routing game.* commands (design §4). */
+public final class Games {
+
+    private final Map<String, GameCoordinator> byId = new ConcurrentHashMap<>();
+
+    void register(String gameId, GameCoordinator coordinator) {
+        byId.put(gameId, coordinator);
+    }
+
+    public GameCoordinator byId(String gameId) {
+        return byId.get(gameId);
+    }
+}

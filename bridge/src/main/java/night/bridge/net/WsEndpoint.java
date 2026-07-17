@@ -2,9 +2,20 @@ package night.bridge.net;
 
 import io.javalin.Javalin;
 import io.javalin.websocket.WsConfig;
+import night.bridge.game.GameCoordinator;
+import night.bridge.game.Games;
+import night.bridge.game.SeatPump;
+import night.bridge.lobby.LobbyService;
+import night.bridge.proto.ClientMsg;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
+import night.bridge.proto.GameAnswer;
 import night.bridge.proto.Hello;
+import night.bridge.proto.LobbyCreate;
+import night.bridge.proto.LobbyDeck;
+import night.bridge.proto.LobbyJoin;
+import night.bridge.proto.LobbyReady;
+import night.bridge.proto.LobbyStart;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,11 +23,14 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * The bridge's HTTP/WS face: {@code /ws} (protocol v1) and {@code /healthz}
  * (design §12). Jetty threads never touch bridge state — they decode and
- * route; replies go out through each connection's own send queue (design §4).
+ * route: {@code lobby.*} to the lobby executor, {@code game.*} to the target
+ * seat pump (design §4); replies go out through each connection's own send
+ * queue.
  */
 public final class WsEndpoint {
 
@@ -24,11 +38,18 @@ public final class WsEndpoint {
 
     private final Codec codec;
     private final SessionRegistry registry;
+    private final LobbyService lobby;
+    private final Games games;
+    private final Supplier<Map<String, Object>> xmageHealth;
     private final Map<String, Conn> conns = new ConcurrentHashMap<>();
 
-    public WsEndpoint(Codec codec, SessionRegistry registry) {
+    public WsEndpoint(Codec codec, SessionRegistry registry, LobbyService lobby,
+                      Games games, Supplier<Map<String, Object>> xmageHealth) {
         this.codec = codec;
         this.registry = registry;
+        this.lobby = lobby;
+        this.games = games;
+        this.xmageHealth = xmageHealth;
     }
 
     /** Builds the Javalin app (not yet started — callers pick host/port). */
@@ -38,14 +59,13 @@ public final class WsEndpoint {
             cfg.jetty.modifyWebSocketServletFactory(ws -> {
                 // Keepalive is server pings (below); the timeout only reaps dead peers.
                 ws.setIdleTimeout(Duration.ofMinutes(5));
-                // Command frames are small; the ceiling exists for deck uploads (M2).
+                // Command frames are small; the ceiling exists for deck uploads.
                 ws.setMaxTextMessageSize(256 * 1024);
             });
         });
         app.get("/healthz", ctx -> ctx.json(Map.of(
                 "up", true,
-                // Hardwired until the XMage connector lands (M2).
-                "xmage", Map.of("connected", false))));
+                "xmage", xmageHealth.get())));
         app.ws("/ws", this::configureWs);
         return app;
     }
@@ -86,9 +106,42 @@ public final class WsEndpoint {
                     // §3 forward compatibility — includes v1 commands from later milestones.
                     log.info("ignoring message type '{}' from {}", t, conn.id());
             case Codec.Decoded.Ok(Hello hello) -> registry.hello(conn, hello);
-            // Exhaustive: Hello is the only ClientMsg in M1. New commands added to
-            // the vocabulary make this switch fail to compile until routed (lobby
-            // executor / seat pumps, design §4).
+            case Codec.Decoded.Ok(LobbyCreate cmd) -> lobbyRoute(conn, cmd);
+            case Codec.Decoded.Ok(LobbyJoin cmd) -> lobbyRoute(conn, cmd);
+            case Codec.Decoded.Ok(LobbyDeck cmd) -> lobbyRoute(conn, cmd);
+            case Codec.Decoded.Ok(LobbyReady cmd) -> lobbyRoute(conn, cmd);
+            case Codec.Decoded.Ok(LobbyStart cmd) -> lobbyRoute(conn, cmd);
+            case Codec.Decoded.Ok(GameAnswer cmd) -> answerRoute(conn, cmd);
+            // Exhaustive over ClientMsg: a new command type fails to compile
+            // here until it is routed to its owning executor (design §4).
         }
+    }
+
+    private void lobbyRoute(Conn conn, ClientMsg cmd) {
+        String userId = conn.userId();
+        if (userId == null) {
+            conn.send(Err.re(cmd.id(), ErrorCode.AUTH_FAILED, "send session.hello first"));
+            return;
+        }
+        lobby.handle(userId, cmd, conn::send);
+    }
+
+    private void answerRoute(Conn conn, GameAnswer cmd) {
+        String userId = conn.userId();
+        if (userId == null) {
+            conn.send(Err.re(cmd.id(), ErrorCode.AUTH_FAILED, "send session.hello first"));
+            return;
+        }
+        GameCoordinator game = games.byId(cmd.gameId());
+        if (game == null) {
+            conn.send(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME, "unknown game " + cmd.gameId()));
+            return;
+        }
+        SeatPump pump = game.pumpFor(userId);
+        if (pump == null) {
+            conn.send(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME, "no seat in game " + cmd.gameId()));
+            return;
+        }
+        pump.answer(cmd, conn::send);
     }
 }

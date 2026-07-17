@@ -27,6 +27,8 @@
     <!-- Must match the dist under vendor/xmage-dist (design §1: exact-version handshake). -->
     <xmage.version>1.4.60</xmage.version>
     <jackson.version>2.19.2</jackson.version>
+    <!-- The live tier needs a running local XMage server; -Plive clears this. -->
+    <surefire.excludedGroups>live</surefire.excludedGroups>
   </properties>
 
   <dependencies>
@@ -174,11 +176,111 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.3</version>
+        <configuration>
+          <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+        </configuration>
       </plugin>
     </plugins>
   </build>
 
   <profiles>
+    <!-- Live-integration tier (design §13): boots the whole bridge in the test
+         JVM and plays a real game against a local XMage server, which must
+         already be running. Usage:
+           mvn -Plive test
+         The argLine carries the JDK-26 flags the XMage session layer needs. -->
+    <profile>
+      <id>live</id>
+      <properties>
+        <surefire.excludedGroups/>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <argLine>--add-opens=java.base/java.io=ALL-UNNAMED
+                --add-opens=java.base/java.lang=ALL-UNNAMED
+                -Djava.awt.headless=true</argLine>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!-- The bridge daemon itself:
+           mvn -Prun compile exec:exec
+         Runs from the repo root (bridge.yaml + sampleDecksDir are repo-root-
+         relative) with the JDK-26 session-layer flags (design §1/§11). -->
+    <profile>
+      <id>run</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+            <configuration>
+              <executable>java</executable>
+              <workingDirectory>${project.basedir}/..</workingDirectory>
+              <arguments>
+                <argument>--add-opens=java.base/java.io=ALL-UNNAMED</argument>
+                <argument>--add-opens=java.base/java.lang=ALL-UNNAMED</argument>
+                <argument>-Djava.awt.headless=true</argument>
+                <argument>-classpath</argument>
+                <classpath/>
+                <argument>night.bridge.Main</argument>
+              </arguments>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!-- The interactive terminal client for playing an M2 game as a human:
+           mvn -Pharness compile exec:exec           (bridge must be running)
+         Pure protocol-v1 WS client — no XMage classes involved. -->
+    <profile>
+      <id>harness</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>add-spike-source</id>
+                <phase>generate-sources</phase>
+                <goals>
+                  <goal>add-source</goal>
+                </goals>
+                <configuration>
+                  <sources>
+                    <source>src/spike/java</source>
+                  </sources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+            <configuration>
+              <executable>java</executable>
+              <arguments>
+                <argument>-classpath</argument>
+                <classpath/>
+                <argument>night.spike.WsHarness</argument>
+              </arguments>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!-- The spike: the original architecture-proving headless client, kept
          runnable as the fixture-capture tool (design §3). Usage:
            mvn -Pspike compile exec:exec

@@ -3,6 +3,10 @@ package night.bridge.net;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
+import night.bridge.config.Config;
+import night.bridge.game.Games;
+import night.bridge.lobby.LobbyService;
+import night.bridge.xmage.XmageGateway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -36,13 +40,18 @@ class WsEndpointTest {
 
     private static Javalin app;
     private static SessionRegistry registry;
+    private static XmageGateway gateway;
+    private static LobbyService lobby;
     private static int port;
     private static final ObjectMapper json = new ObjectMapper();
 
     @BeforeAll
     static void start() {
         registry = new SessionRegistry();
-        app = new WsEndpoint(new Codec(), registry).buildApp();
+        gateway = new XmageGateway(Config.DEFAULTS);
+        Games games = new Games();
+        lobby = new LobbyService(registry, gateway, games, Config.DEFAULTS);
+        app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         app.start("127.0.0.1", 0);
         port = app.port();
     }
@@ -50,6 +59,8 @@ class WsEndpointTest {
     @AfterAll
     static void stop() {
         app.stop();
+        lobby.close();
+        gateway.close();
         registry.close();
     }
 

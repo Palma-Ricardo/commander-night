@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -50,6 +51,8 @@ public final class SessionRegistry implements AutoCloseable {
     private final ExecutorService exec = Executors.newSingleThreadExecutor(
             Thread.ofVirtual().name("session-registry").factory());
     private final Map<String, Session> byToken = new HashMap<>();
+    /** userId → live connection; read from pumps/lobby via {@link #sinkFor}. */
+    private final ConcurrentHashMap<String, Conn> liveByUser = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     void hello(Conn conn, Hello hello) {
@@ -61,9 +64,24 @@ public final class SessionRegistry implements AutoCloseable {
             for (Session s : byToken.values()) {
                 if (s.conn == conn) {
                     s.conn = null;
+                    liveByUser.remove(s.userId, conn);
                 }
             }
         });
+    }
+
+    /**
+     * A stable per-user outbound: resolves the live connection at send time, so
+     * pumps survive connection churn without knowing about it (design §4).
+     * Sends while the user is disconnected are dropped; resume (M4) backfills.
+     */
+    public ClientSink sinkFor(String userId) {
+        return msg -> {
+            Conn conn = liveByUser.get(userId);
+            if (conn != null) {
+                conn.send(msg);
+            }
+        };
     }
 
     private void handleHello(Conn conn, Hello hello) {
@@ -97,6 +115,8 @@ public final class SessionRegistry implements AutoCloseable {
                     WsCloseCodes.POLICY_VIOLATION, "superseded by a newer connection");
         }
         session.conn = conn;
+        conn.userId(session.userId);
+        liveByUser.put(session.userId, conn);
         conn.send(new Welcome(hello.id(), PROTOCOL_VERSION, session.userId,
                 fresh ? session.token : null, Role.PLAYER, false));
     }

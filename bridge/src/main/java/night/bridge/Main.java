@@ -2,9 +2,12 @@ package night.bridge;
 
 import io.javalin.Javalin;
 import night.bridge.config.Config;
+import night.bridge.game.Games;
+import night.bridge.lobby.LobbyService;
 import night.bridge.net.Codec;
 import night.bridge.net.SessionRegistry;
 import night.bridge.net.WsEndpoint;
+import night.bridge.xmage.XmageGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,8 +16,8 @@ import java.nio.file.Path;
 
 /**
  * night-bridge entry point: load configuration, wire subsystems, run until
- * shut down. M1 serves the WS skeleton (hello/welcome) and /healthz; the
- * XMage side arrives in M2.
+ * shut down. M2 serves lobby → live game against a local XMage server
+ * (keyframes-only state sync; priority/confirm/target/mana prompts).
  */
 public final class Main {
 
@@ -34,10 +37,15 @@ public final class Main {
                 config.keyframeEvery(), config.callbackTap());
 
         SessionRegistry registry = new SessionRegistry();
-        Javalin app = new WsEndpoint(new Codec(), registry).buildApp();
+        XmageGateway gateway = new XmageGateway(config);
+        Games games = new Games();
+        LobbyService lobby = new LobbyService(registry, gateway, games, config);
+        Javalin app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("shutting down");
             app.stop();
+            lobby.close();
+            gateway.close();
             registry.close();
         }, "shutdown"));
         app.start(config.bindHost(), config.bindPort());

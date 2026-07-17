@@ -11,10 +11,11 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M1 (WS skeleton) done 2026-07-16 — hello/welcome + session-token mint, codec with
-BAD_MESSAGE hardening, /healthz, conformance corpus seeded. Next: M2 (first playable seat:
-lobby → live game vs AI, ViewTranslator, priority/confirm prompts). Milestone table in
-design.md §14.
+**Status:** M2 (first playable seat) done 2026-07-16 — lobby (create/join/deck/ready/start with
+AI fill) → live game vs 3 AIs, ViewTranslator with keyframes-only sync, prompts
+confirm/priority/chooseTargets/payMana with promptId-fenced answers, game log pipeline,
+game.over. Next: M3 (full prompt vocabulary + compound replay, patches + resync,
+`game.action` set). Milestone table in design.md §14.
 
 ## Layout
 
@@ -30,10 +31,15 @@ design.md §14.
 ```sh
 ./bridge/install-xmage-jars.sh    # one-time (and after a dist upgrade): installs XMage jars
                                   # into the local Maven repo — they are not on Central
-cd bridge && mvn test             # build + unit tests
+cd bridge && mvn test             # build + unit tests (live tier excluded)
 
-vendor/xmage-dist/xmage/mage-server/startServer.sh   # local XMage server (bundled JRE 8)
-cd bridge && mvn -Pspike compile exec:exec           # run the spike against it (repo-root cwd)
+# local XMage server — startServer.sh may lack +x; equivalent:
+(cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx1024m -jar lib/mage-server-1.4.60.jar)
+
+cd bridge && mvn -Plive test                   # live tier: full game vs 3 AIs through the bridge
+cd bridge && mvn -Prun compile exec:exec       # the bridge daemon (repo-root cwd, JDK-26 flags)
+cd bridge && mvn -Pharness compile exec:exec   # interactive terminal client (human seat)
+cd bridge && mvn -Pspike compile exec:exec     # the spike/fixture-capture tool (repo-root cwd)
 ```
 
 ## Hard constraints

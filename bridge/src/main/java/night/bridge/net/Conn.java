@@ -35,6 +35,8 @@ final class Conn {
     private final BlockingQueue<Outbound> queue = new ArrayBlockingQueue<>(SEND_QUEUE_CAPACITY);
     private final AtomicBoolean closing = new AtomicBoolean();
     private final Thread drainer;
+    /** Set by the registry once hello establishes the session; read on Jetty threads for routing. */
+    private volatile String userId;
 
     Conn(WsContext ctx, Codec codec) {
         this.ctx = ctx;
@@ -73,6 +75,14 @@ final class Conn {
 
     String id() {
         return ctx.sessionId();
+    }
+
+    String userId() {
+        return userId;
+    }
+
+    void userId(String userId) {
+        this.userId = userId;
     }
 
     private void drain() {

@@ -1,0 +1,1 @@
+{"t":"game.prompt","seq":511,"gameId":"g1","promptId":23,"message":"Select target creature (selected 1 of 2)","kind":"chooseTargets","candidates":["aaa-1","bbb-2"],"min":1,"max":2,"required":true,"progress":{"chosen":1,"of":2}}

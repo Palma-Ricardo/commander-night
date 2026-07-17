@@ -2,13 +2,11 @@ package night.bridge.net;
 
 import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import night.bridge.proto.ClientMsg;
+import night.bridge.proto.Json;
 import night.bridge.proto.Msg;
 import night.bridge.proto.ServerMsg;
 
@@ -36,10 +34,7 @@ public final class Codec {
         }
     }
 
-    private final ObjectMapper mapper = JsonMapper.builder()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .serializationInclusion(JsonInclude.Include.NON_NULL)
-            .build();
+    private final ObjectMapper mapper = Json.MAPPER;
 
     public String encode(ServerMsg msg) {
         try {
