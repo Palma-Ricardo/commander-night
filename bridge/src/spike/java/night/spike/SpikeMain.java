@@ -5,20 +5,28 @@ import com.google.gson.GsonBuilder;
 import mage.cards.decks.DeckCardInfo;
 import mage.cards.decks.DeckCardLists;
 import mage.choices.Choice;
+import mage.constants.ManaType;
 import mage.constants.MultiplayerAttackOption;
+import mage.constants.PlayerAction;
 import mage.constants.RangeOfInfluence;
 import mage.game.match.MatchOptions;
 import mage.interfaces.MageClient;
 import mage.interfaces.callback.ClientCallback;
+import mage.players.PlayableObjectStats;
 import mage.players.PlayerType;
 import mage.remote.Connection;
 import mage.remote.Session;
 import mage.remote.SessionImpl;
+import mage.util.MultiAmountMessage;
 import mage.utils.MageVersion;
+import mage.view.AbilityPickerView;
 import mage.view.ChatMessage;
+import mage.view.CommandObjectView;
 import mage.view.GameClientMessage;
 import mage.view.GameEndView;
 import mage.view.GameView;
+import mage.view.ManaPoolView;
+import mage.view.PlayerView;
 import mage.view.SimpleCardView;
 import mage.view.TableClientMessage;
 import mage.view.TableView;
@@ -28,19 +36,35 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Commander Night bridge spike.
+ * Commander Night bridge spike, phase 2: prompt coverage.
  *
  * Connects to a local XMage server as a headless client, creates a Commander
- * Free For All table, seats itself (auto-passing every priority) plus three AI
- * players, starts the match, and streams every server callback to a JSON-lines
- * log. Success = a full game captured in the log.
+ * Free For All table, seats itself plus three AI players, starts the match,
+ * and streams every server callback to a JSON-lines log.
+ *
+ * Unlike phase 1 (which auto-passed everything), this client plays GREEDILY:
+ * on priority it acts on the first playable object, pays mana by hand
+ * (auto-payment is switched off to force GAME_PLAY_MANA), answers every
+ * dialog with a first-legal choice, and joins the game chat. Goal: capture
+ * real payloads for the dialog callbacks the AI-only game never sent
+ * (PLAY_MANA, PLAY_XMANA, CHOOSE_ABILITY, CHOOSE_PILE, GET_MULTI_AMOUNT,
+ * CHATMESSAGE, DFC/split/adventure card views).
+ *
+ * Run with --pass for the old phase-1 auto-pass behavior.
  *
  * Modeled on XMage's own headless test client:
  * Mage.Tests/src/test/java/org/mage/test/load/{SimpleMageClient,LoadCallbackClient,LoadTest}.java
@@ -54,19 +78,26 @@ public final class SpikeMain {
     private static final long MAX_GAME_MILLIS = 45L * 60 * 1000;
 
     public static void main(String[] args) throws Exception {
+        boolean greedy = true;
+        for (String arg : args) {
+            if ("--pass".equals(arg)) {
+                greedy = false;
+            }
+        }
+
         String distDecks = "vendor/xmage-dist/xmage/mage-client/sample-decks/Commander/";
         String[] deckFiles = {
-                distDecks + "Zurgo Helmsmasher RWB.dck",   // bridge (never acts, just passes)
+                "bridge/decks/coverage_bgu.dck",           // bridge (greedy actor; Tasigur + dialog-forcing swaps)
                 distDecks + "Tasigur BGU.dck",             // ai_1
                 distDecks + "Geoff's Daxos of Meletis.dck",// ai_2
-                distDecks + "Zurgo Helmsmasher RWB.dck",   // ai_3 (duplicate is fine)
+                distDecks + "Zurgo Helmsmasher RWB.dck",   // ai_3
         };
 
         File logDir = new File("bridge/logs");
         logDir.mkdirs();
         File logFile = new File(logDir, "spike-" + System.currentTimeMillis() + ".jsonl");
         JsonEventLog eventLog = new JsonEventLog(logFile);
-        System.out.println("[spike] logging to " + logFile.getPath());
+        System.out.println("[spike] mode=" + (greedy ? "greedy" : "pass") + ", logging to " + logFile.getPath());
 
         DeckCardLists[] decks = new DeckCardLists[4];
         for (int i = 0; i < 4; i++) {
@@ -76,7 +107,7 @@ public final class SpikeMain {
                     + " sb=" + decks[i].getSideboard().size());
         }
 
-        BridgeClient client = new BridgeClient(eventLog);
+        BridgeClient client = new BridgeClient(eventLog, greedy);
         Session session = new SessionImpl(client);
         client.setSession(session);
 
@@ -118,7 +149,7 @@ public final class SpikeMain {
             System.out.println("[spike] seated ai_" + i);
         }
         if (!session.joinTable(roomId, tableId, "night_bridge", PlayerType.HUMAN, 1, decks[0], "")) {
-            System.err.println("[spike] FAILED to seat bridge player");
+            System.err.println("[spike] FAILED to seat bridge player (coverage deck invalid?)");
             System.exit(1);
         }
         System.out.println("[spike] seated bridge player");
@@ -148,7 +179,8 @@ public final class SpikeMain {
         System.out.println("[spike] " + (finished ? "GAME OVER" : "TIMEOUT / DISCONNECT")
                 + " after " + ((System.currentTimeMillis() - start) / 1000) + "s"
                 + ", " + eventLog.count() + " callbacks logged"
-                + ", turns seen: " + client.getLastTurn());
+                + ", turns seen: " + client.getLastTurn()
+                + ", actions taken: " + client.getTotalActions());
         System.out.println("[spike] log: " + logFile.getPath());
         session.connectStop(false, false);
         System.exit(finished ? 0 : 2);
@@ -257,12 +289,19 @@ public final class SpikeMain {
     }
 
     /**
-     * Headless MageClient: logs every callback, answers the minimum set of
-     * prompts to keep a game moving (never mulligans, always passes priority).
+     * Headless MageClient: logs every callback and (in greedy mode) plays the
+     * first legal action at every decision point so the server is forced to
+     * exercise its full dialog vocabulary.
      */
     static final class BridgeClient implements MageClient {
+        /** Stop initiating new plays after this many, so a degenerate loop can't run away. */
+        private static final long MAX_ACTIONS = 400;
+        /** Give up on a repeating identical prompt after this many rounds. */
+        private static final int MAX_PROMPT_REPEATS = 20;
+
         private final MageVersion version = new MageVersion(MageClient.class);
         private final JsonEventLog eventLog;
+        private final boolean greedy;
         private volatile Session session;
         private volatile UUID gameId;
         private volatile UUID playerId;
@@ -271,8 +310,18 @@ public final class SpikeMain {
         private volatile int quietSeconds;
         private volatile boolean watchdogStarted;
 
-        BridgeClient(JsonEventLog eventLog) {
+        // greedy-actor state (only touched from the synchronized callback path)
+        private final Set<UUID> actedThisTurn = new HashSet<UUID>();
+        private final Set<UUID> clickedThisPrompt = new HashSet<UUID>();
+        private int lastSeenTurn = -1;
+        private long totalActions = 0;
+        private String lastPromptKey = "";
+        private int promptRepeats = 0;
+        private boolean abilityPickerToggle = false;
+
+        BridgeClient(JsonEventLog eventLog, boolean greedy) {
             this.eventLog = eventLog;
+            this.greedy = greedy;
         }
 
         void setSession(Session session) {
@@ -286,6 +335,10 @@ public final class SpikeMain {
         int getLastTurn() {
             GameView view = gameView;
             return view == null ? 0 : view.getTurn();
+        }
+
+        long getTotalActions() {
+            return totalActions;
         }
 
         @Override
@@ -343,6 +396,12 @@ public final class SpikeMain {
                     this.playerId = message.getPlayerId();
                     session.joinGame(gameId);
                     System.out.println("[spike] game started, joined as player " + playerId);
+                    joinGameChat();
+                    if (greedy) {
+                        // force GAME_PLAY_MANA on every cast instead of silent auto-payment
+                        session.sendPlayerAction(PlayerAction.MANA_AUTO_PAYMENT_OFF, gameId, null);
+                        eventLog.logResponse("action", PlayerAction.MANA_AUTO_PAYMENT_OFF);
+                    }
                     startWatchdog();
                     break;
                 }
@@ -368,8 +427,21 @@ public final class SpikeMain {
 
                 case GAME_ASK: {
                     GameClientMessage message = (GameClientMessage) callback.getData();
-                    // "Mulligan ..." and anything else: decline
-                    respondBoolean("ask:" + message.getMessage(), false);
+                    String text = message.getMessage() == null ? "" : message.getMessage();
+                    int rounds = repeats("ask|" + text);
+                    boolean yes;
+                    if (text.contains("Mulligan")) {
+                        yes = false;
+                    } else if (text.contains("Pass anyway") || text.contains("mana pool")) {
+                        // "You still have mana in your mana pool and it will be lost. Pass
+                        // anyway?" — declining this forever was the phase-2 infinite loop
+                        yes = true;
+                    } else {
+                        // default decline, but flip to yes if the same ask keeps coming
+                        // back, so an unforeseen confirmation can't wedge the game
+                        yes = rounds > 5;
+                    }
+                    respondBoolean("ask:" + text, yes);
                     break;
                 }
 
@@ -378,8 +450,20 @@ public final class SpikeMain {
                     if (message.getGameView() != null) {
                         this.gameView = message.getGameView();
                     }
-                    // pass priority
-                    respondBoolean("select", false);
+                    resetActedOnNewTurn();
+                    UUID objectId = null;
+                    if (greedy && totalActions < MAX_ACTIONS
+                            && repeats("select|" + message.getMessage()) <= MAX_PROMPT_REPEATS) {
+                        objectId = pickAction(actedThisTurn);
+                    }
+                    if (objectId != null) {
+                        totalActions++;
+                        actedThisTurn.add(objectId);
+                        session.sendPlayerUUID(gameId, objectId);
+                        eventLog.logResponse("select:act", objectId);
+                    } else {
+                        respondBoolean("select:pass", false);
+                    }
                     break;
                 }
 
@@ -389,17 +473,38 @@ public final class SpikeMain {
                         this.gameView = message.getGameView();
                     }
                     String text = message.getMessage() == null ? "" : message.getMessage();
-                    if (text.startsWith("Select a starting player")) {
-                        session.sendPlayerUUID(gameId, playerId);
-                        eventLog.logResponse("target:" + text, playerId);
-                    } else if (text.contains("discard") && gameView != null
-                            && gameView.getMyHand() != null && !gameView.getMyHand().isEmpty()) {
-                        SimpleCardView card = gameView.getMyHand().values().iterator().next();
-                        session.sendPlayerUUID(gameId, card.getId());
-                        eventLog.logResponse("target:" + text, card.getId());
+                    int rounds = repeats("target|" + text);
+                    UUID pick = rounds <= MAX_PROMPT_REPEATS ? pickTarget(message) : null;
+                    if (pick != null) {
+                        clickedThisPrompt.add(pick);
+                        session.sendPlayerUUID(gameId, pick);
+                        eventLog.logResponse("target:" + text, pick);
+                    } else if (message.getMin() == 0) {
+                        respondBoolean("target:cancel:" + text, false);
                     } else {
-                        // cancel / decline optional target
-                        respondBoolean("target:" + text, false);
+                        // required targets all chosen (or we gave up): done
+                        respondBoolean("target:done:" + text, true);
+                    }
+                    break;
+                }
+
+                case GAME_CHOOSE_ABILITY: {
+                    AbilityPickerView picker = (AbilityPickerView) callback.getData();
+                    // alternate first/last so second-listed options (morph face-down,
+                    // adventure halves, mode 2) get exercised across a game
+                    UUID pick = null;
+                    if (!picker.getChoices().isEmpty()) {
+                        List<UUID> choiceIds = new ArrayList<UUID>(picker.getChoices().keySet());
+                        abilityPickerToggle = !abilityPickerToggle;
+                        pick = abilityPickerToggle
+                                ? choiceIds.get(0)
+                                : choiceIds.get(choiceIds.size() - 1);
+                    }
+                    if (pick != null) {
+                        session.sendPlayerUUID(gameId, pick);
+                        eventLog.logResponse("chooseAbility:" + picker.getMessage(), pick);
+                    } else {
+                        respondBoolean("chooseAbility:empty", false);
                     }
                     break;
                 }
@@ -416,17 +521,59 @@ public final class SpikeMain {
                     break;
                 }
 
+                case GAME_CHOOSE_PILE: {
+                    GameClientMessage message = (GameClientMessage) callback.getData();
+                    // Swing convention: sendPlayerBoolean(true) = pile 1
+                    respondBoolean("choosePile:" + message.getMessage(), true);
+                    break;
+                }
+
                 case GAME_GET_AMOUNT: {
                     GameClientMessage message = (GameClientMessage) callback.getData();
-                    session.sendPlayerInteger(gameId, message.getMin());
-                    eventLog.logResponse("amount", message.getMin());
+                    // 2 beats min (usually 0) for coverage: X=2 forces a real mana payment
+                    int amount = Math.max(message.getMin(), Math.min(message.getMax(), 2));
+                    session.sendPlayerInteger(gameId, amount);
+                    eventLog.logResponse("amount:" + message.getMessage()
+                            + " [" + message.getMin() + ".." + message.getMax() + "]", amount);
+                    break;
+                }
+
+                case GAME_GET_MULTI_AMOUNT: {
+                    GameClientMessage message = (GameClientMessage) callback.getData();
+                    // Swing convention: space-joined integers, one per row
+                    String answer = buildMultiAmount(message);
+                    session.sendPlayerString(gameId, answer);
+                    eventLog.logResponse("multiAmount:" + message.getMessage(), answer);
                     break;
                 }
 
                 case GAME_PLAY_MANA:
-                case GAME_PLAY_XMANA:
-                    // we never cast anything; cancel
-                    respondBoolean("mana-cancel", false);
+                case GAME_PLAY_XMANA: {
+                    GameClientMessage message = (GameClientMessage) callback.getData();
+                    if (message.getGameView() != null) {
+                        this.gameView = message.getGameView();
+                    }
+                    String text = message.getMessage() == null ? "" : message.getMessage();
+                    int rounds = repeats("mana|" + text);
+                    UUID source = rounds <= MAX_PROMPT_REPEATS ? pickPlayable(clickedThisPrompt) : null;
+                    if (source != null) {
+                        clickedThisPrompt.add(source);
+                        session.sendPlayerUUID(gameId, source);
+                        eventLog.logResponse("mana:tap:" + text, source);
+                    } else {
+                        ManaType pool = rounds <= MAX_PROMPT_REPEATS + 6 ? pickPoolMana() : null;
+                        if (pool != null) {
+                            session.sendPlayerManaType(gameId, playerId, pool);
+                            eventLog.logResponse("mana:pool:" + text, pool);
+                        } else {
+                            respondBoolean("mana:cancel:" + text, false);
+                        }
+                    }
+                    break;
+                }
+
+                case USER_REQUEST_DIALOG:
+                    // rollback votes etc.; payload captured by the log, no answer needed
                     break;
 
                 case GAME_OVER:
@@ -436,7 +583,7 @@ public final class SpikeMain {
 
                 case END_GAME_INFO: {
                     GameEndView view = (GameEndView) callback.getData();
-                    System.out.println("[spike] end game info, we " + (view.hasWon() ? "won (?!)" : "lost (expected)"));
+                    System.out.println("[spike] end game info, we " + (view.hasWon() ? "won" : "lost"));
                     gameOver = true;
                     break;
                 }
@@ -454,6 +601,193 @@ public final class SpikeMain {
                     }
                     break;
             }
+        }
+
+        private void joinGameChat() {
+            try {
+                Optional<UUID> chatId = session.getGameChatId(gameId);
+                if (chatId.isPresent()) {
+                    session.joinChat(chatId.get());
+                    System.out.println("[spike] joined game chat " + chatId.get());
+                } else {
+                    System.out.println("[spike] game chat id not available");
+                }
+            } catch (Throwable e) {
+                System.err.println("[spike] joinChat failed: " + e);
+            }
+        }
+
+        private void resetActedOnNewTurn() {
+            GameView view = gameView;
+            if (view != null && view.getTurn() != lastSeenTurn) {
+                lastSeenTurn = view.getTurn();
+                actedThisTurn.clear();
+            }
+        }
+
+        /**
+         * Counts consecutive identical prompts so a non-converging dialog loop
+         * (bad pick rejected and re-asked forever) gets abandoned instead of
+         * spinning. Any new prompt key resets the per-prompt click memory.
+         */
+        private int repeats(String key) {
+            if (!key.equals(lastPromptKey)) {
+                lastPromptKey = key;
+                promptRepeats = 0;
+                clickedThisPrompt.clear();
+            }
+            return ++promptRepeats;
+        }
+
+        /**
+         * What to do with priority. Hand cards and commanders first (casts and
+         * land drops drive the game forward), then battlefield objects with a
+         * non-mana activated ability. Never bare mana abilities: greedily
+         * tapping lands for nothing floats mana, and passing with floating
+         * mana triggers the "Pass anyway?" confirmation (phase-2 loop).
+         */
+        private UUID pickAction(Set<UUID> exclude) {
+            GameView view = gameView;
+            if (view == null || view.getCanPlayObjects() == null) {
+                return null;
+            }
+            Map<UUID, PlayableObjectStats> objects = view.getCanPlayObjects().getObjects();
+            List<UUID> ids = new ArrayList<UUID>(objects.keySet());
+            Collections.sort(ids);
+            Set<UUID> handOrCommand = myHandAndCommandIds(view);
+            UUID fallback = null;
+            for (UUID id : ids) {
+                if (exclude.contains(id)) {
+                    continue;
+                }
+                if (handOrCommand.contains(id)) {
+                    return id;
+                }
+                PlayableObjectStats stats = objects.get(id);
+                if (fallback == null && stats != null && stats.getPlayableImportantAmount() > 0) {
+                    fallback = id;
+                }
+            }
+            return fallback;
+        }
+
+        private Set<UUID> myHandAndCommandIds(GameView view) {
+            Set<UUID> ids = new HashSet<UUID>();
+            if (view.getMyHand() != null) {
+                ids.addAll(view.getMyHand().keySet());
+            }
+            for (PlayerView p : view.getPlayers()) {
+                if (playerId != null && playerId.equals(p.getPlayerId())) {
+                    for (CommandObjectView c : p.getCommandObjectList()) {
+                        ids.add(c.getId());
+                    }
+                }
+            }
+            return ids;
+        }
+
+        /** First playable object from the server's own legal-actions list, skipping excluded ids. */
+        private UUID pickPlayable(Set<UUID> exclude) {
+            GameView view = gameView;
+            if (view == null || view.getCanPlayObjects() == null) {
+                return null;
+            }
+            List<UUID> ids = new ArrayList<UUID>(view.getCanPlayObjects().getObjects().keySet());
+            Collections.sort(ids);
+            for (UUID id : ids) {
+                if (!exclude.contains(id)) {
+                    return id;
+                }
+            }
+            return null;
+        }
+
+        /** First candidate target not already chosen (per server's chosenTargets) or clicked by us. */
+        private UUID pickTarget(GameClientMessage message) {
+            Set<UUID> taken = new HashSet<UUID>(clickedThisPrompt);
+            try {
+                if (message.getOptions() != null) {
+                    Object chosen = message.getOptions().get("chosenTargets");
+                    if (chosen instanceof Collection) {
+                        for (Object o : (Collection<?>) chosen) {
+                            if (o instanceof UUID) {
+                                taken.add((UUID) o);
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            if (message.getTargets() != null) {
+                for (UUID t : message.getTargets()) {
+                    if (!taken.contains(t)) {
+                        return t;
+                    }
+                }
+            }
+            if (message.getCardsView1() != null) {
+                for (SimpleCardView c : message.getCardsView1().values()) {
+                    if (!taken.contains(c.getId())) {
+                        return c.getId();
+                    }
+                }
+            }
+            return null;
+        }
+
+        /** Spend floating mana from our pool, one type at a time. */
+        private ManaType pickPoolMana() {
+            GameView view = gameView;
+            if (view == null || playerId == null) {
+                return null;
+            }
+            for (PlayerView p : view.getPlayers()) {
+                if (playerId.equals(p.getPlayerId())) {
+                    ManaPoolView pool = p.getManaPool();
+                    if (pool == null) {
+                        return null;
+                    }
+                    if (pool.getWhite() > 0) return ManaType.WHITE;
+                    if (pool.getBlue() > 0) return ManaType.BLUE;
+                    if (pool.getBlack() > 0) return ManaType.BLACK;
+                    if (pool.getRed() > 0) return ManaType.RED;
+                    if (pool.getGreen() > 0) return ManaType.GREEN;
+                    if (pool.getColorless() > 0) return ManaType.COLORLESS;
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        /** Row mins first, then pile the remaining total onto the earliest rows with room. */
+        private static String buildMultiAmount(GameClientMessage message) {
+            List<MultiAmountMessage> rows = message.getMessages();
+            if (rows == null || rows.isEmpty()) {
+                return "";
+            }
+            int n = rows.size();
+            int[] vals = new int[n];
+            int sum = 0;
+            for (int i = 0; i < n; i++) {
+                vals[i] = Math.max(0, rows.get(i).min);
+                sum += vals[i];
+            }
+            int target = Math.max(message.getMin(), message.getMax());
+            for (int i = 0; i < n && sum < target; i++) {
+                int add = Math.min(rows.get(i).max - vals[i], target - sum);
+                if (add > 0) {
+                    vals[i] += add;
+                    sum += add;
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < n; i++) {
+                if (i > 0) {
+                    sb.append(' ');
+                }
+                sb.append(vals[i]);
+            }
+            return sb.toString();
         }
 
         private String firstChoice(Choice choice) {

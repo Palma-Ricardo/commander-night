@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  night-bridge: the JVM daemon between browsers (protocol v1 over WebSocket)
+  and a local XMage server (Java serialization over JBoss Remoting).
+  See docs/bridge/design.md.
+
+  One-time setup: ./install-xmage-jars.sh   (installs the XMage dist's jars
+  into the local Maven repository — they are not on Maven Central; versions
+  are pinned to the dist under vendor/xmage-dist).
+
+  Build + test:   mvn test
+  Run the spike:  mvn -Pspike compile exec:exec   (XMage server must be running)
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>night</groupId>
+  <artifactId>night-bridge</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>25</maven.compiler.release>
+    <!-- Must match the dist under vendor/xmage-dist (design §1: exact-version handshake). -->
+    <xmage.version>1.4.60</xmage.version>
+    <jackson.version>2.19.2</jackson.version>
+  </properties>
+
+  <dependencies>
+    <!-- ==== XMage client stack, installed from the dist by install-xmage-jars.sh ==== -->
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-common</artifactId>
+      <version>${xmage.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage</artifactId>
+      <version>${xmage.version}</version>
+    </dependency>
+    <!-- JBoss Remoting transport used by mage.remote — runtime only. -->
+    <dependency>
+      <groupId>org.jboss.remoting</groupId>
+      <artifactId>jboss-remoting</artifactId>
+      <version>2.5.4.SP5</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jboss</groupId>
+      <artifactId>jboss-common-core</artifactId>
+      <version>2.5.0.Final</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>jboss</groupId>
+      <artifactId>jboss-serialization</artifactId>
+      <version>4.2.2.GA</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jboss.logging</groupId>
+      <artifactId>jboss-logging-spi</artifactId>
+      <version>2.1.2.GA</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>concurrent</groupId>
+      <artifactId>concurrent</artifactId>
+      <version>1.3.4</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>trove</groupId>
+      <artifactId>trove</artifactId>
+      <version>1.0.2</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.googlecode.jspf</groupId>
+      <artifactId>jspf-core</artifactId>
+      <version>0.9.1</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ==== Runtime deps of mage classes; Central artifacts at dist-identical versions ==== -->
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>33.4.8-jre</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.18.0</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>1.21.2</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>3.25.8</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- mage classes log through the log4j 1.x API; reload4j implements it
+         (configured by src/main/resources/log4j.properties). Our own code uses
+         slf4j+logback; the slf4j-reload4j binding from the dist is deliberately
+         absent so logback is the only slf4j binding. -->
+    <dependency>
+      <groupId>ch.qos.reload4j</groupId>
+      <artifactId>reload4j</artifactId>
+      <version>1.2.22</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- The spike's JSONL event log (dist-identical version). -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.13.2</version>
+    </dependency>
+
+    <!-- ==== Bridge stack ==== -->
+    <dependency>
+      <groupId>io.javalin</groupId>
+      <artifactId>javalin</artifactId>
+      <version>6.7.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.flipkart.zjsonpatch</groupId>
+      <artifactId>zjsonpatch</artifactId>
+      <version>0.4.16</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>2.0.17</version>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>1.5.18</version>
+    </dependency>
+
+    <!-- ==== Test ==== -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.3</version>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!-- The spike: the original architecture-proving headless client, kept
+         runnable as the fixture-capture tool (design §3). Usage:
+           mvn -Pspike compile exec:exec
+         Runs from the repo root (spike paths are repo-root-relative) with the
+         JDK-26 flags from design §1/§11. -->
+    <profile>
+      <id>spike</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>add-spike-source</id>
+                <phase>generate-sources</phase>
+                <goals>
+                  <goal>add-source</goal>
+                </goals>
+                <configuration>
+                  <sources>
+                    <source>src/spike/java</source>
+                  </sources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+            <configuration>
+              <executable>java</executable>
+              <workingDirectory>${project.basedir}/..</workingDirectory>
+              <arguments>
+                <argument>--add-opens=java.base/java.io=ALL-UNNAMED</argument>
+                <argument>--add-opens=java.base/java.lang=ALL-UNNAMED</argument>
+                <argument>-Djava.awt.headless=true</argument>
+                <argument>-classpath</argument>
+                <classpath/>
+                <argument>night.spike.SpikeMain</argument>
+              </arguments>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
