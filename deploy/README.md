@@ -68,7 +68,18 @@ curl -s https://night.example.com/healthz    # through caddy from anywhere
 
 Then the real check — a browser (or `websocat wss://night.example.com/ws`)
 completing `session.hello` → `session.welcome`, and a lobby with `fillAI: true`
-playing a full game.
+playing a full game. The latter is automated (from a dev machine):
+
+```sh
+cd bridge && mvn -Plive test -Dtest=PublicEndpointGameTest \
+    -Dnight.publicEndpoint=wss://night.example.com/ws
+```
+
+It plays a full auto-answered game through the deployed stack and asserts the
+protocol invariants; add `-Dnight.printGameLog=true` to echo the game log.
+Restart xmage-server afterwards (AI threads of finished games leak, see below).
+On small hosts the CPU-starved AIs win fast — the test seats the aggressive
+Zurgo sample deck so combat still fires inside a short game.
 
 ## Operating it
 
