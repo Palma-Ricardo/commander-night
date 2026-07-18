@@ -205,16 +205,17 @@ const gameStateC = obj({
     gameId: idc,
     status: strEnum('active', 'over'),
     rollbackTurnsAllowed: bool,
+    // phase/step/activePlayerId absent during the pre-game mulligan window (§6)
     turn: obj({
-      req: {
-        n: num,
+      req: { n: num },
+      opt: {
         phase: strEnum('BEGINNING', 'PRECOMBAT_MAIN', 'COMBAT', 'POSTCOMBAT_MAIN', 'END'),
         step: strEnum('UNTAP', 'UPKEEP', 'DRAW', 'PRE_MAIN', 'BEGIN_COMBAT', 'DECLARE_ATTACKERS',
                       'DECLARE_BLOCKERS', 'FIRST_COMBAT_DAMAGE', 'COMBAT_DAMAGE', 'END_COMBAT',
                       'POST_MAIN', 'END_TURN', 'CLEANUP'),
         activePlayerId: idc,
+        priorityPlayerId: idc,
       },
-      opt: { priorityPlayerId: idc },
     }),
     players: arr(playerC),
     stack: arr(stackItemC),

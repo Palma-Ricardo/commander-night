@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 /**
  * GameView → trimmed GameState (protocol §6). The trim rules: maps become
@@ -57,7 +58,17 @@ public final class ViewTranslator {
 
     /** One seat's snapshot. {@code myPlayerId} may be null before START_GAME resolves it. */
     public static GameState translate(GameView view, String gameId, UUID myPlayerId) {
-        return new ViewTranslator().run(view, gameId, myPlayerId);
+        return translate(view, gameId, myPlayerId, UnaryOperator.identity());
+    }
+
+    /**
+     * As above, with player names passed through {@code playerName} — the
+     * username → display-name rename (GameCoordinator.displayNames): the wire
+     * speaks lobby display names, XMage speaks cn_* usernames.
+     */
+    public static GameState translate(GameView view, String gameId, UUID myPlayerId,
+                                      UnaryOperator<String> playerName) {
+        return new ViewTranslator().run(view, gameId, myPlayerId, playerName);
     }
 
     // One translation pass. Collected while building zones, attached at the end.
@@ -70,7 +81,8 @@ public final class ViewTranslator {
     private ViewTranslator() {
     }
 
-    private GameState run(GameView view, String gameId, UUID myPlayerId) {
+    private GameState run(GameView view, String gameId, UUID myPlayerId,
+                          UnaryOperator<String> playerName) {
         List<Player> players = new ArrayList<>();
         String priorityPlayerId = null;
         PlayerView myView = null;
@@ -84,6 +96,9 @@ public final class ViewTranslator {
             }
         }
         players.replaceAll(this::attachCommanderDamage);
+        // Rename AFTER commander-damage attachment: the scraped damage lines
+        // carry XMage's own names, so that equality match must see originals.
+        players.replaceAll(p -> renamed(p, playerName));
         return new GameState(
                 gameId,
                 GameState.Status.ACTIVE,
@@ -191,6 +206,16 @@ public final class ViewTranslator {
         return new Player(p.id(), p.name(), p.human(), p.life(), p.counters(), p.manaPool(),
                 p.librarySize(), p.handSize(), p.battlefield(), p.graveyard(), p.exile(),
                 p.commandZone(), dmg, p.flags(), p.timer());
+    }
+
+    private static Player renamed(Player p, UnaryOperator<String> playerName) {
+        String display = playerName.apply(p.name());
+        if (display.equals(p.name())) {
+            return p;
+        }
+        return new Player(p.id(), display, p.human(), p.life(), p.counters(), p.manaPool(),
+                p.librarySize(), p.handSize(), p.battlefield(), p.graveyard(), p.exile(),
+                p.commandZone(), p.commanderDamage(), p.flags(), p.timer());
     }
 
     private static Player.Flags flags(PlayerView p) {

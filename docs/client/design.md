@@ -12,7 +12,7 @@ Companion documents:
   blocks are transcribed verbatim into `client/src/protocol/protocol.ts` (that was the stated
   intent of v1.md §preamble) — wire changes happen in v1.md first, then `protocol.ts` follows.
 - `docs/bridge/design.md` — the daemon on the other end of the socket (cited as *bridge §N*).
-- `docs/protocol/samples/` — the conformance corpus (47 samples). The bridge asserts it via
+- `docs/protocol/samples/` — the conformance corpus (48 samples). The bridge asserts it via
   `ProtocolSamplesTest`; this client asserts the **mirror direction** (§14 here) so the two
   codebases never drift silently.
 

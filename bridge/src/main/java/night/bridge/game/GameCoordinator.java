@@ -7,7 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,6 +67,20 @@ public final class GameCoordinator {
 
     public List<Seat> seats() {
         return List.copyOf(seats);
+    }
+
+    /**
+     * XMage username → lobby display name. The wire speaks display names
+     * (protocol §2/§6: "waiting for Marta"); XMage usernames are the
+     * charset-safe {@code cn_<code>_<n>} the bridge minted. AI seats are not
+     * in {@code seats}, so ai_* names pass through unmapped.
+     */
+    public Map<String, String> displayNames() {
+        Map<String, String> names = new HashMap<>();
+        for (Seat seat : seats) {
+            names.put(seat.xmage().username(), seat.displayName());
+        }
+        return names;
     }
 
     public SeatPump pumpFor(String userId) {

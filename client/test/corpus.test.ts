@@ -83,8 +83,8 @@ const builders: Record<string, (c: CommandContext) => ClientMsg> = {
 };
 
 describe('conformance corpus', () => {
-  it('holds the complete 47-sample set', () => {
-    expect(files.length).toBe(47);
+  it('holds the complete 48-sample set', () => {
+    expect(files.length).toBe(48);
   });
 
   it('covers every sample in exactly one direction', () => {

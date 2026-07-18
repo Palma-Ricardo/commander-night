@@ -18,8 +18,8 @@ fields land per protocol §6; watcher lines no longer leak into card text), call
 productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,
 always on in the live tier), golden-fixture suite (`GoldenFixtureTest` + `FixtureSelectMain`
 curation; 10 live-captured fixtures incl. commander tax/damage and combat declaration; regen
-via `-Dgolden.regen=true` on upgrades), conformance corpus audited complete (47 samples, all
-asserted), design-§5 seat recovery **live-verified** (`SeatRecoveryLiveTest`: SIGSTOP server
+via `-Dgolden.regen=true` on upgrades), conformance corpus audited complete (48 samples, all
+asserted; grew by game.state.mulligan.json at client C1), design-§5 seat recovery **live-verified** (`SeatRecoveryLiveTest`: SIGSTOP server
 mid-prompt → detect ~6 s → non-fatal answer rejection → restore-session reconnect →
 same-promptId re-ground → full game green), and deploy artifacts (`deploy/`: systemd units,
 Caddyfile, prod bridge.yaml, runbook; build with `mvn -Pdist -DskipTests package`, launch

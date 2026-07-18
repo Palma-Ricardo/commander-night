@@ -142,9 +142,13 @@ export interface GameState {
                                    // game.action requestRollback (§9)
   turn: {
     n: number;
-    phase: Phase;
-    step: Step;
-    activePlayerId: Id;
+    // phase/step/activePlayerId are ABSENT during the pre-game mulligan window:
+    // XMage's view carries no turn structure until the first untap (observed
+    // live 2026-07-18; corpus: game.state.mulligan.json). The §2-derived status
+    // line falls back to "Mulligans" while they are absent.
+    phase?: Phase;
+    step?: Step;
+    activePlayerId?: Id;
     priorityPlayerId?: Id;
   };
   players: Player[];           // seat order; includes me

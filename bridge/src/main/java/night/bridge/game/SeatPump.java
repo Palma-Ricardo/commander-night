@@ -38,6 +38,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -102,6 +103,7 @@ public final class SeatPump implements AutoCloseable {
     private XmageAnswers answers;
     private PromptFsm fsm;
     private GameState lastState;
+    private final List<PendingLogLine> preGameLog = new ArrayList<>();
     private GamePrompt deferredRequest;
     private UUID deferredRequestData;
     private boolean over;
@@ -408,6 +410,7 @@ public final class SeatPump implements AutoCloseable {
                 if (gameIdStr == null) {
                     gameId = cb.getObjectId();
                     gameIdStr = gameId.toString();
+                    flushPreGameLog();
                 }
                 // GAME_INIT's payload is the first GameView of the game.
                 if (cb.getData() instanceof GameView view) {
@@ -553,6 +556,7 @@ public final class SeatPump implements AutoCloseable {
         gameId = msg.getGameId();
         playerId = msg.getPlayerId();
         gameIdStr = gameId.toString();
+        flushPreGameLog();
         answers = new XmageAnswers(xmage.session(), gameId, playerId, () -> lastCallbackNanos);
         fsm = new PromptFsm(answers);
         joinGameAndChat();
@@ -564,7 +568,7 @@ public final class SeatPump implements AutoCloseable {
         if (view == null || gameIdStr == null) {
             return;
         }
-        lastState = ViewTranslator.translate(view, gameIdStr, playerId);
+        lastState = ViewTranslator.translate(view, gameIdStr, playerId, this::displayName);
         store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean()).ifPresent(sink::send);
     }
 
@@ -663,8 +667,16 @@ public final class SeatPump implements AutoCloseable {
 
     private void logLine(LogEntry.Kind kind, String turn, String text,
                          List<LogEntry.Ref> refs, String playerId) {
+        if (gameIdStr == null) {
+            // protocol §10: game.log carries a required gameId. Callbacks can
+            // race ahead of START_GAME/GAME_INIT (observed live 2026-07-18: a
+            // line reached the wire with no gameId) — hold them until the id
+            // is known, then flush in order.
+            preGameLog.add(new PendingLogLine(kind, turn, text, refs, playerId));
+            return;
+        }
         LogEntry entry = new LogEntry(store.nextSeq(), gameIdStr, System.currentTimeMillis(),
-                kind, turn, text, refs, playerId);
+                kind, turn, rewriteNames(text), refs, playerId);
         logRing.addLast(entry);
         if (logRing.size() > logRingCapacity) {
             logRing.removeFirst();
@@ -672,16 +684,60 @@ public final class SeatPump implements AutoCloseable {
         sink.send(entry);
     }
 
+    private void flushPreGameLog() {
+        if (preGameLog.isEmpty()) {
+            return;
+        }
+        List<PendingLogLine> held = List.copyOf(preGameLog);
+        preGameLog.clear();
+        for (PendingLogLine line : held) {
+            logLine(line.kind(), line.turn(), line.text(), line.refs(), line.playerId());
+        }
+    }
+
+    private record PendingLogLine(LogEntry.Kind kind, String turn, String text,
+                                  List<LogEntry.Ref> refs, String playerId) {
+    }
+
     private String resolvePlayer(String username) {
         if (username == null || lastState == null) {
             return null;
         }
+        String display = displayName(username);   // lastState carries display names
         for (Player p : lastState.players()) {
-            if (p.name().equals(username)) {
+            if (p.name().equals(display)) {
                 return p.id();
             }
         }
         return null;
+    }
+
+    // XMage username → lobby display name. Seats are fixed before startMatch,
+    // so the map is cached on first use (pump-thread only). TODO(C3): prompt
+    // messages (playerRequest, rollback dialogs) still embed cn_* usernames —
+    // rewrite them when the prompt UI for those lands.
+    private Map<String, String> displayNames;
+
+    private String displayName(String username) {
+        if (displayNames == null) {
+            displayNames = coordinator.displayNames();
+        }
+        return displayNames.getOrDefault(username, username);
+    }
+
+    /** XMage log/chat text embeds cn_* usernames; the wire speaks display names. */
+    private String rewriteNames(String text) {
+        if (text == null) {
+            return null;
+        }
+        if (displayNames == null) {
+            displayNames = coordinator.displayNames();
+        }
+        String out = text;
+        for (Map.Entry<String, String> e : displayNames.entrySet()) {
+            out = out.replace(e.getKey(), e.getValue());
+        }
+        return out;
     }
 
     private void finish() {
@@ -704,7 +760,8 @@ public final class SeatPump implements AutoCloseable {
         if (fsm != null) {
             fsm.clear();
         }
-        gameOverMsg = new GameOver(store.nextSeq(), gameIdStr, winners(outcome), outcome.reason(), true);
+        gameOverMsg = new GameOver(store.nextSeq(), gameIdStr, winners(outcome),
+                rewriteNames(outcome.reason()), true);
         sink.send(gameOverMsg);
         log.info("game over for this seat: {}", outcome.reason());
         coordinator.seatFinished();
@@ -713,8 +770,9 @@ public final class SeatPump implements AutoCloseable {
     private List<String> winners(GameCoordinator.Outcome outcome) {
         List<String> ids = new ArrayList<>();
         if (outcome.winnerName() != null && lastState != null) {
+            String display = displayName(outcome.winnerName());   // lastState carries display names
             for (Player p : lastState.players()) {
-                if (p.name().equals(outcome.winnerName())) {
+                if (p.name().equals(display)) {
                     ids.add(p.id());
                 }
             }

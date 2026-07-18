@@ -374,4 +374,43 @@ class ProtocolSamplesTest {
                         GameState.Me.Skip.STACK));
         assertProduces("game.state.json", new StateKeyframe(2, "g1", Json.tree(state)));
     }
+
+    @Test
+    void stateKeyframeMulliganWindowReproduces() throws Exception {
+        // The pre-game mulligan window (observed live 2026-07-18): no phase/
+        // step/activePlayerId until the first untap — optional in v1.md §6.
+        // Commanders carry castCount 0 from the first keyframe (§16.3).
+        GameState state = new GameState(
+                "g1",
+                GameState.Status.ACTIVE,
+                true,
+                new GameState.Turn(1, null, null, null, null),
+                List.of(
+                        new Player("p1", "Ricardo", true, 40,
+                                null,
+                                new Player.ManaPool(0, 0, 0, 0, 0, 0),
+                                92, 7,
+                                List.of(), List.of(), List.of(),
+                                List.of(new CommandObject("cmd-1", "Lathril, Blade of the Elves",
+                                        "KHM", "222", "{2}{B}{G}", 4,
+                                        List.of("CREATURE"), List.of("Elf", "Noble"), List.of("Legendary"),
+                                        List.of(Color.B, Color.G), List.of("Menace"),
+                                        "2", "3", null, null, null, null, null,
+                                        CommandObject.Kind.COMMANDER, 0)),
+                                null, null, null),
+                        new Player("p2", "ai_1", false, 40,
+                                null,
+                                new Player.ManaPool(0, 0, 0, 0, 0, 0),
+                                92, 7,
+                                List.of(), List.of(), List.of(), List.of(),
+                                null, null, null)),
+                List.of(),
+                null, null, null,
+                new GameState.Me("p1", List.of(new Card("hand-1", "Elvish Mystic", "C21", "155",
+                        "{G}", 1, List.of("CREATURE"), List.of("Elf", "Druid"), List.of(),
+                        List.of(Color.G), List.of("{T}: Add {G}."),
+                        "1", "1", null, null, null, null, null)),
+                        null));
+        assertProduces("game.state.mulligan.json", new StateKeyframe(0, "g1", Json.tree(state)));
+    }
 }

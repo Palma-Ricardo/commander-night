@@ -1,10 +1,11 @@
 import { createRoot } from 'react-dom/client';
+import { bootApp } from './app';
 import { App } from './ui/App';
 import './styles.css';
 
-// No <StrictMode>: its dev double-mount would open two sockets and double-record
-// the trace. From C1 the socket FSM owns the connection outside React and the
-// wrapper comes back.
+// The socket lives outside React (app.ts owns it) — components only read stores.
+bootApp();
+
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
 createRoot(root).render(<App />);
