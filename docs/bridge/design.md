@@ -34,8 +34,9 @@ browser ── wss:// ──► reverse proxy (caddy, TLS) ── ws://127.0.0.1
 ```
 
 - Both JVMs on one host, two systemd units (`xmage-server.service`, `night-bridge.service`,
-  `After=`/`Requires=` ordering). The bridge **does not manage** the XMage server process; it
-  connects to a configured `host:port` and retries with backoff until it appears.
+  `After=`/`Requires=` ordering) — committed under `deploy/` with the Caddyfile, production
+  config, and install/ops runbook (M5). The bridge **does not manage** the XMage server
+  process; it connects to a configured `host:port` and retries with backoff until it appears.
 - Only the reverse proxy is publicly reachable. XMage's port stays loopback-only — the bridge is
   the sole client, which is also our auth boundary (XMage's own accounts stay disabled/unused;
   bridge usernames like `seat_<code>_<n>` are internal).
@@ -142,7 +143,7 @@ Per-seat `SeatSession implements MageClient`, connected via `new SessionImpl(thi
   evidence of loss (AIs think 30 s+ on big boards — live-observed at T45), and transport
   loss is the session layer's job to detect.
 
-**Seat recovery (best-effort, v1 — implemented M4, not yet live-verified):** if a seat's XMage
+**Seat recovery (best-effort, v1 — implemented M4, live-verified M5):** if a seat's XMage
 session drops mid-game (`MageClient.disconnected`, filtered for our own connectStop/connectStart
 noise), the browser gets `game.log kind:status` ("reconnecting to the game server…"), positional
 answers are rejected (`UPSTREAM_ERROR` non-fatal) while a virtual thread retries
@@ -153,8 +154,11 @@ matches in `Session.validateUser` to flag a reconnection and re-attach the user'
 Success → status line, fresh keyframe, pending-prompt re-emit (XMage usually also re-fires the
 current ask, which supersedes cleanly). 5 failures → `error UPSTREAM_ERROR fatal:true` to that
 seat, game continues for the others. Bridge process death still loses the game (protocol §14);
-process-level re-attach is v2. Verify live by dropping the loopback link or SIGSTOPping the
-server — on the M5 hardening list.
+process-level re-attach is v2. Live-verified 2026-07-18 (`SeatRecoveryLiveTest`, live tier):
+SIGSTOP the server mid-game with a prompt pending → the 10 s session ping trips detection in
+~6 s → status line, probe answer rejected non-fatally → SIGCONT → restore-session reconnect in
+one attempt (~3 s) → keyframe + same-promptId re-emit on the same socket, then a full game to
+game.over with all protocol invariants green.
 
 ## 6. Game coordinator
 
@@ -191,10 +195,16 @@ The ordering rule matters: prompt `candidates` must reference objects already pr
 client's state. XMage bundles the view and the question in one callback; we split them into two
 protocol events with state first.
 
-**Commander damage / tax scrape** (`CommanderDamage`): regex over
-`CommanderInfoWatcher.addCardInfoToCommander` HTML in the command object's info text, pinned to
-1.4.60 with fixture tests (protocol §16.3). Scrape failure → WARN log + omit the field, never
-fail translation. If 1.4.61+ changes the text, fixtures catch it at upgrade time.
+**Commander damage / tax scrape** (`CommanderDamage`; implemented M5): regex over
+`CommanderInfoWatcher.addCardInfoToCommander` HTML in the commander's rules lines, pinned to
+1.4.60 with unit + golden-fixture tests (protocol §16.3). The watcher's info lines surface
+wherever the commander currently is, so **every** card translated in a snapshot runs through
+the scrape: the lines are lifted out of the trimmed text (they leaked as stray "Commander"
+lines pre-M5), cast counts attach to the command-zone object they were scraped from, and
+damage entries attach to the *damaged* player's `commanderDamage` in a second pass (the line
+lives on the attacker; the protocol field on the victim). Scrape failure → canary WARN + omit
+the field, never fail translation. If 1.4.61+ changes the text, fixtures catch it at upgrade
+time.
 
 **Log pipeline** (`LogTranslator`): `CHATMESSAGE` per protocol §10 — drop `color:ORANGE`
 structure announcements, strip HTML, extract `object_id='…'` attributes into `refs`,
@@ -303,8 +313,11 @@ JVM flags live in the systemd unit: `--add-opens=java.base/java.io=ALL-UNNAMED
 ## 12. Observability
 
 - slf4j + logback; per-seat MDC (`game`, `seat`) so one game's four pumps interleave readably.
-- **Callback tap** (config flag): the spike's JSONL capture, productionized — one file per game
-  per seat under `bridge/logs/`. This is the debugging tool that built the protocol; keep it.
+- **Callback tap** (config flag; implemented M5): per seat per game under `logs/tap/`, two
+  files — `<label>.ser` (every `ClientCallback` Java-serialized **pre-decompression**, i.e.
+  byte-faithful wire objects: the golden-fixture source, §13) and `<label>.jsonl` (an index
+  line per callback: ordinal, ts, method). Curate fixtures from a capture with
+  `FixtureSelectMain` (test tree). The spike's full-JSON dump stays in the spike tool.
 - `GET /healthz`: bridge up + XMage connection state.
 - End-of-game INFO summary: callbacks seen, patches/keyframes emitted, bytes pre/post deflate,
   prompts by kind, translation warnings. (The numbers that validate protocol §2/§7 budgets.)
@@ -314,7 +327,7 @@ JVM flags live in the systemd unit: `--add-opens=java.base/java.io=ALL-UNNAMED
 | Tier | What | How |
 |---|---|---|
 | Unit | translators, differ+keyframe policy, prompt FSM, deck parser, HTML strip, commander-damage regex | Plain JUnit; FSM driven by scripted callback sequences against a mocked `mage.remote.Session` (it's an interface), asserting the exact `sendPlayer*` calls |
-| Golden fixtures | `ViewTranslator`/`PromptTranslator` on real payloads | Capture **Java-serialized** `ClientCallback`s via the tap during live games (Gson JSON can't round-trip back into view objects — `Choice` proved that); deserialize in tests against the same pinned jars, assert golden JSON outputs. Regenerate on XMage upgrade → diffs show exactly what the upgrade changed |
+| Golden fixtures | `ViewTranslator`/`PromptTranslator` on real payloads | Capture **Java-serialized** `ClientCallback`s via the tap during live games (Gson JSON can't round-trip back into view objects — `Choice` proved that); deserialize in tests against the same pinned jars, assert golden JSON outputs. Implemented M5: `GoldenFixtureTest` over `src/test/resources/fixtures/` (10 fixtures incl. commander tax + damage, combat declaration), goldens are wire-message arrays in emit order. Regenerate on XMage upgrade (`mvn test -Dtest=GoldenFixtureTest -Dgolden.regen=true`) → diffs show exactly what the upgrade changed |
 | Live integration | whole bridge vs local server | JUnit tag `live`: boot bridge, JDK 26's built-in `java.net.http.WebSocket` as test client, 1 human + 3 AI game (spike recipe), auto-answering client. Asserts protocol invariants over a full game: seq gapless, every patch applies cleanly onto the running state (apply + periodically compare against a forced keyframe), ≤1 pending prompt, every prompt answered, clean `game.over` |
 | Conformance corpus | bridge ⇄ TS client agreement | Committed JSON samples per message type under `docs/protocol/samples/` — bridge tests assert it *produces/accepts* them, the future TS client tests assert it *parses/produces* them. The two codebases never drift silently |
 
@@ -335,6 +348,7 @@ what the spike was, promoted to CI.
 | M4 | Multi-human: seat binding, resume/reconnect, idempotency, chat send, `game.over`/rematch | Two-browser game with mid-game refreshes on both sides |
 | | *M4 done 2026-07-18.* Browser resume (`hello{token,resume}` → `welcome{resumed}` → keyframe → pending prompt under its **original promptId** → log-tail backfill), `chat.send`, per-session idempotency (LRU 64 at the WS routing gate, replaying the recorded reply; §3 gained the ids-unique-across-reconnects rule it implies), lost-token recovery join (registry *adopt*: the caller's session takes over the seat's userId, the old token is retired, the old socket bumped), rematch = started lobbies release their members, post-game teardown after `postGameGraceSecs` (lost seats count toward it, so an abandoned seat can't leak the game). §5 seat recovery implemented via XMage's restore-session handshake (live verification on the M5 list). Harness learned session persistence/`reconnect`/`chat`. Validated: `MultiHumanLiveTest` — 2 humans + 2 AIs, full game, mid-prompt hard refresh on **both** seats (same-promptId re-emit asserted), chat + verbatim-duplicate probe (two acks, one execution), mid-game recovery handover to a fresh session, post-game resume replay, rematch lobby, teardown expiry (`UNKNOWN_GAME`/`RESUME_FAILED`). 151-test unit tier; M3 solo game stays green (379/379 prompts, 2.2 MB/seat) | |
 | M5 | Commander damage scrape, golden-fixture suite, conformance corpus, systemd/caddy deploy docs | A real 4-human friends' night on the deployed host |
+| | *M5 engineering done 2026-07-18.* Commander damage/tax scrape (§7): pinned regexes over the watcher's info lines with a drift-canary WARN, castCount on command-zone objects, damage on the *victim's* `commanderDamage` (sorted for patch stability), watcher lines stripped from all card text (they had been leaking). Callback tap productionized (§12): pre-decompression `.ser` + `.jsonl` index per seat, on by default in the live tier. Golden tier realized (§13): `FixtureSelectMain` curation + `GoldenFixtureTest` over 10 live-captured fixtures — incl. real `castCount:1`, a real 4-damage commander entry, and the combat-declaration ask — goldens are wire-message arrays; regen flow for upgrades. Corpus audited complete (47 samples, every type/kind/variant asserted; added hello-keyframes + chat-echo). §5 seat recovery live-verified (SIGSTOP test above). `deploy/`: both systemd units, Caddyfile, prod config, runbook; `-Pdist` package profile, launch command smoke-tested. Unit tier 168 tests. **Remaining for exit: the actual 4-human night on the deployed host** | |
 
 ## 15. Risks
 

@@ -81,6 +81,13 @@ class ProtocolSamplesTest {
     }
 
     @Test
+    void helloKeyframesModeDecodes() throws Exception {
+        Codec.Decoded.Ok ok = assertInstanceOf(Codec.Decoded.Ok.class,
+                codec.decode(sample("session.hello.keyframes.json").toString()));
+        assertEquals(new Hello("c2", 1, "kZ1xW3vJqL8mN5aPbT9cDg", null, "keyframes"), ok.msg());
+    }
+
+    @Test
     void helloResumeDecodes() throws Exception {
         Codec.Decoded.Ok ok = assertInstanceOf(Codec.Decoded.Ok.class,
                 codec.decode(sample("session.hello.resume.json").toString()));
@@ -305,6 +312,9 @@ class ProtocolSamplesTest {
         assertProduces("game.log.json", new LogEntry(815, "g1", 1784259200000L,
                 LogEntry.Kind.GAME, "T2.M1", "Ricardo casts Arcane Signet",
                 List.of(new LogEntry.Ref("sig-1", "Arcane Signet")), "p1"));
+        // the chat.send echo (§10): same envelope, kind:'chat', no turn/refs
+        assertProduces("game.log.chat.json", new LogEntry(1930, "g1", 1784259300000L,
+                LogEntry.Kind.CHAT, null, "gg — that Lathril swing was brutal", null, "p1"));
     }
 
     @Test
@@ -339,14 +349,15 @@ class ProtocolSamplesTest {
                                         List.of("CREATURE"), List.of("Elf", "Noble"), List.of("Legendary"),
                                         List.of(Color.B, Color.G), List.of("Menace"),
                                         "2", "3", null, null, null, null, null,
-                                        CommandObject.Kind.COMMANDER, null)),
+                                        CommandObject.Kind.COMMANDER, 1)),
                                 null, null, null),
                         new Player("p2", "ai_1", false, 38,
                                 List.of(new Counter("poison", 1)),
                                 new Player.ManaPool(0, 0, 0, 0, 0, 0),
                                 88, 7,
                                 List.of(), List.of(), List.of(), List.of(),
-                                null, null, null)),
+                                List.of(new Player.CommanderDamage("cmd-1", 5)),
+                                null, null)),
                 List.of(new StackItem("stack-1", "p2", StackItem.Kind.SPELL,
                         new Card("stack-1", "Reality Shift", "CMR", "88", "{1}{U}", 2,
                                 List.of("INSTANT"), List.of(), List.of(), List.of(Color.U),

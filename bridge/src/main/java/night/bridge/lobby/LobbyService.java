@@ -314,6 +314,7 @@ public final class LobbyService implements AutoCloseable {
         GameCoordinator coordinator = new GameCoordinator(lobby.code, games, gateway,
                 config.postGameGraceSecs() * 1000L);
         List<TableRecipe.HumanSeat> recipeSeats = new ArrayList<>();
+        long launchMillis = System.currentTimeMillis();
         int n = 0;
         for (SeatEntry seat : lobby.seats.values()) {
             n++;
@@ -323,6 +324,11 @@ public final class LobbyService implements AutoCloseable {
                 reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
                         "cannot reach the game server — try again in a moment"));
                 return;
+            }
+            if (config.callbackTap()) {
+                session.tap(night.bridge.xmage.CallbackTap.open(
+                        Path.of("logs", "tap"),
+                        lobby.code + "-" + launchMillis + "-" + session.username()));
             }
             String userId = seat.userId;
             coordinator.addSeat(userId, seat.name, session,

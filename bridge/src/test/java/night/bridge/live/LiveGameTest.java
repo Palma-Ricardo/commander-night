@@ -69,8 +69,10 @@ class LiveGameTest {
     void fullGameAgainstThreeAis() throws Exception {
         assumeTrue(xmageUp(), "local XMage server on 17171 required (vendor/xmage-dist)");
 
+        // callbackTap on: every live run captures golden-fixture source material
+        // under logs/tap/ (design §13; curate with FixtureSelectMain)
         Config config = new Config("127.0.0.1:0", new Config.Xmage("127.0.0.1", 17171),
-                100, new Config.LogBackfill(200, 50), false,
+                100, new Config.LogBackfill(200, 50), true,
                 "../vendor/xmage-dist/xmage/mage-client/sample-decks/Commander", 900);
         Games games = new Games();
         SessionRegistry registry = new SessionRegistry(games);

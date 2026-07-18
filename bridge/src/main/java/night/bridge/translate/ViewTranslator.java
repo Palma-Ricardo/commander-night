@@ -31,6 +31,8 @@ import night.bridge.proto.state.StackItem;
 import night.bridge.proto.state.Step;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,14 +44,33 @@ import java.util.UUID;
  * derivable strings are dropped. XMage's per-seat filtering is inherited
  * unchanged: whatever this seat's GameView contains is what its browser sees.
  *
- * <p>Not translated in M2 (fields stay absent): commanderDamage and commander
- * castCount (M5 info-text scrape, protocol §16.3), Player.timer (tables are
- * untimed, design §1).
+ * <p>Commander damage and tax (M5): every card translated in a snapshot runs
+ * through the {@link CommanderDamage} scrape, which lifts the watcher's HTML
+ * info lines out of the rules text and into structured data. Cast counts
+ * attach to the command-zone object they were scraped from; damage entries
+ * are collected across all zones and attached to the <em>damaged</em>
+ * player's {@code commanderDamage} in a second pass (the line lives on the
+ * attacking commander, but the protocol field lives on the victim).
+ * {@code Player.timer} stays absent — tables are untimed (design §1).
  */
 public final class ViewTranslator {
 
     /** One seat's snapshot. {@code myPlayerId} may be null before START_GAME resolves it. */
     public static GameState translate(GameView view, String gameId, UUID myPlayerId) {
+        return new ViewTranslator().run(view, gameId, myPlayerId);
+    }
+
+    // One translation pass. Collected while building zones, attached at the end.
+    private record ScrapedDamage(String fromCommanderId, String toPlayerName, int amount) {
+    }
+
+    private final List<ScrapedDamage> scrapedDamage = new ArrayList<>();
+    private final Map<String, Integer> castCountByViewId = new HashMap<>();
+
+    private ViewTranslator() {
+    }
+
+    private GameState run(GameView view, String gameId, UUID myPlayerId) {
         List<Player> players = new ArrayList<>();
         String priorityPlayerId = null;
         for (PlayerView p : view.getPlayers()) {
@@ -58,6 +79,7 @@ public final class ViewTranslator {
                 priorityPlayerId = p.getPlayerId().toString();
             }
         }
+        players.replaceAll(this::attachCommanderDamage);
         return new GameState(
                 gameId,
                 GameState.Status.ACTIVE,
@@ -72,7 +94,7 @@ public final class ViewTranslator {
                 combat(view),
                 revealed(view),
                 lookedAt(view),
-                myPlayerId == null ? null : new GameState.Me(myPlayerId.toString(), cards(view.getMyHand())));
+                myPlayerId == null ? null : new GameState.Me(myPlayerId.toString(), cardsScraped(view.getMyHand())));
     }
 
     private static Phase phase(GameView view) {
@@ -91,7 +113,7 @@ public final class ViewTranslator {
         };
     }
 
-    private static Player player(PlayerView p) {
+    private Player player(PlayerView p) {
         List<Permanent> battlefield = new ArrayList<>();
         // A permanent lives under its controller's PlayerView — that IS the
         // controller relation; the view classes carry no controller UUID.
@@ -108,12 +130,33 @@ public final class ViewTranslator {
                 p.getLibraryCount(),
                 p.getHandCount(),
                 battlefield,
-                cards(p.getGraveyard()),
-                cards(p.getExile()),
+                cardsScraped(p.getGraveyard()),
+                cardsScraped(p.getExile()),
                 commandZone(p.getCommandObjectList()),
-                null,           // commanderDamage: M5 scrape
+                null,           // commanderDamage: attached after all players are scraped
                 flags(p),
                 null);          // timer: untimed v1
+    }
+
+    /**
+     * Second pass: this player's {@code commanderDamage} from damage lines
+     * scraped anywhere in the snapshot. Names are XMage's — both the line and
+     * {@code PlayerView.getName()} come from the same server, so plain string
+     * equality holds. Sorted by commander id for patch-stable ordering.
+     */
+    private Player attachCommanderDamage(Player p) {
+        List<Player.CommanderDamage> dmg = scrapedDamage.stream()
+                .filter(d -> d.toPlayerName().equals(p.name()))
+                .map(d -> new Player.CommanderDamage(d.fromCommanderId(), d.amount()))
+                .distinct()
+                .sorted(Comparator.comparing(Player.CommanderDamage::fromCommanderId))
+                .toList();
+        if (dmg.isEmpty()) {
+            return p;
+        }
+        return new Player(p.id(), p.name(), p.human(), p.life(), p.counters(), p.manaPool(),
+                p.librarySize(), p.handSize(), p.battlefield(), p.graveyard(), p.exile(),
+                p.commandZone(), dmg, p.flags(), p.timer());
     }
 
     private static Player.Flags flags(PlayerView p) {
@@ -135,7 +178,7 @@ public final class ViewTranslator {
                 v.getRed(), v.getGreen(), v.getColorless());
     }
 
-    private static List<StackItem> stack(GameView view) {
+    private List<StackItem> stack(GameView view) {
         List<StackItem> items = new ArrayList<>();
         CardsView stack = view.getStack();
         if (stack == null) {
@@ -148,16 +191,16 @@ public final class ViewTranslator {
                         e.getKey().toString(),
                         controllerOf(view, sav.getSourceCard()),
                         StackItem.Kind.ABILITY,
-                        sav.getSourceCard() == null ? null : card(sav.getSourceCard()),
-                        rules(sav.getRules()),
+                        sav.getSourceCard() == null ? null : cardScraped(sav.getSourceCard()),
+                        rules(scrapeOnly(sav.getRules())),
                         ids(sav.getTargets())));
             } else {
                 items.add(new StackItem(
                         e.getKey().toString(),
                         null,   // spell views carry no controller (protocol §6 note)
                         StackItem.Kind.SPELL,
-                        card(cv),
-                        rules(cv.getRules()),
+                        cardScraped(cv),
+                        rules(scrapeOnly(cv.getRules())),
                         ids(cv.getTargets())));
             }
         }
@@ -192,13 +235,13 @@ public final class ViewTranslator {
         return groups;
     }
 
-    private static List<NamedCards> revealed(GameView view) {
+    private List<NamedCards> revealed(GameView view) {
         if (view.getRevealed() == null || view.getRevealed().isEmpty()) {
             return null;
         }
         List<NamedCards> windows = new ArrayList<>();
         for (RevealedView r : view.getRevealed()) {
-            windows.add(new NamedCards(r.getName(), cards(r.getCards())));
+            windows.add(new NamedCards(r.getName(), cardsScraped(r.getCards())));
         }
         return windows;
     }
@@ -224,14 +267,14 @@ public final class ViewTranslator {
         return windows;
     }
 
-    private static List<CommandObject> commandZone(List<CommandObjectView> list) {
+    private List<CommandObject> commandZone(List<CommandObjectView> list) {
         List<CommandObject> zone = new ArrayList<>();
         if (list == null) {
             return zone;
         }
         for (CommandObjectView v : list) {
             switch (v) {
-                case CommanderView c -> zone.add(commandObject(card(c), CommandObject.Kind.COMMANDER));
+                case CommanderView c -> zone.add(commandObject(cardScraped(c), CommandObject.Kind.COMMANDER));
                 case EmblemView e -> zone.add(minimalCommandObject(e.getId(), e.getName(),
                         e.getExpansionSetCode(), e.getCardNumber(), e.getRules(), CommandObject.Kind.EMBLEM));
                 case PlaneView pl -> zone.add(minimalCommandObject(pl.getId(), pl.getName(),
@@ -245,11 +288,11 @@ public final class ViewTranslator {
         return zone;
     }
 
-    private static CommandObject commandObject(Card c, CommandObject.Kind kind) {
+    private CommandObject commandObject(Card c, CommandObject.Kind kind) {
         return new CommandObject(c.id(), c.name(), c.set(), c.number(), c.manaCost(), c.manaValue(),
                 c.types(), c.subtypes(), c.supertypes(), c.colors(), c.text(),
                 c.power(), c.toughness(), c.loyalty(), c.defense(), c.counters(),
-                c.token(), c.faceDown(), kind, null /* castCount: M5 scrape */);
+                c.token(), c.faceDown(), kind, castCountByViewId.get(c.id()));
     }
 
     private static CommandObject minimalCommandObject(UUID id, String name, String set,
@@ -260,8 +303,8 @@ public final class ViewTranslator {
                 null, null, null, null, null, null, null, kind, null);
     }
 
-    private static Permanent permanent(PermanentView v, String controllerId) {
-        Card c = card(v);
+    private Permanent permanent(PermanentView v, String controllerId) {
+        Card c = cardScraped(v);
         return new Permanent(c.id(), c.name(), c.set(), c.number(), c.manaCost(), c.manaValue(),
                 c.types(), c.subtypes(), c.supertypes(), c.colors(), c.text(),
                 c.power(), c.toughness(), c.loyalty(), c.defense(), c.counters(),
@@ -294,7 +337,47 @@ public final class ViewTranslator {
         return null;
     }
 
+    /** Instance path: scrape commander info lines and collect their data. */
+    private Card cardScraped(CardView v) {
+        return cardFrom(v, scrapeOnly(v.getRules(), v.getId().toString()));
+    }
+
+    private List<Card> cardsScraped(CardsView cv) {
+        List<Card> list = new ArrayList<>();
+        if (cv != null) {
+            for (CardView v : cv.values()) {
+                list.add(cardScraped(v));
+            }
+        }
+        return list;
+    }
+
+    private List<String> scrapeOnly(List<String> rawRules) {
+        return scrapeOnly(rawRules, null);
+    }
+
+    private List<String> scrapeOnly(List<String> rawRules, String viewId) {
+        CommanderDamage.Scrape s = CommanderDamage.scrape(rawRules);
+        if (viewId != null) {
+            if (s.castCount() != null) {
+                castCountByViewId.put(viewId, s.castCount());
+            }
+            s.damageByPlayerName().forEach((name, amount) ->
+                    scrapedDamage.add(new ScrapedDamage(viewId, name, amount)));
+        }
+        return s.remainingRules();
+    }
+
+    /**
+     * Context-free path for prompt payloads (PromptTranslator): commander info
+     * lines are stripped from the text but not collected — prompt cards are
+     * not an authoritative scrape site, state is.
+     */
     public static Card card(CardView v) {
+        return cardFrom(v, CommanderDamage.scrape(v.getRules()).remainingRules());
+    }
+
+    private static Card cardFrom(CardView v, List<String> rawRules) {
         String manaCost = v.getManaCostStr();
         return new Card(
                 v.getId().toString(),
@@ -307,7 +390,7 @@ public final class ViewTranslator {
                 v.getSubTypes() == null ? List.of() : v.getSubTypes().stream().map(Object::toString).toList(),
                 v.getSuperTypes() == null ? List.of() : v.getSuperTypes().stream().map(Object::toString).toList(),
                 colors(v),
-                rules(v.getRules()),
+                rules(rawRules),
                 blankToNull(v.getPower()),
                 blankToNull(v.getToughness()),
                 blankToNull(v.getLoyalty()),
@@ -373,8 +456,5 @@ public final class ViewTranslator {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
-    }
-
-    private ViewTranslator() {
     }
 }

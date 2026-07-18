@@ -1,0 +1,94 @@
+[ {
+  "t" : "game.state",
+  "seq" : 0,
+  "gameId" : "g",
+  "state" : {
+    "gameId" : "g",
+    "status" : "active",
+    "turn" : {
+      "n" : 1
+    },
+    "players" : [ {
+      "id" : "179de573-0bf4-4215-ade7-8572c26cbcc0",
+      "name" : "cn_SJ48LM_1",
+      "human" : true,
+      "life" : 40,
+      "manaPool" : {
+        "W" : 0,
+        "U" : 0,
+        "B" : 0,
+        "R" : 0,
+        "G" : 0,
+        "C" : 0
+      },
+      "librarySize" : 99,
+      "handSize" : 0,
+      "battlefield" : [ ],
+      "graveyard" : [ ],
+      "exile" : [ ],
+      "commandZone" : [ ]
+    }, {
+      "id" : "8e8229d8-c69d-4c2f-839a-65b4391d1a91",
+      "name" : "ai_3",
+      "human" : false,
+      "life" : 40,
+      "manaPool" : {
+        "W" : 0,
+        "U" : 0,
+        "B" : 0,
+        "R" : 0,
+        "G" : 0,
+        "C" : 0
+      },
+      "librarySize" : 99,
+      "handSize" : 0,
+      "battlefield" : [ ],
+      "graveyard" : [ ],
+      "exile" : [ ],
+      "commandZone" : [ ]
+    }, {
+      "id" : "3c671f7f-078a-485b-8cb9-45cff229d8ec",
+      "name" : "ai_2",
+      "human" : false,
+      "life" : 40,
+      "manaPool" : {
+        "W" : 0,
+        "U" : 0,
+        "B" : 0,
+        "R" : 0,
+        "G" : 0,
+        "C" : 0
+      },
+      "librarySize" : 99,
+      "handSize" : 0,
+      "battlefield" : [ ],
+      "graveyard" : [ ],
+      "exile" : [ ],
+      "commandZone" : [ ]
+    }, {
+      "id" : "1fff609e-1ee7-48fd-b72d-165fe7376389",
+      "name" : "ai_1",
+      "human" : false,
+      "life" : 40,
+      "manaPool" : {
+        "W" : 0,
+        "U" : 0,
+        "B" : 0,
+        "R" : 0,
+        "G" : 0,
+        "C" : 0
+      },
+      "librarySize" : 99,
+      "handSize" : 0,
+      "battlefield" : [ ],
+      "graveyard" : [ ],
+      "exile" : [ ],
+      "commandZone" : [ ]
+    } ],
+    "stack" : [ ],
+    "me" : {
+      "playerId" : "00000000-0000-0000-0000-000000000000",
+      "hand" : [ ]
+    }
+  }
+} ]

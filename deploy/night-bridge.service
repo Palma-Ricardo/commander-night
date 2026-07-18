@@ -1,0 +1,39 @@
+# /etc/systemd/system/night-bridge.service
+#
+# The Commander Night bridge daemon: protocol v1 (WS/JSON) downstream,
+# XMage's native protocol upstream (design §2). Needs JDK 26+ on the host;
+# the --add-opens flags are required by the XMage session layer (design §1).
+# The bridge does not manage the XMage server — it retries the connection
+# with backoff — but ordering the units keeps startup quiet.
+
+[Unit]
+Description=Commander Night bridge (browser protocol v1 <-> XMage)
+After=network.target xmage-server.service
+Requires=xmage-server.service
+
+[Service]
+Type=simple
+User=commander
+Group=commander
+# cwd owns the runtime artifacts: logs/ (incl. the callback tap when enabled)
+WorkingDirectory=/var/lib/commander-night
+ExecStart=/usr/bin/java \
+    --add-opens=java.base/java.io=ALL-UNNAMED \
+    --add-opens=java.base/java.lang=ALL-UNNAMED \
+    -Djava.awt.headless=true \
+    -Xmx512m \
+    -cp "/opt/commander-night/bridge/night-bridge.jar:/opt/commander-night/bridge/lib/*" \
+    night.bridge.Main /etc/commander-night/bridge.yaml
+Restart=on-failure
+RestartSec=3
+# Bridge death loses running games in v1 (protocol §14) — Restart= is for
+# crash recovery between games, not mid-game resilience.
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/commander-night
+
+[Install]
+WantedBy=multi-user.target

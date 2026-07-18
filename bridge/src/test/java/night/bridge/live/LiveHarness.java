@@ -95,6 +95,16 @@ final class LiveHarness {
             resumePromptRedelivery = true;
         }
 
+        /**
+         * XMage seat recovery (design §5), as opposed to a browser resume: the
+         * re-ground happens on the SAME socket — seq stays gapless, no log
+         * backfill — but the pending prompt is re-emitted under its original
+         * promptId, which must not read as a two-prompts-pending violation.
+         */
+        void expectRecoveryReground() {
+            resumePromptRedelivery = true;
+        }
+
         void observe(JsonNode n, int frameLength) {
             String t = n.path("t").asText("");
             if (!t.startsWith("game.")) {

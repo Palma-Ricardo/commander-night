@@ -209,6 +209,37 @@
       </build>
     </profile>
 
+    <!-- Deployable build (deploy/README.md): the bridge jar plus its runtime
+         classpath in one directory —
+           mvn -Pdist -DskipTests package
+         → target/night-bridge-<version>.jar + target/lib/*.jar. The deploy
+         host needs exactly these two artifacts (systemd unit's -cp). -->
+    <profile>
+      <id>dist</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <version>3.8.1</version>
+            <executions>
+              <execution>
+                <id>copy-runtime-deps</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>copy-dependencies</goal>
+                </goals>
+                <configuration>
+                  <includeScope>runtime</includeScope>
+                  <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!-- The bridge daemon itself:
            mvn -Prun compile exec:exec
          Runs from the repo root (bridge.yaml + sampleDecksDir are repo-root-

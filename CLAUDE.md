@@ -11,18 +11,21 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M4 (multi-human) done 2026-07-18 — browser resume (`hello{token,resume}` →
-keyframe → pending prompt re-emitted under its original promptId → log backfill), `chat.send`,
-per-session command idempotency (LRU 64; command ids must be unique across reconnects,
-protocol §3), lost-token recovery join (seat-userId adoption; old token retired), rematch via
-started-lobby release, post-game teardown grace (`postGameGraceSecs`), and design-§5 XMage
-seat recovery (restore-session handshake; implemented, live-verify on the M5 list).
-Exit criterion validated live: `MultiHumanLiveTest` — 2 humans + 2 AIs, full game, mid-prompt
-hard refresh on both seats, chat + duplicate-command probe, mid-game recovery handover,
-post-game resume/rematch/teardown. M3 context: lost-wakeup race guard (design §5), combat
-declaration (§8 `priority.combat`). Next: M5 (commander-damage scrape, golden fixtures,
-conformance corpus both directions, systemd/caddy deploy — a real 4-human night).
-Milestone table in design.md §14.
+**Status:** M5 engineering done 2026-07-18 — commander damage/tax scrape
+(`translate/CommanderDamage`, pinned to the 1.4.60 watcher strings, canary WARN on drift,
+fields land per protocol §6; watcher lines no longer leak into card text), callback tap
+productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,
+always on in the live tier), golden-fixture suite (`GoldenFixtureTest` + `FixtureSelectMain`
+curation; 10 live-captured fixtures incl. commander tax/damage and combat declaration; regen
+via `-Dgolden.regen=true` on upgrades), conformance corpus audited complete (47 samples, all
+asserted), design-§5 seat recovery **live-verified** (`SeatRecoveryLiveTest`: SIGSTOP server
+mid-prompt → detect ~6 s → non-fatal answer rejection → restore-session reconnect →
+same-promptId re-ground → full game green), and deploy artifacts (`deploy/`: systemd units,
+Caddyfile, prod bridge.yaml, runbook; build with `mvn -Pdist -DskipTests package`, launch
+smoke-tested). M5's exit criterion — a real 4-human night on the deployed host — is the
+remaining human step. M4 context: browser resume, chat, idempotency, recovery join, rematch,
+teardown grace (`MultiHumanLiveTest`). M3 context: lost-wakeup race guard (design §5), combat
+declaration (§8 `priority.combat`). Milestone table in design.md §14.
 
 ## Layout
 

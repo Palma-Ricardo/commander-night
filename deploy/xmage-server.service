@@ -1,0 +1,32 @@
+# /etc/systemd/system/xmage-server.service
+#
+# XMage 1.4.60 — the authoritative rules engine (design §2). Runs on the
+# dist's own bundled JRE 8, bound to loopback only: the bridge is its sole
+# client and the auth boundary. Set serverAddress="127.0.0.1" in
+# /opt/commander-night/xmage-dist/xmage/mage-server/config/config.xml —
+# the dist ships with 0.0.0.0.
+
+[Unit]
+Description=XMage server 1.4.60 (Commander Night rules engine)
+After=network.target
+
+[Service]
+Type=simple
+User=commander
+Group=commander
+WorkingDirectory=/opt/commander-night/xmage-dist/xmage/mage-server
+ExecStart=/opt/commander-night/xmage-dist/java/jre1.8.0_201/bin/java \
+    -Xmx1024m \
+    -Djava.awt.headless=true \
+    -jar lib/mage-server-1.4.60.jar
+Restart=on-failure
+RestartSec=5
+# A restart loses running games (protocol §14) — systemd only restarts on
+# failure, never on unit reload. Restart deliberately between game nights:
+# 1.4.60 leaks AI simulation threads from dead games and degrades over days.
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

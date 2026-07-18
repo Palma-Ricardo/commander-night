@@ -33,6 +33,7 @@ public final class SeatSession implements MageClient {
     private volatile int port;
     /** XMage's server-side restore handshake key: our previous session id. */
     private volatile String lastSessionId = "";
+    private volatile CallbackTap tap;
     private volatile boolean closing;
     /** connectStart/connectStop re-fire disconnected() internally; ignore our own noise. */
     private volatile boolean reconnecting;
@@ -45,6 +46,15 @@ public final class SeatSession implements MageClient {
     /** Where callbacks go — the seat pump's enqueue. Must be set before connect(). */
     public void sink(Consumer<ClientCallback> sink) {
         this.sink = sink;
+    }
+
+    /**
+     * Optional capture (design §12): callbacks are tapped BEFORE decompression
+     * so the .ser file holds the exact wire objects — the golden-fixture
+     * source (design §13). Owned here; closed with the session.
+     */
+    public void tap(CallbackTap tap) {
+        this.tap = tap;
     }
 
     /** Transport-loss listener — the seat pump's recovery kick (design §5). */
@@ -142,6 +152,10 @@ public final class SeatSession implements MageClient {
         } catch (Exception e) {
             log.debug("connectStop for '{}': {}", username, e.toString());
         }
+        CallbackTap t = tap;
+        if (t != null) {
+            t.close();
+        }
     }
 
     // ---- MageClient ----
@@ -184,6 +198,10 @@ public final class SeatSession implements MageClient {
     @Override
     public void onCallback(ClientCallback callback) {
         try {
+            CallbackTap t = tap;
+            if (t != null) {
+                t.tap(callback);    // pre-decompress: exact wire objects (design §13)
+            }
             callback.decompressData();
             sink.accept(callback);
         } catch (Throwable t) {

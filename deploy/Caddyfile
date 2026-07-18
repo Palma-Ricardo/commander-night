@@ -1,0 +1,12 @@
+# /etc/caddy/Caddyfile
+#
+# The only publicly reachable process (design §2): caddy owns TLS and the
+# public name; the bridge listens on loopback :8484. Caddy proxies WebSocket
+# upgrades transparently, and the bridge's permessage-deflate is negotiated
+# end-to-end with the browser (protocol §3) — no compression config needed
+# here. Replace the host with your domain (its DNS A record must point at
+# this VPS; caddy then provisions the certificate automatically).
+
+night.example.com {
+	reverse_proxy 127.0.0.1:8484
+}
