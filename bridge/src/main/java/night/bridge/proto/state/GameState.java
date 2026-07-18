@@ -13,6 +13,7 @@ import java.util.Locale;
 public record GameState(
         String gameId,
         Status status,
+        boolean rollbackTurnsAllowed,
         Turn turn,
         List<Player> players,
         List<StackItem> stack,
@@ -39,11 +40,35 @@ public record GameState(
     }
 
     /** The private zone; omitted for spectators (v2). */
-    public record Me(String playerId, List<Card> hand) {
+    public record Me(String playerId, List<Card> hand, Skip skip) {
+
+        /**
+         * The active §9 skip (absent = none). At most one is ever active —
+         * 1.4.60 PlayerImpl resets every skip flag before setting any.
+         */
+        public enum Skip {
+            STACK("stack"),
+            END_OF_TURN("endOfTurn"),
+            NEXT_MAIN("nextMain"),
+            MY_NEXT_TURN("myNextTurn"),
+            END_STEP_BEFORE_MY_TURN("endStepBeforeMyTurn");
+
+            private final String wire;
+
+            Skip(String wire) {
+                this.wire = wire;
+            }
+
+            @JsonValue
+            public String wire() {
+                return wire;
+            }
+        }
     }
 
     /** The same snapshot with status flipped — the final keyframe before game.over (protocol §11). */
     public GameState over() {
-        return new GameState(gameId, Status.OVER, turn, players, stack, combat, revealed, lookedAt, me);
+        return new GameState(gameId, Status.OVER, rollbackTurnsAllowed, turn, players, stack, combat,
+                revealed, lookedAt, me);
     }
 }

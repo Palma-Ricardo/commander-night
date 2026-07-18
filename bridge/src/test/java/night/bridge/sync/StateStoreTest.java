@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class StateStoreTest {
 
     private static GameState state(int life) {
-        return new GameState("g1", GameState.Status.ACTIVE,
+        return new GameState("g1", GameState.Status.ACTIVE, true,
                 new GameState.Turn(1, Phase.BEGINNING, Step.UPKEEP, "p1", "p1"),
                 List.of(new Player("p1", "A", true, life, null,
                         new Player.ManaPool(0, 0, 0, 0, 0, 0), 92, 7,

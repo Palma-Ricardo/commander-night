@@ -5,6 +5,7 @@
   "state" : {
     "gameId" : "g",
     "status" : "active",
+    "rollbackTurnsAllowed" : false,
     "turn" : {
       "n" : 14,
       "phase" : "PRECOMBAT_MAIN",

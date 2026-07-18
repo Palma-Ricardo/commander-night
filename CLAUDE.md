@@ -8,6 +8,7 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 **Read before changing anything:**
 
 - `docs/bridge/design.md` — bridge implementation spec (threading, translation, FSM, milestones)
+- `docs/client/design.md` — TS web client spec (stores, prompt UX, Scryfall, milestones C0–C5)
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 

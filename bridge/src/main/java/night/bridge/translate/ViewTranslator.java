@@ -73,16 +73,21 @@ public final class ViewTranslator {
     private GameState run(GameView view, String gameId, UUID myPlayerId) {
         List<Player> players = new ArrayList<>();
         String priorityPlayerId = null;
+        PlayerView myView = null;
         for (PlayerView p : view.getPlayers()) {
             players.add(player(p));
             if (p.hasPriority()) {
                 priorityPlayerId = p.getPlayerId().toString();
+            }
+            if (p.getPlayerId().equals(myPlayerId)) {
+                myView = p;
             }
         }
         players.replaceAll(this::attachCommanderDamage);
         return new GameState(
                 gameId,
                 GameState.Status.ACTIVE,
+                view.isRollbackTurnsAllowed(),
                 new GameState.Turn(
                         view.getTurn(),
                         phase(view),
@@ -94,7 +99,36 @@ public final class ViewTranslator {
                 combat(view),
                 revealed(view),
                 lookedAt(view),
-                myPlayerId == null ? null : new GameState.Me(myPlayerId.toString(), cardsScraped(view.getMyHand())));
+                myPlayerId == null ? null
+                        : new GameState.Me(myPlayerId.toString(), cardsScraped(view.getMyHand()), skip(myView)));
+    }
+
+    /** Protocol §6 {@code me.skip} — only my own skip state goes on the wire (§9 trim). */
+    private static GameState.Me.Skip skip(PlayerView p) {
+        return p == null ? null
+                : skipOf(p.isPassedUntilStackResolved(), p.isPassedUntilEndOfTurn(), p.isPassedUntilNextMain(),
+                        p.isPassedAllTurns(), p.isPassedUntilEndStepBeforeMyTurn());
+    }
+
+    // At most one flag is set (PlayerImpl resets all before setting any), so order is moot.
+    static GameState.Me.Skip skipOf(boolean stack, boolean endOfTurn, boolean nextMain,
+                                    boolean myNextTurn, boolean endStepBeforeMyTurn) {
+        if (stack) {
+            return GameState.Me.Skip.STACK;
+        }
+        if (endOfTurn) {
+            return GameState.Me.Skip.END_OF_TURN;
+        }
+        if (nextMain) {
+            return GameState.Me.Skip.NEXT_MAIN;
+        }
+        if (myNextTurn) {
+            return GameState.Me.Skip.MY_NEXT_TURN;
+        }
+        if (endStepBeforeMyTurn) {
+            return GameState.Me.Skip.END_STEP_BEFORE_MY_TURN;
+        }
+        return null;
     }
 
     private static Phase phase(GameView view) {

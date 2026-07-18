@@ -328,6 +328,7 @@ class ProtocolSamplesTest {
         GameState state = new GameState(
                 "g1",
                 GameState.Status.ACTIVE,
+                true,
                 new GameState.Turn(3, Phase.PRECOMBAT_MAIN, Step.PRE_MAIN, "p1", "p1"),
                 List.of(
                         new Player("p1", "Ricardo", true, 40,
@@ -369,7 +370,8 @@ class ProtocolSamplesTest {
                 new GameState.Me("p1", List.of(new Card("hand-1", "Elvish Mystic", "C21", "155",
                         "{G}", 1, List.of("CREATURE"), List.of("Elf", "Druid"), List.of(),
                         List.of(Color.G), List.of("{T}: Add {G}."),
-                        "1", "1", null, null, null, null, null))));
+                        "1", "1", null, null, null, null, null)),
+                        GameState.Me.Skip.STACK));
         assertProduces("game.state.json", new StateKeyframe(2, "g1", Json.tree(state)));
     }
 }

@@ -58,6 +58,14 @@ public final class TableRecipe {
         options.setAttackOption(MultiplayerAttackOption.MULTIPLE);
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
+        // MatchOptions defaults this to false, which left protocol §9 requestRollback
+        // dead on every table until 2026-07-18. Friends' night wants the undo — but only
+        // all-human tables get it: with AI seats, rollback buys nothing (auto-players
+        // never roll back) while its per-turn full-state copy
+        // (GameImpl.saveRollBackGameState) adds load to the fragile AI-simulation server
+        // (suspected, unproven, of shortening AI games — 2026-07-18 live runs). The
+        // client hides the rollback control via GameState.rollbackTurnsAllowed either way.
+        options.setRollbackTurnsAllowed(aiDecks.isEmpty());
 
         TableView table = host.session().createTable(roomId, options);
         if (table == null) {

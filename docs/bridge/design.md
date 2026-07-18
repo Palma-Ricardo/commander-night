@@ -267,7 +267,13 @@ at most one pending prompt; bridge-monotonic `promptId`; answers fenced by `prom
   odd-numbered nights; the spike recipe unchanged).
 - `lobby.start`: runs `TableRecipe` — `getMainRoomId` → `createTable(MatchOptions)` (game type
   `Commander Free For All`, deck type `Variant Magic - Commander`, range ALL, attack MULTIPLE,
-  `winsNeeded 1`, time limit untouched = `NONE`) → `joinTable` per AI → per human seat (each
+  `winsNeeded 1`, time limit untouched = `NONE`, `rollbackTurnsAllowed` = **true iff no AI
+  seats** — the MatchOptions default is `false`, which had left §9 `requestRollback` dead
+  until 2026-07-18. All-human tables get the undo; AI tables stay at the
+  milestone-validated `false` because rollback buys them nothing (auto-players never roll
+  back) while its per-turn `state.copy()` loads the AI-simulation server — suspected,
+  unproven, of shortening AI games in 2026-07-18 live runs. Protocol §6
+  `rollbackTurnsAllowed` tells the client which one it got) → `joinTable` per AI → per human seat (each
   through its own `SeatSession`) → `startMatch`. Any step failing → `error LOBBY_STATE` with the
   step name; lobby stays joinable.
 

@@ -113,7 +113,7 @@ class PromptTranslatorTest {
     }
 
     private static GameState state(java.util.List<Player> players, java.util.List<CombatGroup> combat) {
-        return new GameState("g1", GameState.Status.ACTIVE, null, players,
+        return new GameState("g1", GameState.Status.ACTIVE, true, null, players,
                 java.util.List.of(), combat, null, null, null);
     }
 
