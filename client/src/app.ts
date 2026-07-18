@@ -2,6 +2,7 @@
 // from here; tests and headless runs build their own stacks via the factories.
 
 import { recorder } from './dev/recorder';
+import { createScryfallResolver } from './images/scryfall';
 import { createActions } from './net/actions';
 import { createSocketManager } from './net/socket';
 import { createStores } from './stores';
@@ -24,6 +25,7 @@ export const appManager = createSocketManager({
   strictDecode: import.meta.env.DEV,
 });
 export const appActions = createActions(appStores, appManager, appKV);
+export const appScryfall = createScryfallResolver({ kv: appKV });
 
 export function bootApp(): void {
   appManager.connect();

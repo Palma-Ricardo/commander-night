@@ -4,8 +4,9 @@
 // renders from lobby.state events, never from these calls.
 
 import {
-  defaultContext, lobbyCreate, lobbyDeck, lobbyJoin, lobbyReady, lobbyStart,
+  defaultContext, gameAction, gameAnswer, lobbyCreate, lobbyDeck, lobbyJoin, lobbyReady, lobbyStart,
 } from '../protocol/commands';
+import type { AnswerValue, Id } from '../protocol/protocol';
 import type { Stores } from '../stores';
 import { KEYS, type KV } from '../stores/storage';
 import type { CommandReply } from './pending';
@@ -52,7 +53,42 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
     });
   }
 
+  // Design §7: every UI binding passes the promptId it rendered with; a click
+  // that lands after a supersede is dropped here (and would be fenced
+  // server-side as PROMPT_STALE anyway — swallowed silently either way).
+  // Submitting sets `inflight`; it stays set until game.promptDone or the
+  // superseding prompt clears it in route — only an error that leaves the same
+  // prompt pending (INVALID_ANSWER, timeout) re-enables the dock here.
+  async function answerPrompt(promptId: number, answer: AnswerValue): Promise<void> {
+    const { pending, inflight } = stores.prompt.getState();
+    const gameId = stores.game.getState().state?.gameId;
+    if (pending === undefined || pending.promptId !== promptId || inflight || gameId === undefined) return;
+    stores.prompt.setState({
+      inflight: true,
+      // the acted-on object gets the spinner badge (§7)
+      ...(answer.type === 'object' ? { actedOn: answer.objectId } : {}),
+    });
+
+    const clearInflightIfStillPending = () => {
+      if (stores.prompt.getState().pending?.promptId === promptId) {
+        stores.prompt.setState({ inflight: false });
+      }
+    };
+    try {
+      const reply = await manager.send(gameAnswer(ctx, { gameId, promptId, answer }));
+      if (reply.t === 'error') {
+        if (reply.code !== 'PROMPT_STALE') console.warn('[answer]', reply.code, reply.message);
+        clearInflightIfStillPending();
+      }
+    } catch (e) {
+      console.warn('[answer]', e);
+      clearInflightIfStillPending();
+    }
+  }
+
   return {
+    answerPrompt,
+
     setDisplayName(name: string): void {
       stores.session.setState({ name });
       kv.set(KEYS.name, name);
@@ -92,6 +128,33 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
 
     async startGame(fillAI: boolean): Promise<void> {
       unwrap(await manager.send(lobbyStart(ctx, fillAI ? { fillAI } : {})));
+    },
+
+    /** chooseTargets scratch: toggle a candidate in/out, capped at `max`. */
+    toggleTarget(promptId: number, id: Id): void {
+      const { pending, inflight, selected } = stores.prompt.getState();
+      if (pending?.kind !== 'chooseTargets' || pending.promptId !== promptId || inflight) return;
+      if (!pending.candidates.includes(id)) return;
+      if (selected.includes(id)) {
+        stores.prompt.setState({ selected: selected.filter(s => s !== id) });
+      } else if (selected.length < pending.max) {
+        stores.prompt.setState({ selected: [...selected, id] });
+      }
+    },
+
+    /** payMana source click: one round trip; records the no-progress probe (§7). */
+    async clickManaSource(promptId: number, sourceId: Id): Promise<void> {
+      const { pending, inflight } = stores.prompt.getState();
+      if (pending?.kind !== 'payMana' || pending.promptId !== promptId || inflight) return;
+      stores.prompt.setState({ manaProbe: { sourceId, remaining: pending.remaining } });
+      await answerPrompt(promptId, { type: 'object', objectId: sourceId });
+    },
+
+    /** Concede (§9, no prompt required). The UI gates this behind type-to-confirm. */
+    async concede(): Promise<void> {
+      const gameId = stores.game.getState().state?.gameId;
+      if (gameId === undefined) return;
+      unwrap(await manager.send(gameAction(ctx, { gameId, action: { kind: 'concede' } })));
     },
 
     /** Debug toggle (§6/§12); takes effect on the next connect's hello. */

@@ -4,6 +4,7 @@
 
 import type { LogEntry, ServerMsg } from '../protocol/protocol';
 import type { Stores } from '../stores';
+import { emptyScratch } from '../stores/prompt';
 import type { PendingCommands } from './pending';
 import type { SessionWriter } from './session';
 
@@ -71,15 +72,29 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
     }
 
     case 'game.prompt': {
-      // §8: a new prompt implicitly supersedes the previous one
-      stores.prompt.setState({ pending: msg });
+      // §8: a new prompt implicitly supersedes the previous one. Scratch and
+      // inflight reset with it (§7) — with one carry-over: a payMana re-ask
+      // whose `remaining` did not shrink after a source click proves that
+      // source can't pay (§7 "can't pay this" badge); a shrunk cost is
+      // progress and clears the badge set.
+      const prev = stores.prompt.getState();
+      let cantPay: typeof prev.cantPay = [];
+      if (msg.kind === 'payMana' && prev.pending?.kind === 'payMana'
+          && prev.manaProbe !== undefined && prev.manaProbe.remaining === msg.remaining) {
+        cantPay = prev.cantPay.includes(prev.manaProbe.sourceId)
+          ? prev.cantPay
+          : [...prev.cantPay, prev.manaProbe.sourceId];
+      }
+      stores.prompt.setState({ pending: msg, ...emptyScratch(), cantPay });
       ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
       return;
     }
 
     case 'game.promptDone': {
       const pending = stores.prompt.getState().pending;
-      if (pending?.promptId === msg.promptId) stores.prompt.setState({ pending: undefined });
+      if (pending?.promptId === msg.promptId) {
+        stores.prompt.setState({ pending: undefined, ...emptyScratch() });
+      }
       return;
     }
 

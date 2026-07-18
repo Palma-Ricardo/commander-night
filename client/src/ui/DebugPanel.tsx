@@ -1,10 +1,9 @@
 // Debug panel (design §12): live message trace + JSONL download, seq counters,
-// keyframes-mode toggle (next connect), force resync. Scryfall miss list lands
-// with images in C2.
+// keyframes-mode toggle (next connect), force resync, Scryfall miss list.
 
 import { useSyncExternalStore } from 'react';
 import { useStore } from 'zustand';
-import { appActions, appManager, appStores } from '../app';
+import { appActions, appManager, appScryfall, appStores } from '../app';
 import { recorder } from '../dev/recorder';
 import type { TraceEntry } from '../dev/recorder';
 
@@ -33,6 +32,8 @@ export function DebugPanel() {
   );
   const game = useStore(appStores.game, s => s);
   const keyframesMode = useStore(appStores.settings, s => s.keyframesMode);
+  useStore(appScryfall.store);   // re-render as lookups settle
+  const misses = appScryfall.misses();
 
   const download = () => {
     const blob = new Blob([recorder.toJsonl()], { type: 'application/jsonl' });
@@ -58,6 +59,11 @@ export function DebugPanel() {
         <button onClick={() => appManager.resyncNow()}>Force resync</button>
         <button onClick={download} disabled={entries.length === 0}>Download JSONL</button>
       </header>
+      {misses.length > 0 && (
+        <p className="debug-meta">
+          Scryfall misses ({misses.length}): {misses.map(m => `${m.name} [${m.key}]`).join(', ')}
+        </p>
+      )}
       {entries.length === 0
         ? <p className="debug-empty">No messages yet.</p>
         : (

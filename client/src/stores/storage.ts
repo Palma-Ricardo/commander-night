@@ -13,6 +13,7 @@ export const KEYS = {
   name: 'cn.name',
   deck: 'cn.deck',
   resume: 'cn.resume',
+  imageCache: 'cn.imageCache',
   settings: 'cn.settings',
 } as const;
 
