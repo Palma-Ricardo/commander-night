@@ -200,6 +200,46 @@ describe('reconnect ladder', () => {
   });
 });
 
+describe('resume failure (§5)', () => {
+  // The bridge answers hello{token, resume} it can't honor with a non-fatal
+  // RESUME_FAILED and waits — the client must drop the anchor and hello again
+  // (unknown token *without* resume is a fresh session, protocol §14). The
+  // pre-fix bug parked helloSent forever on every dev-restart of the bridge.
+  it('clears the anchor, re-helloes on the same socket, and reaches ready', () => {
+    stores.session.setState({ token: 't-9', resume: { gameId: 'g1', lastSeq: 41 } });
+    kv.set(KEYS.resume, JSON.stringify({ gameId: 'g1', lastSeq: 41 }));
+    manager.connect();
+    lastWs().open();
+    expect(helloOf(lastWs())).toMatchObject({ token: 't-9', resume: { gameId: 'g1', lastSeq: 41 } });
+
+    lastWs().receive({ t: 'error', code: 'RESUME_FAILED', message: 'unknown session token' });
+    expect(stores.session.getState().resume).toBeUndefined();
+    expect(kv.get(KEYS.resume)).toBeNull();
+    const second = JSON.parse(lastWs().sent[1]!) as Hello;
+    expect(second.t).toBe('session.hello');
+    expect(second.token).toBe('t-9');   // token kept: the bridge treats it as fresh
+    expect(second.resume).toBeUndefined();
+
+    lastWs().receive({
+      t: 'session.welcome', re: second.id, v: 1,
+      userId: 'user-1', token: 'minted-2', role: 'player', resumed: false,
+    });
+    expect(stores.connection.getState().status).toBe('ready');
+    expect(stores.session.getState().token).toBe('minted-2');
+  });
+
+  it('does not re-hello when there was no anchor to drop (no loop against a broken bridge)', () => {
+    stores.session.setState({ token: 't-9' });
+    manager.connect();
+    lastWs().open();
+    expect(lastWs().sent).toHaveLength(1);
+
+    lastWs().receive({ t: 'error', code: 'RESUME_FAILED', message: 'unknown session token' });
+    expect(lastWs().sent).toHaveLength(1);   // parked in helloSent, not looping
+    expect(stores.connection.getState().status).toBe('helloSent');
+  });
+});
+
 describe('command pipeline', () => {
   const ctx = defaultContext();
 

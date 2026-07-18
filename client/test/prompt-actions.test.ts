@@ -59,6 +59,7 @@ beforeEach(() => {
     pending: new PendingCommands(),
     session: new SessionWriter(stores, kv, () => 0),
     requestResync: () => {},
+    rehello: () => {},
   };
   route(keyframe, ctx);
 });

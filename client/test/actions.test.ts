@@ -84,6 +84,30 @@ describe('joinLobby / submitDeck', () => {
   });
 });
 
+describe('leaveGame (play again, protocol §5)', () => {
+  it('resets game/log/prompt/lobby stores but keeps name, deck, and session', () => {
+    actions.setDisplayName('Ricardo');
+    actions.setDeckText('1 [C21:263] Command Tower');
+    stores.session.setState({ token: 't-1', userId: 'u1' });
+    stores.lobby.setState({ state: { t: 'lobby.state', code: 'AB12CD', hostUserId: 'u1', seats: [] } });
+    stores.game.setState({
+      state: { gameId: 'g1' } as never, lastAppliedSeq: 41, syncMode: 'live',
+      over: { t: 'game.over', gameId: 'g1', seq: 42, reason: 'x', winnerPlayerIds: [], finalState: true },
+    });
+    stores.log.setState({ entries: [{ t: 'game.log', gameId: 'g1', seq: 1, ts: 0, kind: 'game', text: 'hi' }] });
+
+    actions.leaveGame();
+
+    expect(stores.game.getState()).toMatchObject({ state: undefined, over: undefined, lastAppliedSeq: -1 });
+    expect(stores.log.getState().entries).toEqual([]);
+    expect(stores.prompt.getState().pending).toBeUndefined();
+    expect(stores.lobby.getState().state).toBeUndefined();
+    expect(stores.session.getState()).toMatchObject({ token: 't-1', userId: 'u1' });
+    expect(kv.get(KEYS.name)).toBe('Ricardo');
+    expect(kv.get(KEYS.deck)).toBe('1 [C21:263] Command Tower');
+  });
+});
+
 describe('persistence', () => {
   it('display name and deck text persist under cn.*', () => {
     actions.setDisplayName('Ricardo');

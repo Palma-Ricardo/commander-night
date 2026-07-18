@@ -160,6 +160,7 @@ button.reconnect { background: var(--accent); color: #14161a; }
   background: var(--panel); border: 1px solid var(--in); border-radius: 6px;
   color: var(--in); padding: 0.75rem 1rem; margin: 0.75rem 0;
 }
+.over-banner .play-again { margin-left: 1rem; }
 .prompt-raw, .log-tail { margin: 0.75rem 0; }
 .prompt-raw h3, .log-tail h3, .raw-state summary { color: var(--muted); font-size: 0.9rem; }
 .prompt-raw pre, .raw-state pre {

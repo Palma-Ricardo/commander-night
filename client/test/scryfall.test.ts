@@ -1,6 +1,7 @@
 // Scryfall resolver (design §9/§13): queue pacing (~8 req/s), visibility
-// priority ordering, dedupe, byId → byName fallback, miss list, and the
-// localStorage cache short-circuit.
+// priority ordering, dedupe, the lookup ladder (byId → byName for real cards;
+// t-set → set → any printing for tokens), miss list, and the localStorage
+// cache short-circuit.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createScryfallResolver, type ScryfallResolver } from '../src/images/scryfall';
@@ -98,6 +99,39 @@ describe('scryfall resolver', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(f.calls).toHaveLength(2);
     expect(resolver.misses()).toEqual([{ key: 'zzz/99', name: 'Totally Custom Token' }]);
+  });
+
+  it('tokens look up the bare name in the t-prefixed set (live-verified shape)', async () => {
+    const f = fakeFetch();
+    resolver = createScryfallResolver({ kv, fetchFn: f.fn, minIntervalMs: 125 });
+    resolver.resolve({ set: 'WAR', number: '', name: 'Goblin Token', token: true }, 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.calls).toEqual(['https://api.scryfall.com/cards/named?exact=Goblin&set=twar']);
+    expect(resolver.store.getState().images['war/goblin token']?.status).toBe('ok');
+  });
+
+  it('token ladder falls through t-set → printed set → any printing', async () => {
+    const f = fakeFetch(url => url.includes('set='));   // both set-scoped lookups 404
+    resolver = createScryfallResolver({ kv, fetchFn: f.fn, minIntervalMs: 125 });
+    resolver.resolve({ set: 'NPH', number: '', name: 'Beast Token', token: true }, 1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.calls).toEqual([
+      'https://api.scryfall.com/cards/named?exact=Beast&set=tnph',
+      'https://api.scryfall.com/cards/named?exact=Beast&set=nph',
+      'https://api.scryfall.com/cards/named?exact=Beast',
+    ]);
+    expect(resolver.store.getState().images['nph/beast token']?.status).toBe('ok');
+  });
+
+  it('two tokens from one set do not collide on the empty collector number', async () => {
+    const f = fakeFetch();
+    resolver = createScryfallResolver({ kv, fetchFn: f.fn, minIntervalMs: 125 });
+    resolver.resolve({ set: 'WAR', number: '', name: 'Goblin Token', token: true }, 1);
+    resolver.resolve({ set: 'WAR', number: '', name: 'Zombie Army Token', token: true }, 1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.calls).toHaveLength(2);
+    expect(resolver.store.getState().images['war/goblin token']?.status).toBe('ok');
+    expect(resolver.store.getState().images['war/zombie army token']?.status).toBe('ok');
   });
 
   it('a fresh resolver serves from the persisted cache without fetching', async () => {

@@ -151,8 +151,14 @@ answers are rejected (`UPSTREAM_ERROR` non-fatal) while a virtual thread retries
 handshake — `setRestoreSessionId(previous session id)` before `connectStart` — which the server
 matches in `Session.validateUser` to flag a reconnection and re-attach the user's active tables
 (`User.onReconnect`, source-verified 1.4.60); the pump then re-runs `joinGame` + chat join.
-Success → status line, fresh keyframe, pending-prompt re-emit (XMage usually also re-fires the
-current ask, which supersedes cleanly). 5 failures → `error UPSTREAM_ERROR fatal:true` to that
+Success → status line, fresh keyframe, pending-prompt re-emit, then an **immediate watchdog
+nudge**: `GameController.join` does NOT re-fire an in-flight ask on rejoin (source-verified
+1.4.60 — join only re-registers the session), and an ask that fired into the dying socket may
+never have reached the bridge at all, so the sentinel forces a parked game thread to re-fire it
+on the new session right away (benign if nothing is pending). Live incident 2026-07-18: without
+this, a seat dropped exactly as an ask fired sat promptless ~50 s until the backoff ladder's
+third nudge. The nudge watchdog stands down while recovery is in flight (transport gone);
+`recovered()` restarts its ladder. 5 failures → `error UPSTREAM_ERROR fatal:true` to that
 seat, game continues for the others. Bridge process death still loses the game (protocol §14);
 process-level re-attach is v2. Live-verified 2026-07-18 (`SeatRecoveryLiveTest`, live tier):
 SIGSTOP the server mid-game with a prompt pending → the 10 s session ping trips detection in

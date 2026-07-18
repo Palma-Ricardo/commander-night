@@ -62,6 +62,7 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     pending,
     session: sessionWriter,
     requestResync: () => resyncNow(),
+    rehello: () => { if (ws?.readyState === WebSocket.OPEN) sendHello(); },
   };
 
   let ws: WebSocket | null = null;
@@ -90,7 +91,7 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     ws.onerror = () => { /* the close event carries the story */ };
   }
 
-  function onOpen(): void {
+  function sendHello(): void {
     const session = stores.session.getState();
     const keyframes = stores.settings.getState().keyframesMode;
     const msg = hello(ctx, {
@@ -102,6 +103,10 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     recorder.record('out', msg);
     ws?.send(encode(msg));
     stores.connection.setState({ status: 'helloSent' });
+  }
+
+  function onOpen(): void {
+    sendHello();
   }
 
   function onMessage(ev: MessageEvent): void {

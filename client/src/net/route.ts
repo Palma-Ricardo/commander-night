@@ -16,6 +16,8 @@ export interface RouteCtx {
   session: SessionWriter;
   /** Ask the server for a keyframe (game.resync). Wired by the socket manager. */
   requestResync(): void;
+  /** Re-send hello on the open socket (RESUME_FAILED fallback, §5). */
+  rehello(): void;
 }
 
 export function route(msg: ServerMsg, ctx: RouteCtx): void {
@@ -37,6 +39,17 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
       if (msg.fatal) {
         // §12: the seat is unrecoverable on this connection
         stores.connection.setState({ status: 'fatal', lastError: `${msg.code}: ${msg.message}` });
+      } else if (msg.code === 'RESUME_FAILED') {
+        // §5: the stored anchor names a game this bridge no longer knows (its
+        // restart, or post-game teardown). Drop the anchor and hello again on
+        // the same socket — an unknown token *without* resume is a fresh
+        // session (protocol §14), so the retry is welcomed. Anchorless repeat
+        // would loop forever, so it parks in helloSent instead. Recovery join
+        // + toast land in C4 (§10/§11).
+        console.warn('[bridge]', msg.code, msg.message);
+        const hadAnchor = stores.session.getState().resume !== undefined;
+        ctx.session.clearResumeAnchor();
+        if (hadAnchor) ctx.rehello();
       } else if (!settled) {
         // Unsolicited non-fatal error; toast surface lands in C4 (§11)
         console.warn('[bridge]', msg.code, msg.message);

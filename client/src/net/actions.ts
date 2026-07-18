@@ -8,6 +8,7 @@ import {
 } from '../protocol/commands';
 import type { AnswerValue, Id } from '../protocol/protocol';
 import type { Stores } from '../stores';
+import { emptyScratch } from '../stores/prompt';
 import { KEYS, type KV } from '../stores/storage';
 import type { CommandReply } from './pending';
 import type { SocketManager } from './socket';
@@ -155,6 +156,17 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
       const gameId = stores.game.getState().state?.gameId;
       if (gameId === undefined) return;
       unwrap(await manager.send(gameAction(ctx, { gameId, action: { kind: 'concede' } })));
+    },
+
+    /** Post-game "play again" (protocol §5): a started lobby has already
+     *  released its members, so rematch = walk back home and create/join a
+     *  fresh one (name + deck text persist). Pure local reset — the session
+     *  and socket stay up. */
+    leaveGame(): void {
+      stores.game.setState({ state: undefined, over: undefined, lastAppliedSeq: -1, syncMode: 'live' });
+      stores.log.setState({ entries: [] });
+      stores.prompt.setState({ pending: undefined, ...emptyScratch() });
+      stores.lobby.setState({ state: undefined });
     },
 
     /** Debug toggle (§6/§12); takes effect on the next connect's hello. */

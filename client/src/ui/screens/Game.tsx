@@ -29,15 +29,22 @@ export function Game() {
   const opps = opponents(state);
   const combat = combatLines(state);
 
+  // XMage's reason usually already names the winner ("Player X is the winner")
+  // — only append winners the reason doesn't mention.
+  const winners = game.over === undefined ? [] : game.over.winnerPlayerIds
+    .map(id => playerName(state, id))
+    .filter(name => !game.over!.reason.includes(name));
+
   return (
     <div className="game">
       <div className="board">
         {game.over !== undefined && (
           <div className="over-banner">
             <b>Game over</b> — {game.over.reason}
-            {game.over.winnerPlayerIds.length > 0 && (
-              <> · winner: {game.over.winnerPlayerIds.map(id => playerName(state, id)).join(', ')}</>
-            )}
+            {winners.length > 0 && <> · winner: {winners.join(', ')}</>}
+            <button className="play-again" onClick={() => appActions.leaveGame()}>
+              Play again
+            </button>
           </div>
         )}
 

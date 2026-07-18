@@ -327,9 +327,19 @@ public final class SeatPump implements AutoCloseable {
         }
         joinGameAndChat();
         logLine(LogEntry.Kind.STATUS, null, "reconnected to the game server", null, null);
-        // XMage usually also re-fires the current ask after onReconnect — that
-        // arrives as a fresh prompt and supersedes the re-grounded one cleanly.
         regroundBrowser();
+        // XMage does NOT re-fire an in-flight ask on rejoin (1.4.60
+        // GameController.join only re-registers the session), and an ask that
+        // fired into the dying socket may never have reached this seat at all
+        // (live-observed 2026-07-18: ~50 s promptless limbo until the backoff
+        // ladder's third nudge). Nudge immediately: a game thread parked in
+        // waitForResponse re-fires its ask on the new session; with nothing
+        // pending the sentinel is benign (see {@link #armNudge}).
+        if (answers != null) {
+            nudges = 0;
+            answers.nudge();
+            armNudge();
+        }
     }
 
     /** Join the game + its chat on the current XMage session (start and recovery). */
@@ -524,7 +534,9 @@ public final class SeatPump implements AutoCloseable {
      * over): state updates and chat can keep flowing from other seats' activity
      * while the game thread stays wedged, so they must NOT stand the watchdog
      * down — it re-checks {@link #askCount} and keeps nudging through the noise
-     * (benign on false positives; see field doc).
+     * (benign on false positives; see field doc). Seat recovery is the one
+     * stand-down: the transport is gone, so nudging can't help; {@link #recovered}
+     * restarts the ladder with an immediate nudge once the seat has rejoined.
      */
     private void armNudge() {
         long armedAt = askCount;
@@ -534,9 +546,11 @@ public final class SeatPump implements AutoCloseable {
             try {
                 Thread.sleep(delay);
                 exec.execute(() -> {
-                    if (over || answers == null || askCount != armedAt) {
-                        log.debug("watchdog stood down (over={} askCount={} armedAt={})",
-                                over, askCount, armedAt);
+                    // recovering: the transport is down — nudging is pointless and
+                    // the recovery path restarts the ladder itself in recovered()
+                    if (over || answers == null || recovering || askCount != armedAt) {
+                        log.debug("watchdog stood down (over={} recovering={} askCount={} armedAt={})",
+                                over, recovering, askCount, armedAt);
                         return;
                     }
                     nudges++;

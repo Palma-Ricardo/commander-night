@@ -44,8 +44,9 @@ declaration (§8 `priority.combat`). Milestone table in design.md §14.
                                   # into the local Maven repo — they are not on Central
 cd bridge && mvn test             # build + unit tests (live tier excluded)
 
-# local XMage server — startServer.sh may lack +x; equivalent:
-(cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx1024m -jar lib/mage-server-1.4.60.jar)
+# local XMage server — startServer.sh may lack +x; equivalent. 2048m matches prod:
+# 1024m OOM'd in AI simulations on a turn-28 4-player board (2026-07-18), dropping seats.
+(cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.60.jar)
 
 cd bridge && mvn -Plive test                   # live tier: full game vs 3 AIs through the bridge
 cd bridge && mvn -Prun compile exec:exec       # the bridge daemon (repo-root cwd, JDK-26 flags)

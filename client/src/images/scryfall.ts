@@ -3,12 +3,18 @@
 // miss ends at the text frame, so an unresolved image is cosmetic, never
 // functional.
 //
-//   1. GET cards/{set}/{number} (lowercased set) through a queue paced at
-//      ~8 req/s (Scryfall's courtesy limit), prioritized by visibility:
-//      hand/commanders (0) → battlefield (1) → piles (2).
-//   2. Miss → one retry via cards/named?exact=<name> (XMage set codes drift).
-//   3. Still missing → recorded as a miss (debug-panel list, §12); the card
-//      renders as a text frame.
+// Each card gets a ladder of lookup URLs, walked through a queue paced at
+// ~8 req/s (Scryfall's courtesy limit), prioritized by visibility:
+// hand/commanders (0) → battlefield (1) → piles (2).
+//
+//   - Real cards: cards/{set}/{number} (lowercased set), then
+//     cards/named?exact=<name> (XMage set codes drift).
+//   - Tokens (XMage ships them with no collector number and a " Token" name
+//     suffix): Scryfall keeps token printings in t-prefixed sets under the
+//     bare name ("Goblin Token" in WAR → twar "Goblin") — so named?exact in
+//     t{set}, then {set}, then any printing.
+//   - Ladder exhausted → recorded as a miss (debug-panel list, §12); the card
+//     renders as a text frame.
 //
 // Resolved URLs are cached memory + localStorage (cn.imageCache); the <img>
 // then hits Scryfall's CDN directly, which the browser caches — steady-state
@@ -23,7 +29,7 @@ import { KEYS, type KV } from '../stores/storage';
 /** 0 = hand/commanders, 1 = battlefield, 2 = piles/log refs. */
 export type ImagePriority = 0 | 1 | 2;
 
-export interface CardIdentity { set: string; number: string; name: string }
+export interface CardIdentity { set: string; number: string; name: string; token?: boolean }
 
 export interface ImageEntry {
   status: 'loading' | 'ok' | 'miss';
@@ -38,16 +44,17 @@ export interface ScryfallResolver {
   /** Queue a lookup (dedupes; a higher priority re-request jumps the queue). */
   resolve(card: CardIdentity, priority: ImagePriority): void;
   /** Cache key for a card — the store's images index. */
-  keyOf(card: { set: string; number: string }): string;
+  keyOf(card: { set: string; number: string; name?: string }): string;
   misses(): { key: string; name: string }[];
   dispose(): void;
 }
 
 interface QueueEntry {
   key: string;
-  card: CardIdentity;
+  name: string;
   priority: number;
-  mode: 'byId' | 'byName';
+  /** Remaining lookup URLs, most specific first; empty after the last fails. */
+  urls: string[];
 }
 
 export interface ScryfallOpts {
@@ -80,8 +87,30 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
     opts.kv.remove(KEYS.imageCache);
   }
 
-  const keyOf = (card: { set: string; number: string }) =>
-    `${card.set.toLowerCase()}/${card.number}`;
+  // Tokens all arrive with an empty number — key those by name instead, or
+  // every token from one set would share a single "{set}/" entry.
+  const keyOf = (card: { set: string; number: string; name?: string }) =>
+    card.number === ''
+      ? `${card.set.toLowerCase()}/${(card.name ?? '').toLowerCase()}`
+      : `${card.set.toLowerCase()}/${card.number}`;
+
+  function lookupLadder(card: CardIdentity): string[] {
+    const set = card.set.toLowerCase();
+    const byName = (name: string, setCode?: string) =>
+      `${apiBase}/cards/named?exact=${encodeURIComponent(name)}`
+      + (setCode !== undefined ? `&set=${encodeURIComponent(setCode)}` : '');
+    if (card.token !== true && card.number !== '') {
+      return [
+        `${apiBase}/cards/${encodeURIComponent(set)}/${encodeURIComponent(card.number)}`,
+        byName(card.name),
+      ];
+    }
+    const bare = card.name.replace(/ [Tt]oken$/, '');
+    const urls: string[] = [];
+    if (set !== '') urls.push(byName(bare, `t${set}`), byName(bare, set));
+    urls.push(byName(bare));
+    return urls;
+  }
 
   function put(key: string, entry: ImageEntry): void {
     store.setState(s => ({ images: { ...s.images, [key]: entry } }));
@@ -119,27 +148,24 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
     const entry = takeBest();
     if (entry === undefined) return;
     lastDispatch = now();
-    const { key, card, mode } = entry;
-    const url = mode === 'byId'
-      ? `${apiBase}/cards/${encodeURIComponent(card.set.toLowerCase())}/${encodeURIComponent(card.number)}`
-      : `${apiBase}/cards/named?exact=${encodeURIComponent(card.name)}`;
+    const url = entry.urls[0]!;
 
     void fetchFn(url)
       .then(res => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((body: unknown) => {
         const img = imageUrlFrom(body);
         if (img === undefined) throw new Error('no image_uris');
-        put(key, { status: 'ok', url: img, name: card.name });
-        persist(key, img);
+        put(entry.key, { status: 'ok', url: img, name: entry.name });
+        persist(entry.key, img);
       })
       .catch(() => {
-        if (mode === 'byId') {
-          // one retry by exact name (§9); front of its priority class
-          queue.push({ ...entry, mode: 'byName' });
+        const rest = entry.urls.slice(1);
+        if (rest.length > 0) {
+          queue.push({ ...entry, urls: rest });
           schedule();
         } else {
-          put(key, { status: 'miss', name: card.name });
-          if (import.meta.env.DEV) console.warn(`[scryfall] miss ${key} (${card.name})`);
+          put(entry.key, { status: 'miss', name: entry.name });
+          if (import.meta.env.DEV) console.warn(`[scryfall] miss ${entry.key} (${entry.name})`);
         }
       });
   }
@@ -163,7 +189,7 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
         return;
       }
       put(key, { status: 'loading', name: card.name });
-      queue.push({ key, card, priority, mode: 'byId' });
+      queue.push({ key, name: card.name, priority, urls: lookupLadder(card) });
       schedule();
     },
     misses(): { key: string; name: string }[] {

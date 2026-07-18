@@ -27,18 +27,21 @@ let kv: KV;
 let stores: Stores;
 let ctx: RouteCtx;
 let resyncs: number;
+let rehellos: number;
 let clock: number;
 
 beforeEach(() => {
   kv = memoryKV();
   stores = createStores(kv);
   resyncs = 0;
+  rehellos = 0;
   clock = 0;
   ctx = {
     stores,
     pending: new PendingCommands(),
     session: new SessionWriter(stores, kv, () => clock),
     requestResync: () => resyncs++,
+    rehello: () => rehellos++,
   };
 });
 
