@@ -8,5 +8,12 @@
 # this VPS; caddy then provisions the certificate automatically).
 
 night.example.com {
+	# ACME via DNS-01: issuance never depends on inbound port 80. Needs a
+	# caddy binary with the route53 plugin and AWS creds in caddy's
+	# environment — see "TLS via DNS-01" in the README. Drop this tls
+	# block to fall back to HTTP-01 on a plain caddy build.
+	tls {
+		dns route53
+	}
 	reverse_proxy 127.0.0.1:8484
 }

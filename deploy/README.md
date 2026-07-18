@@ -59,6 +59,39 @@ sudo systemctl enable --now xmage-server night-bridge
 sudo systemctl reload caddy
 ```
 
+## TLS via DNS-01 (Route 53)
+
+The committed Caddyfile solves ACME via DNS-01, so certificate issuance never
+depends on inbound port 80 (and works before the A record propagates). That
+needs a caddy binary containing the route53 plugin
+(`github.com/caddy-dns/route53` v1.6+ — older plugin versions predate caddy
+2.10's libdns 1.0 break) plus AWS credentials in caddy's environment.
+
+```sh
+# EL10+: EPEL's caddy (2.10.2) is new enough to take the plugin in place
+sudo dnf install caddy
+sudo caddy add-package github.com/caddy-dns/route53
+sudo restorecon /usr/bin/caddy
+# EL9: EPEL's caddy (2.6.4) predates the plugin — keep the package for its
+# user/unit/dirs but replace /usr/bin/caddy with a build from the
+# caddyserver.com download API (route53 baked in), then restorecon.
+```
+
+Either way the plugin lives in a replaced binary, so a routine `dnf update`
+of the caddy package silently removes it — and cert renewal breaks weeks
+later. Either `dnf versionlock add caddy` or re-run `add-package` after every
+caddy update.
+
+Credentials: an IAM user whose policy allows only TXT-record changes in the
+one hosted zone. Key goes in `/etc/caddy/route53.env` (root:root, mode 600,
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`), loaded via a
+drop-in `/etc/systemd/system/caddy.service.d/route53.conf`:
+
+```ini
+[Service]
+EnvironmentFile=/etc/caddy/route53.env
+```
+
 ## Verify
 
 ```sh
