@@ -67,20 +67,24 @@ needs a caddy binary containing the route53 plugin
 (`github.com/caddy-dns/route53` v1.6+ — older plugin versions predate caddy
 2.10's libdns 1.0 break) plus AWS credentials in caddy's environment.
 
+No distro ships the plugin compiled in, and Fedora/EPEL builds also strip
+caddy's self-service commands (`caddy add-package` — verified absent from
+EPEL 10's 2.10.2, live on Rocky 10.1). So on every EL release the flow is
+the same: keep the EPEL package for its user/unit/dirs, replace the binary
+with a plugin-bearing build from the download API.
+
 ```sh
-# EL10+: EPEL's caddy (2.10.2) is new enough to take the plugin in place
 sudo dnf install caddy
-sudo caddy add-package github.com/caddy-dns/route53
+curl -fL -o /tmp/caddy \
+    "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com%2Fcaddy-dns%2Froute53"
+sudo install -m 755 /tmp/caddy /usr/bin/caddy && rm /tmp/caddy
 sudo restorecon /usr/bin/caddy
-# EL9: EPEL's caddy (2.6.4) predates the plugin — keep the package for its
-# user/unit/dirs but replace /usr/bin/caddy with a build from the
-# caddyserver.com download API (route53 baked in), then restorecon.
+sudo dnf versionlock add caddy
 ```
 
-Either way the plugin lives in a replaced binary, so a routine `dnf update`
-of the caddy package silently removes it — and cert renewal breaks weeks
-later. Either `dnf versionlock add caddy` or re-run `add-package` after every
-caddy update.
+The versionlock matters: a routine `dnf update` of the caddy package would
+silently reinstate the plugin-less binary — and cert renewal breaks weeks
+later. To upgrade caddy, fetch a fresh download-API build.
 
 Credentials: an IAM user whose policy allows only TXT-record changes in the
 one hosted zone. Key goes in `/etc/caddy/route53.env` (root:root, mode 600,

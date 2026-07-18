@@ -16,7 +16,7 @@ User=commander
 Group=commander
 WorkingDirectory=/opt/commander-night/xmage-dist/xmage/mage-server
 ExecStart=/opt/commander-night/xmage-dist/java/jre1.8.0_201/bin/java \
-    -Xmx1024m \
+    -Xmx2048m \
     -Djava.awt.headless=true \
     -jar lib/mage-server-1.4.60.jar
 Restart=on-failure
