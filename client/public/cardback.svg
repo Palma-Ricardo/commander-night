@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 336" width="240" height="336">
+  <!-- Bundled card back (design §3): face-down cards never hit the network. -->
+  <rect width="240" height="336" rx="12" fill="#1a1d24"/>
+  <rect x="8" y="8" width="224" height="320" rx="8" fill="none" stroke="#3a4152" stroke-width="2"/>
+  <circle cx="120" cy="168" r="56" fill="none" stroke="#3a4152" stroke-width="2"/>
+  <circle cx="120" cy="168" r="40" fill="none" stroke="#2c313a" stroke-width="1.5"/>
+  <path d="M120 116 L132 156 L172 168 L132 180 L120 220 L108 180 L68 168 L108 156 Z"
+        fill="#2c313a" stroke="#4a5268" stroke-width="1.5"/>
+</svg>
