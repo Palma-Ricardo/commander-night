@@ -40,26 +40,39 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   pile 1 | pile 2               choose a pile
  *   done | cancel                 finish / decline a selection
  *   mana W|U|B|R|G|C              pay from pool
+ *   chat TEXT                     say it in game chat
  *   resync                        ask for a fresh keyframe
+ *   reconnect                     drop the socket and resume the session (§14)
  *   concede | skip MODE | automana on|off | triggers
  *                                 game.action (MODE: stack|eot|main|myturn|endstep|cancel)
  *   { ... }                       send raw JSON verbatim
  * </pre>
+ *
+ * The session (token, gameId, last seq) persists in {@code .harness-session.json}
+ * so a killed harness resumes its seat on restart — the M4 refresh flow, in a
+ * terminal. {@code --fresh} ignores the saved session.
  */
 public final class WsHarness implements WebSocket.Listener {
 
     private static final ObjectMapper json = new ObjectMapper();
+    private static final Path SESSION_FILE = Path.of(".harness-session.json");
 
     private final AtomicInteger ids = new AtomicInteger();
+    /** Command ids must be unique across runs of one token (§3) — a restarted
+     * plain counter would replay stale recorded replies out of the §14 window. */
+    private final String idNonce = Long.toHexString(System.nanoTime() & 0xffffff);
     private final StringBuilder partial = new StringBuilder();
     private final boolean keyframesOnly;
+    private final String url;
     private WebSocket ws;
 
     // rendered state (main-thread reads are racy but this is a dev tool)
     private volatile JsonNode lastState;
     private volatile long lastAppliedSeq = -1;
+    private volatile long lastSeenSeq = -1;
     private volatile JsonNode pendingPrompt;
     private volatile String gameId;
+    private volatile String token;
 
     /** One numbered line the user can pick: the wire value + its answer type. */
     private record Numbered(String value, String answerType) {
@@ -67,32 +80,27 @@ public final class WsHarness implements WebSocket.Listener {
 
     private final List<Numbered> numbered = new ArrayList<>();
 
-    private WsHarness(boolean keyframesOnly) {
+    private WsHarness(boolean keyframesOnly, String url) {
         this.keyframesOnly = keyframesOnly;
+        this.url = url;
     }
 
     public static void main(String[] args) throws Exception {
         String url = "ws://127.0.0.1:8484/ws";
         boolean keyframes = false;
+        boolean fresh = false;
         for (String arg : args) {
-            if ("--keyframes".equals(arg)) {
-                keyframes = true;
-            } else {
-                url = arg;
+            switch (arg) {
+                case "--keyframes" -> keyframes = true;
+                case "--fresh" -> fresh = true;
+                default -> url = arg;
             }
         }
-        boolean keyframesMode = keyframes;
-        WsHarness harness = new WsHarness(keyframesMode);
-        harness.ws = HttpClient.newHttpClient().newWebSocketBuilder()
-                .buildAsync(URI.create(url), harness).join();
-        System.out.println("* connected to " + url + (keyframesMode ? " (keyframes-only)" : "")
-                + " — type 'help' for commands");
-        harness.send("session.hello", n -> {
-            n.put("v", 1);
-            if (keyframesMode) {
-                n.put("stateMode", "keyframes");
-            }
-        });
+        WsHarness harness = new WsHarness(keyframes, url);
+        if (!fresh) {
+            harness.loadSession();
+        }
+        harness.dial();
 
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
         String line;
@@ -108,6 +116,56 @@ public final class WsHarness implements WebSocket.Listener {
         harness.ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").join();
     }
 
+    /** Connect (or re-connect) and hello — with token + resume when we have them (§14). */
+    private void dial() {
+        ws = HttpClient.newHttpClient().newWebSocketBuilder()
+                .buildAsync(URI.create(url), this).join();
+        System.out.println("* connected to " + url + (keyframesOnly ? " (keyframes-only)" : "")
+                + (token != null ? " (saved session)" : "") + " — type 'help' for commands");
+        send("session.hello", n -> {
+            n.put("v", 1);
+            if (keyframesOnly) {
+                n.put("stateMode", "keyframes");
+            }
+            if (token != null) {
+                n.put("token", token);
+                if (gameId != null) {
+                    n.putObject("resume").put("gameId", gameId).put("lastSeq", lastSeenSeq);
+                }
+            }
+        });
+    }
+
+    // ---- session persistence: survive a harness kill like a browser refresh ----
+
+    private void loadSession() {
+        try {
+            if (Files.exists(SESSION_FILE)) {
+                JsonNode s = json.readTree(Files.readString(SESSION_FILE));
+                token = s.hasNonNull("token") ? s.get("token").asText() : null;
+                gameId = s.hasNonNull("gameId") ? s.get("gameId").asText() : null;
+                lastSeenSeq = s.path("lastSeq").asLong(-1);
+            }
+        } catch (Exception e) {
+            System.out.println("! could not read " + SESSION_FILE + ": " + e);
+        }
+    }
+
+    private void saveSession() {
+        try {
+            ObjectNode s = json.createObjectNode();
+            if (token != null) {
+                s.put("token", token);
+            }
+            if (gameId != null) {
+                s.put("gameId", gameId).put("lastSeq", lastSeenSeq);
+            }
+            Files.writeString(SESSION_FILE, s.toString());
+        } catch (Exception e) {
+            System.out.println("! could not write " + SESSION_FILE + ": " + e);
+        }
+    }
+
     private boolean handleInput(String line) throws Exception {
         if (line.isEmpty()) {
             return true;
@@ -121,7 +179,8 @@ public final class WsHarness implements WebSocket.Listener {
                     create | join CODE NAME | deck FILE | ready | start
                     p(ass) | y | n | 1..9 | take N N.. | split N N.. | pile 1|2
                     done | cancel | mana W|U|B|R|G|C
-                    resync | concede | skip stack|eot|main|myturn|endstep|cancel
+                    chat TEXT | resync | reconnect
+                    concede | skip stack|eot|main|myturn|endstep|cancel
                     automana on|off | triggers | raw {json}""");
             case "create" -> send("lobby.create", n -> n.put("format", "commander-ffa"));
             case "join" -> send("lobby.join", n -> n.put("code", words[1])
@@ -168,7 +227,20 @@ public final class WsHarness implements WebSocket.Listener {
                     }
                 });
             }
+            case "chat" -> {
+                if (gameId == null) {
+                    System.out.println("! no game yet");
+                } else {
+                    String text = line.length() > 5 ? line.substring(5).strip() : "";
+                    send("chat.send", n -> n.put("gameId", gameId).put("text", text));
+                }
+            }
             case "resync" -> send("game.resync", n -> n.put("gameId", gameId));
+            case "reconnect" -> {
+                ws.abort();
+                pendingPrompt = null;
+                dial();
+            }
             case "concede" -> action(a -> a.put("kind", "concede"));
             case "skip" -> {
                 String mode = switch (words.length > 1 ? words[1] : "") {
@@ -265,7 +337,8 @@ public final class WsHarness implements WebSocket.Listener {
     }
 
     private void send(String type, java.util.function.Consumer<ObjectNode> fill) {
-        ObjectNode n = json.createObjectNode().put("t", type).put("id", "c" + ids.incrementAndGet());
+        ObjectNode n = json.createObjectNode().put("t", type)
+                .put("id", "h" + idNonce + "-" + ids.incrementAndGet());
         fill.accept(n);
         ws.sendText(n.toString(), true).join();
     }
@@ -288,13 +361,37 @@ public final class WsHarness implements WebSocket.Listener {
     }
 
     private void render(JsonNode n) {
+        if (n.path("t").asText().startsWith("game.") && n.has("seq")) {
+            lastSeenSeq = Math.max(lastSeenSeq, n.get("seq").asLong());
+        }
         switch (n.path("t").asText()) {
-            case "session.welcome" -> System.out.println("* session up (userId "
-                    + n.path("userId").asText().substring(0, 8) + "…)");
+            case "session.welcome" -> {
+                if (n.hasNonNull("token")) {
+                    token = n.get("token").asText();
+                }
+                saveSession();
+                System.out.println("* session " + (n.path("resumed").asBoolean() ? "RESUMED" : "up")
+                        + " (userId " + n.path("userId").asText().substring(0, 8) + "…)");
+            }
             case "ack" -> {
             }
-            case "error" -> System.out.println("! error " + n.path("code").asText()
-                    + ": " + n.path("message").asText());
+            case "error" -> {
+                System.out.println("! error " + n.path("code").asText()
+                        + ": " + n.path("message").asText());
+                if ("RESUME_FAILED".equals(n.path("code").asText())) {
+                    // §16.6 fallback: fresh hello on the same socket; the seat comes
+                    // back via 'join CODE NAME' (displayName re-bind) if the game lives
+                    gameId = null;
+                    lastSeenSeq = -1;
+                    saveSession();
+                    send("session.hello", h -> {
+                        h.put("v", 1);
+                        if (token != null) {
+                            h.put("token", token);
+                        }
+                    });
+                }
+            }
             case "lobby.state" -> {
                 StringBuilder sb = new StringBuilder("* lobby " + n.path("code").asText() + ":");
                 for (JsonNode seat : n.path("seats")) {
@@ -311,6 +408,7 @@ public final class WsHarness implements WebSocket.Listener {
                 lastState = n.path("state");
                 lastAppliedSeq = n.path("seq").asLong();
                 gameId = n.path("gameId").asText();
+                saveSession();
                 System.out.println(stateLine(lastState));
             }
             case "game.patch" -> {
@@ -324,19 +422,25 @@ public final class WsHarness implements WebSocket.Listener {
                 try {
                     lastState = JsonPatch.apply(n.path("ops"), lastState);
                     lastAppliedSeq = n.path("seq").asLong();
+                    saveSession();
                     System.out.println(stateLine(lastState));
                 } catch (Exception e) {
                     System.out.println("! patch failed to apply (" + e.getMessage() + ") — resyncing");
                     send("game.resync", r -> r.put("gameId", n.path("gameId").asText()));
                 }
             }
-            case "game.log" -> System.out.println("  | " + n.path("text").asText());
+            case "game.log" -> System.out.println("  |"
+                    + ("chat".equals(n.path("kind").asText()) ? " [chat]" : "")
+                    + " " + n.path("text").asText());
             case "game.prompt" -> {
                 pendingPrompt = n;
                 System.out.println(promptBlock(n));
             }
             case "game.promptDone" -> pendingPrompt = null;
-            case "game.over" -> System.out.println("*** GAME OVER: " + n.path("reason").asText());
+            case "game.over" -> {
+                saveSession();
+                System.out.println("*** GAME OVER: " + n.path("reason").asText());
+            }
             default -> System.out.println("* " + n.path("t").asText());
         }
     }

@@ -6,7 +6,7 @@ package night.bridge.proto;
  */
 public sealed interface ClientMsg extends Msg
         permits Hello, LobbyCreate, LobbyJoin, LobbyDeck, LobbyReady, LobbyStart,
-        GameAnswer, GameAction, GameResync {
+        GameAnswer, GameAction, GameResync, ChatSend {
 
     String id();
 }

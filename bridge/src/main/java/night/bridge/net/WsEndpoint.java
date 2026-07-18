@@ -6,6 +6,7 @@ import night.bridge.game.GameCoordinator;
 import night.bridge.game.Games;
 import night.bridge.game.SeatPump;
 import night.bridge.lobby.LobbyService;
+import night.bridge.proto.ChatSend;
 import night.bridge.proto.ClientMsg;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
@@ -18,6 +19,7 @@ import night.bridge.proto.LobbyDeck;
 import night.bridge.proto.LobbyJoin;
 import night.bridge.proto.LobbyReady;
 import night.bridge.proto.LobbyStart;
+import night.bridge.proto.ServerMsg;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +27,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -108,27 +111,71 @@ public final class WsEndpoint {
                     // §3 forward compatibility — includes v1 commands from later milestones.
                     log.info("ignoring message type '{}' from {}", t, conn.id());
             case Codec.Decoded.Ok(Hello hello) -> registry.hello(conn, hello);
-            case Codec.Decoded.Ok(LobbyCreate cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(LobbyJoin cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(LobbyDeck cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(LobbyReady cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(LobbyStart cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(GameAnswer cmd) -> {
-                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+            case Codec.Decoded.Ok(ClientMsg cmd) -> command(conn, cmd);
+        }
+    }
+
+    /**
+     * Every post-hello command passes the same two gates: a session must
+     * exist, and the command id must be new (protocol §14 idempotency — a
+     * replayed id re-sends the recorded reply, a duplicate racing its
+     * original is dropped). The reply consumer records into the cache on the
+     * owning executor, whichever one that is.
+     */
+    private void command(Conn conn, ClientMsg cmd) {
+        String userId = conn.userId();
+        if (userId == null) {
+            conn.send(Err.re(cmd.id(), ErrorCode.AUTH_FAILED, "send session.hello first"));
+            return;
+        }
+        IdemCache cache = registry.idemFor(userId);
+        switch (cache.check(cmd.id())) {
+            case IdemCache.Check.Replay(ServerMsg recorded) -> {
+                log.debug("command {} retried — replaying recorded reply", cmd.id());
+                conn.send(recorded);
+                return;
+            }
+            case IdemCache.Check.InFlight() -> {
+                log.debug("command {} duplicated while in flight — dropped", cmd.id());
+                return;
+            }
+            case IdemCache.Check.Proceed() -> {
+            }
+        }
+        Consumer<ServerMsg> reply = msg -> {
+            cache.complete(cmd.id(), msg);
+            conn.send(msg);
+        };
+        switch (cmd) {
+            case Hello ignored -> { // handled in route(), before the idempotency gate
+            }
+            case LobbyCreate c -> lobby.handle(userId, c, reply);
+            case LobbyJoin c -> lobby.handle(userId, c, reply);
+            case LobbyDeck c -> lobby.handle(userId, c, reply);
+            case LobbyReady c -> lobby.handle(userId, c, reply);
+            case LobbyStart c -> lobby.handle(userId, c, reply);
+            case GameAnswer c -> {
+                SeatPump pump = pumpFor(userId, c.id(), c.gameId(), reply);
                 if (pump != null) {
-                    pump.answer(cmd, conn::send);
+                    pump.answer(c, reply);
                 }
             }
-            case Codec.Decoded.Ok(GameAction cmd) -> {
-                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+            case GameAction c -> {
+                SeatPump pump = pumpFor(userId, c.id(), c.gameId(), reply);
                 if (pump != null) {
-                    pump.action(cmd, conn::send);
+                    pump.action(c, reply);
                 }
             }
-            case Codec.Decoded.Ok(GameResync cmd) -> {
-                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+            case GameResync c -> {
+                SeatPump pump = pumpFor(userId, c.id(), c.gameId(), reply);
                 if (pump != null) {
-                    pump.resync(cmd, conn::send);
+                    pump.resync(c, reply);
+                }
+            }
+            case ChatSend c -> {
+                SeatPump pump = pumpFor(userId, c.id(), c.gameId(), reply);
+                if (pump != null) {
+                    pump.chatSend(c, reply);
                 }
             }
             // Exhaustive over ClientMsg: a new command type fails to compile
@@ -136,30 +183,16 @@ public final class WsEndpoint {
         }
     }
 
-    private void lobbyRoute(Conn conn, ClientMsg cmd) {
-        String userId = conn.userId();
-        if (userId == null) {
-            conn.send(Err.re(cmd.id(), ErrorCode.AUTH_FAILED, "send session.hello first"));
-            return;
-        }
-        lobby.handle(userId, cmd, conn::send);
-    }
-
-    /** Resolves the caller's seat pump for a game.* command; error-replies and returns null otherwise. */
-    private SeatPump pumpFor(Conn conn, String cmdId, String gameId) {
-        String userId = conn.userId();
-        if (userId == null) {
-            conn.send(Err.re(cmdId, ErrorCode.AUTH_FAILED, "send session.hello first"));
-            return null;
-        }
+    /** Resolves the caller's seat pump for a game/chat command; error-replies and returns null otherwise. */
+    private SeatPump pumpFor(String userId, String cmdId, String gameId, Consumer<ServerMsg> reply) {
         GameCoordinator game = games.byId(gameId);
         if (game == null) {
-            conn.send(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "unknown game " + gameId));
+            reply.accept(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "unknown game " + gameId));
             return null;
         }
         SeatPump pump = game.pumpFor(userId);
         if (pump == null) {
-            conn.send(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "no seat in game " + gameId));
+            reply.accept(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "no seat in game " + gameId));
             return null;
         }
         return pump;

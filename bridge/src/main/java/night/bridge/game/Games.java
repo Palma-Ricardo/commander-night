@@ -12,6 +12,11 @@ public final class Games {
         byId.put(gameId, coordinator);
     }
 
+    /** Post-game teardown: the id stops routing (UNKNOWN_GAME / RESUME_FAILED). */
+    void unregister(String gameId) {
+        byId.remove(gameId);
+    }
+
     public GameCoordinator byId(String gameId) {
         return byId.get(gameId);
     }

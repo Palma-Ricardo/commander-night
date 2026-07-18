@@ -1,13 +1,12 @@
 package night.bridge.live;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.flipkart.zjsonpatch.JsonPatch;
 import io.javalin.Javalin;
 import night.bridge.config.Config;
 import night.bridge.game.Games;
 import night.bridge.lobby.LobbyService;
+import night.bridge.live.LiveHarness.Auditor;
+import night.bridge.live.LiveHarness.Client;
 import night.bridge.net.Codec;
 import night.bridge.net.SessionRegistry;
 import night.bridge.net.WsEndpoint;
@@ -16,32 +15,20 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.WebSocket;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Predicate;
 
+import static night.bridge.live.LiveHarness.autoAnswer;
+import static night.bridge.live.LiveHarness.json;
+import static night.bridge.live.LiveHarness.xmageUp;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -77,238 +64,6 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @Tag("live")
 class LiveGameTest {
 
-    private static final ObjectMapper json = new ObjectMapper();
-    private static final Path SAMPLE_DECK =
-            Path.of("..", "vendor", "xmage-dist", "xmage", "mage-client", "sample-decks",
-                    "Commander", "Tasigur BGU.dck");
-
-    // ---- invariant auditor: fed every frame the client receives ----
-
-    private static final class Auditor {
-        long lastSeq = -1;
-        long lastStateSeq = -1;
-        JsonNode applied;                 // the patch-maintained state tree
-        boolean expectResyncKeyframe;     // next keyframe must equal `applied`
-        Long pendingPromptId;
-        int keyframes;
-        int patches;
-        int promptsSeen;
-        int promptsAnswered;
-        int combatPrompts;
-        int logLines;
-        long gameBytes;
-        String lastStatus;
-        String gameId;
-        boolean sawOver;
-        JsonNode gameOver;
-        final List<String> violations = new ArrayList<>();
-
-        void observe(JsonNode n, int frameLength) {
-            String t = n.path("t").asText("");
-            if (!t.startsWith("game.")) {
-                return;
-            }
-            gameBytes += frameLength;
-            if (n.has("seq")) {
-                long seq = n.get("seq").asLong();
-                if (seq != lastSeq + 1) {
-                    violations.add("seq gap: " + lastSeq + " -> " + seq + " on " + t);
-                }
-                lastSeq = seq;
-            }
-            switch (t) {
-                case "game.state" -> {
-                    keyframes++;
-                    gameId = n.path("gameId").asText();
-                    JsonNode state = n.get("state");
-                    if (state == null || !state.has("players")) {
-                        violations.add("keyframe without players at seq " + lastSeq);
-                        return;
-                    }
-                    if (expectResyncKeyframe) {
-                        expectResyncKeyframe = false;
-                        if (applied != null && !state.equals(applied)) {
-                            violations.add("resync keyframe at seq " + lastSeq
-                                    + " differs from the patch-applied tree");
-                        }
-                    }
-                    applied = state.deepCopy();
-                    lastStateSeq = lastSeq;
-                    String status = state.path("status").asText();
-                    if ("over".equals(lastStatus) && "active".equals(status)) {
-                        violations.add("status went over -> active at seq " + lastSeq);
-                    }
-                    lastStatus = status;
-                    if ("over".equals(status)) {
-                        sawOver = true;
-                    }
-                }
-                case "game.patch" -> {
-                    patches++;
-                    long base = n.path("base").asLong();
-                    if (base != lastStateSeq) {
-                        violations.add("patch base " + base + " != last state event "
-                                + lastStateSeq + " at seq " + lastSeq);
-                    }
-                    for (JsonNode op : n.path("ops")) {
-                        if (!Set.of("add", "remove", "replace").contains(op.path("op").asText())) {
-                            violations.add("forbidden patch op at seq " + lastSeq + ": " + op);
-                        }
-                    }
-                    if (applied == null) {
-                        violations.add("patch before any keyframe at seq " + lastSeq);
-                        return;
-                    }
-                    try {
-                        applied = JsonPatch.apply(n.get("ops"), applied);
-                    } catch (Exception e) {
-                        violations.add("patch failed to apply at seq " + lastSeq + ": " + e.getMessage());
-                    }
-                    lastStateSeq = lastSeq;
-                    String status = applied.path("status").asText();
-                    if ("over".equals(status)) {
-                        sawOver = true;
-                    }
-                    lastStatus = status;
-                }
-                case "game.prompt" -> {
-                    promptsSeen++;
-                    if (n.path("combat").isObject()) {
-                        combatPrompts++;
-                        if (!n.path("playable").isEmpty()) {
-                            violations.add("combat prompt " + n.path("promptId").asLong()
-                                    + " carries a non-empty playable map (§8: not a cast window)");
-                        }
-                    }
-                    if (pendingPromptId != null) {
-                        violations.add("prompt " + n.path("promptId").asLong()
-                                + " arrived while " + pendingPromptId + " still pending");
-                    }
-                    pendingPromptId = n.path("promptId").asLong();
-                }
-                case "game.promptDone" -> {
-                    long id = n.path("promptId").asLong();
-                    if (pendingPromptId == null || pendingPromptId != id) {
-                        violations.add("promptDone " + id + " but pending was " + pendingPromptId);
-                    }
-                    if ("answered".equals(n.path("reason").asText())) {
-                        promptsAnswered++;
-                    }
-                    pendingPromptId = null;
-                }
-                case "game.log" -> logLines++;
-                case "game.over" -> gameOver = n;
-                default -> {
-                }
-            }
-        }
-    }
-
-    // ---- minimal blocking WS client ----
-
-    private static final class Client implements WebSocket.Listener {
-        final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
-        /** Prompts pulled mid-await (e.g. racing a resync keyframe) — must be answered, not dropped. */
-        final ArrayDeque<JsonNode> stash = new ArrayDeque<>();
-        final StringBuilder partial = new StringBuilder();
-        final AtomicInteger cmdIds = new AtomicInteger();
-        final Auditor auditor = new Auditor();
-        WebSocket ws;
-
-        static Client connect(int port) {
-            Client c = new Client();
-            c.ws = HttpClient.newHttpClient().newWebSocketBuilder()
-                    .buildAsync(URI.create("ws://127.0.0.1:" + port + "/ws"), c)
-                    .join();
-            return c;
-        }
-
-        @Override
-        public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
-            partial.append(data);
-            if (last) {
-                frames.add(partial.toString());
-                partial.setLength(0);
-            }
-            ws.request(1);
-            return null;
-        }
-
-        // the default Listener swallows both — a dead WS would look like silence
-        @Override
-        public void onError(WebSocket ws, Throwable error) {
-            System.out.println("[live] WS ERROR: " + error);
-            error.printStackTrace(System.out);
-        }
-
-        @Override
-        public CompletionStage<?> onClose(WebSocket ws, int statusCode, String reason) {
-            System.out.println("[live] WS CLOSED " + statusCode + " '" + reason + "'");
-            return null;
-        }
-
-        String send(String type, Map<String, Object> fields) {
-            String id = "c" + cmdIds.incrementAndGet();
-            ObjectNode n = json.createObjectNode().put("t", type).put("id", id);
-            fields.forEach((k, v) -> {
-                switch (v) {
-                    case String s -> n.put(k, s);
-                    case Boolean b -> n.put(k, b);
-                    case Integer i -> n.put(k, i);
-                    case Long l -> n.put(k, l);
-                    case JsonNode jn -> n.set(k, jn);
-                    default -> throw new IllegalArgumentException(String.valueOf(v));
-                }
-            });
-            ws.sendText(n.toString(), true).join();
-            return id;
-        }
-
-        /** Pulls frames (auditing each) until one matches; fails on timeout. */
-        JsonNode await(String what, long timeoutSecs, Predicate<JsonNode> matcher) throws Exception {
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSecs);
-            while (true) {
-                long waitNanos = deadline - System.nanoTime();
-                if (waitNanos <= 0) {
-                    fail("timed out waiting for " + what);
-                }
-                String frame = frames.poll(Math.min(waitNanos, TimeUnit.SECONDS.toNanos(5)),
-                        TimeUnit.NANOSECONDS);
-                if (frame == null) {
-                    continue;
-                }
-                JsonNode n = json.readTree(frame);
-                auditor.observe(n, frame.length());
-                if ("error".equals(n.path("t").asText())
-                        && !"PROMPT_STALE".equals(n.path("code").asText())) {
-                    fail("unexpected error frame: " + frame);
-                }
-                if (matcher.test(n)) {
-                    return n;
-                }
-                if ("game.prompt".equals(n.path("t").asText())) {
-                    // a prompt racing a targeted wait (resync keyframe, ack) — the game
-                    // halts forever if it goes unanswered, so hold it for the main loop
-                    stash.add(n);
-                }
-            }
-        }
-
-        JsonNode awaitAck(String what, String id) throws Exception {
-            return await("ack for " + what, 30,
-                    n -> "ack".equals(n.path("t").asText()) && id.equals(n.path("re").asText()));
-        }
-    }
-
-    private static boolean xmageUp() {
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress("127.0.0.1", 17171), 500);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
     @Test
     @Timeout(value = 20, unit = TimeUnit.MINUTES)
     void fullGameAgainstThreeAis() throws Exception {
@@ -316,15 +71,15 @@ class LiveGameTest {
 
         Config config = new Config("127.0.0.1:0", new Config.Xmage("127.0.0.1", 17171),
                 100, new Config.LogBackfill(200, 50), false,
-                "../vendor/xmage-dist/xmage/mage-client/sample-decks/Commander");
-        SessionRegistry registry = new SessionRegistry();
-        XmageGateway gateway = new XmageGateway(config);
+                "../vendor/xmage-dist/xmage/mage-client/sample-decks/Commander", 900);
         Games games = new Games();
+        SessionRegistry registry = new SessionRegistry(games);
+        XmageGateway gateway = new XmageGateway(config);
         LobbyService lobby = new LobbyService(registry, gateway, games, config);
         Javalin app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         app.start("127.0.0.1", 0);
         try {
-            runGame(Client.connect(app.port()));
+            runGame(Client.connect(app.port(), "solo"));
         } finally {
             app.stop();
             lobby.close();
@@ -335,9 +90,7 @@ class LiveGameTest {
 
     private void runGame(Client c) throws Exception {
         // session + lobby setup — patch mode (no stateMode override) is the point of M3
-        String helloId = c.send("session.hello", Map.of("v", 1));
-        c.await("welcome", 10, n -> "session.welcome".equals(n.path("t").asText())
-                && helloId.equals(n.path("re").asText()));
+        c.hello(Map.of());
 
         c.awaitAck("lobby.create", c.send("lobby.create", Map.of("format", "commander-ffa")));
         JsonNode lobbyState = c.await("lobby.state with code", 10,
@@ -346,7 +99,7 @@ class LiveGameTest {
 
         c.awaitAck("lobby.join", c.send("lobby.join", Map.of("code", code, "displayName", "Ricardo")));
         c.awaitAck("lobby.deck", c.send("lobby.deck",
-                Map.of("format", "dck", "content", Files.readString(SAMPLE_DECK))));
+                Map.of("format", "dck", "content", Files.readString(LiveHarness.SAMPLE_DECK))));
         JsonNode afterDeck = c.await("lobby.state with deck", 10,
                 n -> "lobby.state".equals(n.path("t").asText())
                         && n.path("seats").size() == 1 && n.path("seats").get(0).has("deck"));
@@ -372,7 +125,7 @@ class LiveGameTest {
             }
             switch (n.path("t").asText()) {
                 case "game.prompt" -> {
-                    answer(c, n, repeats);
+                    autoAnswer(c, n, repeats);
                     if (!actionSent) {
                         // one harmless prompt-free game.action through the full stack (§9)
                         actionSent = true;
@@ -434,163 +187,5 @@ class LiveGameTest {
                 a.gameOver.path("reason").asText(), a.patches, a.keyframes,
                 a.promptsAnswered, a.promptsSeen, a.combatPrompts, a.logLines, a.lastSeq,
                 a.gameBytes / 1_000_000.0, resyncsDone);
-    }
-
-    /**
-     * The auto-player: keep hands, play lands, try casting each castable once
-     * (autoMana on; a payMana ask is cancelled and that object never retried,
-     * so aborted casts can't loop), and attack with one creature per combat —
-     * a creatureless seat never even receives "Select attackers"
-     * (Combat.selectAttackers first-time gate on getAvailableAttackers), which
-     * is how 8/8 pacifist M3 games hid the combat-declaration gap. Required
-     * selections are submitted whole-set ({@code objects}) to exercise the §8
-     * replay live; the M3 kinds answer first-option/minimum.
-     */
-    private void answer(Client c, JsonNode prompt, Map<String, Integer> repeats) {
-        long promptId = prompt.path("promptId").asLong();
-        String gameId = prompt.path("gameId").asText();
-        String kind = prompt.path("kind").asText();
-        String message = prompt.path("message").asText();
-        ObjectNode answer = json.createObjectNode();
-        switch (kind) {
-            case "confirm" -> {
-                int seen = repeats.merge("confirm|" + message, 1, Integer::sum);
-                boolean yes;
-                if (message.contains("Mulligan")) {
-                    yes = false;                       // keep every hand
-                } else if (message.contains("Pass anyway") || message.contains("mana pool")) {
-                    yes = true;                        // don't wedge on floating mana
-                } else {
-                    yes = seen > 5;                    // escape an unforeseen repeating ask
-                }
-                answer.put("type", "confirm").put("value", yes);
-            }
-            case "priority" -> {
-                JsonNode combat = prompt.path("combat");
-                if (combat.isObject()) {
-                    JsonNode candidates = combat.path("candidates");
-                    boolean attacking = "attackers".equals(combat.path("role").asText());
-                    // one attacker per combat; capped in case an attack cost reverts the
-                    // toggle (declared back to 0 would otherwise re-toggle forever)
-                    if (attacking && candidates.size() > 0 && combat.path("declared").isEmpty()
-                            && repeats.merge("combatToggles", 1, Integer::sum) <= 20) {
-                        answer.put("type", "object").put("objectId", candidates.get(0).asText());
-                    } else {
-                        answer.put("type", "confirm").put("value", true);   // done declaring
-                    }
-                } else {
-                    // lands first (free mana growth), then creature casts (the path to
-                    // combat), then anything else castable — each object tried once
-                    String land = null;
-                    String creature = null;
-                    String other = null;
-                    for (var e : prompt.path("playable").properties()) {
-                        boolean play = false;
-                        boolean cast = false;
-                        for (JsonNode a : e.getValue()) {
-                            play |= "play".equals(a.path("kind").asText());
-                            cast |= "cast".equals(a.path("kind").asText());
-                        }
-                        if (!play && !cast) {
-                            continue;
-                        }
-                        String id = e.getKey();
-                        if (repeats.getOrDefault("tried|" + id, 0) > 0) {
-                            continue;
-                        }
-                        if (play && land == null) {
-                            land = id;
-                        } else if (cast && creature == null && isCreatureInHand(c, id)) {
-                            creature = id;
-                        } else if (cast && other == null) {
-                            other = id;
-                        }
-                    }
-                    String act = land != null ? land : creature != null ? creature : other;
-                    if (act != null) {
-                        repeats.merge("tried|" + act, 1, Integer::sum);
-                        answer.put("type", "object").put("objectId", act);
-                    } else {
-                        answer.put("type", "confirm").put("value", false);
-                    }
-                }
-            }
-            case "chooseTargets" -> {
-                boolean required = prompt.path("required").asBoolean();
-                JsonNode candidates = prompt.path("candidates");
-                int chosen = prompt.path("progress").path("chosen").asInt(0);
-                int max = prompt.path("max").asInt(1);
-                if (required && candidates.size() > 0) {
-                    // whole-set submit — the bridge replays it one UUID at a time (§8)
-                    int n = Math.min(max - chosen, candidates.size());
-                    answer.put("type", "objects");
-                    var arr = answer.putArray("objectIds");
-                    for (int i = 0; i < Math.max(n, 1); i++) {
-                        arr.add(candidates.get(i).asText());
-                    }
-                } else if (required) {
-                    answer.put("type", "confirm").put("value", true);   // done — nothing to pick
-                } else {
-                    answer.put("type", "cancel");
-                }
-            }
-            case "payMana" -> {
-                // pay it: one source click per round trip (§8's payMana shape) —
-                // a 3-color deck surfaces PLAY_MANA on most casts because XMage's
-                // auto-payment can't disambiguate multi-color sources. Sources are
-                // canPlayObjects and may include objects that can't contribute to
-                // the remaining cost — XMage then re-asks without tapping anything
-                // (observed live: a {B}{G} remainder looping on the same source),
-                // so rotate through the sources and cancel once each has had a
-                // try. Progress changes the message (remaining shrinks), which
-                // resets the attempt counter.
-                JsonNode sources = prompt.path("sources");
-                int attempt = repeats.merge("pay|" + message, 1, Integer::sum);
-                if (sources.isArray() && sources.size() > 0 && attempt <= sources.size()) {
-                    answer.put("type", "object")
-                            .put("objectId", sources.get((attempt - 1) % sources.size()).asText());
-                } else {
-                    answer.put("type", "cancel");
-                }
-            }
-            case "chooseAbility" -> answer.put("type", "object")
-                    .put("objectId", prompt.path("options").get(0).path("id").asText());
-            case "chooseOption" -> answer.put("type", "option")
-                    .put("key", prompt.path("options").get(0).path("key").asText());
-            case "choosePile" -> answer.put("type", "pile").put("index", 0);
-            case "chooseAmount" -> answer.put("type", "number")
-                    .put("value", prompt.path("min").asLong(0));
-            case "distribute" -> {
-                answer.put("type", "distribution");
-                var arr = answer.putArray("amounts");
-                for (JsonNode row : prompt.path("among")) {
-                    arr.addObject().put("id", row.path("id").asText())
-                            .put("amount", row.path("suggested").asLong(row.path("min").asLong(0)));
-                }
-            }
-            case "playerRequest" -> answer.put("type", "option")
-                    .put("key", prompt.path("options").get(0).path("key").asText());
-            default -> fail("unknown prompt kind " + kind + ": " + prompt);
-        }
-        System.out.printf("[live] prompt #%d %s '%.60s' -> %s%n", promptId, kind, message, answer);
-        c.send("game.answer", Map.of("gameId", gameId, "promptId", promptId, "answer", answer));
-    }
-
-    /** Card-type lookup in the patch-maintained state tree (me.hand carries full views). */
-    private boolean isCreatureInHand(Client c, String objectId) {
-        JsonNode state = c.auditor.applied;
-        if (state == null) {
-            return false;
-        }
-        for (JsonNode card : state.path("me").path("hand")) {
-            if (objectId.equals(card.path("id").asText())) {
-                for (JsonNode type : card.path("types")) {
-                    if ("CREATURE".equals(type.asText())) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
     }
 }

@@ -91,7 +91,7 @@ Rule: **every piece of mutable state has exactly one owning executor; nothing el
 |---|---|---|
 | **Seat pump** (single-thread, virtual) | one per human seat | canonical `GameState`, seq counter, `PromptFsm`, log ring buffer, XMage answer sends |
 | **Lobby executor** (single-thread) | one | all lobbies, seat↔connection binding, table recipes |
-| **Scheduler** (`ScheduledExecutorService`) | one, shared | `session.ping()` every 10 s per XMage session (spike cadence), reconnect backoff, XMage-connect retry |
+| **Scheduler** (`ScheduledExecutorService`) | one, shared | `session.ping()` every 10 s per XMage session (spike cadence), XMage-connect retry. (Seat-recovery backoff and the post-game teardown grace run on short-lived per-seat/per-game virtual threads instead — v1 simplicity; both re-enter their owning executor and their targets are idempotent/`closing`-guarded, so a late timer is harmless) |
 | Jetty/Javalin threads | pool | nothing of ours — they only *enqueue* |
 
 - XMage callbacks arrive on up to 10 threads per session (spike finding): `onCallback` does
@@ -142,12 +142,19 @@ Per-seat `SeatSession implements MageClient`, connected via `new SessionImpl(thi
   evidence of loss (AIs think 30 s+ on big boards — live-observed at T45), and transport
   loss is the session layer's job to detect.
 
-**Seat recovery (best-effort, v1):** if a seat's XMage session drops mid-game, the pump pauses,
-the browser gets `game.log kind:status` ("reconnecting to game server…"), and the scheduler
-retries `connectStart` + `joinGame(gameId)` (XMage holds a disconnected seat for a grace period).
-Success → fresh keyframe, re-emit pending prompt. N failures (default 5) → `error
-UPSTREAM_ERROR fatal:true` to that seat, game continues for the others. Bridge process death
-still loses the game (protocol §14); process-level re-attach is v2.
+**Seat recovery (best-effort, v1 — implemented M4, not yet live-verified):** if a seat's XMage
+session drops mid-game (`MageClient.disconnected`, filtered for our own connectStop/connectStart
+noise), the browser gets `game.log kind:status` ("reconnecting to the game server…"), positional
+answers are rejected (`UPSTREAM_ERROR` non-fatal) while a virtual thread retries
+`SeatSession.reconnect()` with backoff (2/4/8/15/15 s). Reconnect uses XMage's restore-session
+handshake — `setRestoreSessionId(previous session id)` before `connectStart` — which the server
+matches in `Session.validateUser` to flag a reconnection and re-attach the user's active tables
+(`User.onReconnect`, source-verified 1.4.60); the pump then re-runs `joinGame` + chat join.
+Success → status line, fresh keyframe, pending-prompt re-emit (XMage usually also re-fires the
+current ask, which supersedes cleanly). 5 failures → `error UPSTREAM_ERROR fatal:true` to that
+seat, game continues for the others. Bridge process death still loses the game (protocol §14);
+process-level re-attach is v2. Verify live by dropping the loopback link or SIGSTOPping the
+server — on the M5 hardening list.
 
 ## 6. Game coordinator
 
@@ -157,7 +164,14 @@ still loses the game (protocol §14); process-level re-attach is v2.
   session calls `joinGame`, joins game chat via `getGameChatId`).
 - Aggregates `GAME_OVER` + `END_GAME_INFO` (arrives per seat; first one wins) → each pump emits
   final keyframe + `game.over` (protocol §11). Sockets stay open for post-game chat.
-- Rematch = new lobby with the same seats pre-filled (reuses the lobby flow wholesale).
+- Rematch = a fresh lobby (M4 decision: a started lobby stops holding its members, so players
+  simply create/join again — protocol §5). Seat pre-fill was cut: v1 has no `lobby.leave`, so a
+  pre-filled seat whose player moved on would block `lobby.start` forever. Revisit with the TS
+  client (a "Rematch" button can automate create + join + re-submit deck).
+- Post-game teardown: when every human seat has seen game over, the coordinator schedules
+  release after a grace period (config `postGameGraceSecs`, default 900) — XMage sessions
+  released, game unregistered. Until then the game chat stays relayed and resume replays the
+  final keyframe + `game.over`.
 
 ## 7. Translation pipeline (per seat, on the pump)
 
@@ -279,6 +293,7 @@ xmage: { host: 127.0.0.1, port: 17171 }
 keyframeEvery: 100            # patches (protocol §7)
 logBackfill: { buffer: 200, send: 50 }
 callbackTap: false            # §12 — per-game JSONL capture like the spike logs
+postGameGraceSecs: 900        # §6 — post-game chat/resume window before teardown
 sampleDecksDir: vendor/xmage-dist/xmage/mage-client/sample-decks/Commander
 ```
 
@@ -318,6 +333,7 @@ what the spike was, promoted to CI.
 | | *M3 done 2026-07-17.* All ten live prompt kinds + `playerRequest` (park/revive), compound `objects` replay with hostile-script unit tier, RFC 6902 patches (add/remove/replace only) + `game.resync`, `game.action` set (concede/skip/rollback/autoMana/triggerOrder), 17 new corpus samples. Validation: 8/8 full games vs 3 AIs, 138–259 prompts each, 0.8–1.9 MB/seat, keyframes < patches/10. The tier surfaced and fixed the **1.4.60 lost-wakeup race** (§5): answer pacing + ask-keyed nudge watchdog with backoff, live-proven recovering 3–21 wedges/game. Two non-bridge stall classes diagnosed en route: degenerate-board AI think-timeout chains (server-side; test event timeout now 300 s) and a test-harness race that dropped prompts pulled mid-await (stash fix) | |
 | | *Post-M3 gap fix 2026-07-17.* Combat declaration (declare attackers/blockers) never reached the wire: `GAME_SELECT` with `possibleAttackers`/`possibleBlockers` was translated as a bare priority prompt (candidates dropped), the FSM rejected the done-boolean, and protocol v1 had no combat vocabulary at all. 8/8 validation games missed it twice over: the pacifist auto-player never controlled a creature, and XMage skips the ask entirely for a creatureless seat (`Combat.selectAttackers` first-time gate on `getAvailableAttackers`; `selectBlockers` early-returns on zero possible blockers) — and even when the ask fires, a pass (`confirm:false`) is a legal "declare nothing". Now specced (protocol §8 `combat`, §15 rows) and wired through translator/FSM/harness; the live auto-player plays lands, casts (each castable tried once, payMana-cancel bounded), and attacks with one creature per combat, so the toggle → defender-pick → done round-trip is a permanent live invariant (`combatPrompts >= 1` asserted) | |
 | M4 | Multi-human: seat binding, resume/reconnect, idempotency, chat send, `game.over`/rematch | Two-browser game with mid-game refreshes on both sides |
+| | *M4 done 2026-07-18.* Browser resume (`hello{token,resume}` → `welcome{resumed}` → keyframe → pending prompt under its **original promptId** → log-tail backfill), `chat.send`, per-session idempotency (LRU 64 at the WS routing gate, replaying the recorded reply; §3 gained the ids-unique-across-reconnects rule it implies), lost-token recovery join (registry *adopt*: the caller's session takes over the seat's userId, the old token is retired, the old socket bumped), rematch = started lobbies release their members, post-game teardown after `postGameGraceSecs` (lost seats count toward it, so an abandoned seat can't leak the game). §5 seat recovery implemented via XMage's restore-session handshake (live verification on the M5 list). Harness learned session persistence/`reconnect`/`chat`. Validated: `MultiHumanLiveTest` — 2 humans + 2 AIs, full game, mid-prompt hard refresh on **both** seats (same-promptId re-emit asserted), chat + verbatim-duplicate probe (two acks, one execution), mid-game recovery handover to a fresh session, post-game resume replay, rematch lobby, teardown expiry (`UNKNOWN_GAME`/`RESUME_FAILED`). 151-test unit tier; M3 solo game stays green (379/379 prompts, 2.2 MB/seat) | |
 | M5 | Commander damage scrape, golden-fixture suite, conformance corpus, systemd/caddy deploy docs | A real 4-human friends' night on the deployed host |
 
 ## 15. Risks

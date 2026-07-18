@@ -36,9 +36,9 @@ public final class Main {
                 config.bind(), config.xmage().host(), config.xmage().port(),
                 config.keyframeEvery(), config.callbackTap());
 
-        SessionRegistry registry = new SessionRegistry();
-        XmageGateway gateway = new XmageGateway(config);
         Games games = new Games();
+        SessionRegistry registry = new SessionRegistry(games);
+        XmageGateway gateway = new XmageGateway(config);
         LobbyService lobby = new LobbyService(registry, gateway, games, config);
         Javalin app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

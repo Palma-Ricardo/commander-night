@@ -2,6 +2,7 @@ package night.bridge.game;
 
 import mage.constants.PlayerAction;
 import mage.interfaces.callback.ClientCallback;
+import night.bridge.proto.ChatSend;
 import mage.view.AbilityPickerView;
 import mage.view.ChatMessage;
 import mage.view.GameClientMessage;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -76,6 +78,9 @@ public final class SeatPump implements AutoCloseable {
     private static final long NUDGE_DELAY_MILLIS = 6_000;
     private static final long NUDGE_MAX_DELAY_MILLIS = 60_000;
 
+    /** Seat recovery (design §5): reconnect attempts after XMage transport loss. */
+    private static final long[] RECOVER_BACKOFF_MILLIS = {2_000, 4_000, 8_000, 15_000, 15_000};
+
     private final ExecutorService exec;
     private final SeatSession xmage;
     private final ClientSink sink;
@@ -84,6 +89,7 @@ public final class SeatPump implements AutoCloseable {
     private final BooleanSupplier keyframesOnly;
     private final Deque<LogEntry> logRing = new ArrayDeque<>();
     private final int logRingCapacity;
+    private final int backfillSend;
 
     /** When the seat last heard from XMage — written on callback threads, read by answer pacing. */
     private volatile long lastCallbackNanos = System.nanoTime();
@@ -92,18 +98,23 @@ public final class SeatPump implements AutoCloseable {
     private UUID gameId;
     private UUID playerId;
     private String gameIdStr;
+    private UUID chatId;
     private XmageAnswers answers;
     private PromptFsm fsm;
     private GameState lastState;
     private GamePrompt deferredRequest;
     private UUID deferredRequestData;
     private boolean over;
+    /** The emitted game.over, kept for post-game resume replay (protocol §14). */
+    private GameOver gameOverMsg;
+    /** Seat recovery in flight (design §5) — positional answers are rejected meanwhile. */
+    private boolean recovering;
     /** Positional asks seen — the watchdog's only proof of life (see {@link #armNudge}). */
     private long askCount;
     private int nudges;
 
     public SeatPump(String seatLabel, SeatSession xmage, ClientSink sink,
-                    GameCoordinator coordinator, int logRingCapacity,
+                    GameCoordinator coordinator, int logRingCapacity, int backfillSend,
                     int keyframeEvery, BooleanSupplier keyframesOnly) {
         this.exec = Executors.newSingleThreadExecutor(
                 Thread.ofVirtual().name("seat-" + seatLabel).factory());
@@ -111,14 +122,24 @@ public final class SeatPump implements AutoCloseable {
         this.sink = sink;
         this.coordinator = coordinator;
         this.logRingCapacity = logRingCapacity;
+        this.backfillSend = backfillSend;
         this.store = new StateStore(keyframeEvery);
         this.keyframesOnly = keyframesOnly;
+    }
+
+    /** Enqueue a command handler; a torn-down pump answers UNKNOWN_GAME (§14 teardown). */
+    private void enqueueCmd(String cmdId, Consumer<ServerMsg> reply, Runnable task) {
+        try {
+            exec.execute(task);
+        } catch (RejectedExecutionException e) {
+            reply.accept(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "the game is gone"));
+        }
     }
 
     /** XMage-thread entry: decompressed callbacks, in arrival order. */
     public void onCallback(ClientCallback callback) {
         lastCallbackNanos = System.nanoTime();
-        exec.execute(() -> {
+        Runnable task = () -> {
             MDC.put("seat", xmage.username());
             MDC.put("game", gameIdStr == null ? "-" : gameIdStr);
             try {
@@ -129,14 +150,24 @@ public final class SeatPump implements AutoCloseable {
             } finally {
                 MDC.clear();
             }
-        });
+        };
+        try {
+            exec.execute(task);
+        } catch (RejectedExecutionException e) {
+            log.debug("callback {} after teardown — dropped", callback.getMethod());
+        }
     }
 
     /** Jetty-thread entry: an answer command from this seat's browser. */
     public void answer(GameAnswer cmd, Consumer<ServerMsg> reply) {
-        exec.execute(() -> {
+        enqueueCmd(cmd.id(), reply, () -> {
             if (fsm == null) {
                 reply.accept(Err.re(cmd.id(), ErrorCode.PROMPT_STALE, "the game has not started"));
+                return;
+            }
+            if (recovering) {
+                reply.accept(Err.re(cmd.id(), ErrorCode.UPSTREAM_ERROR,
+                        "reconnecting to the game server — try again in a moment"));
                 return;
             }
             PromptFsm.Outcome outcome = fsm.answer(cmd.promptId(), cmd.answer());
@@ -165,10 +196,15 @@ public final class SeatPump implements AutoCloseable {
 
     /** Jetty-thread entry: a prompt-free player action (protocol §9). */
     public void action(GameAction cmd, Consumer<ServerMsg> reply) {
-        exec.execute(() -> {
+        enqueueCmd(cmd.id(), reply, () -> {
             if (answers == null || over) {
                 reply.accept(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME,
                         over ? "the game is over" : "the game has not started"));
+                return;
+            }
+            if (recovering) {
+                reply.accept(Err.re(cmd.id(), ErrorCode.UPSTREAM_ERROR,
+                        "reconnecting to the game server — try again in a moment"));
                 return;
             }
             switch (cmd.action()) {
@@ -193,12 +229,165 @@ public final class SeatPump implements AutoCloseable {
 
     /** Jetty-thread entry: the client wants a fresh keyframe (protocol §7). */
     public void resync(GameResync cmd, Consumer<ServerMsg> reply) {
-        exec.execute(() -> {
+        enqueueCmd(cmd.id(), reply, () -> {
             reply.accept(new Ack(cmd.id()));
             if (gameIdStr != null) {
                 store.forceKeyframe(gameIdStr).ifPresent(sink::send);
             }
         });
+    }
+
+    /** Jetty-thread entry: relay chat into the game (protocol §10). */
+    public void chatSend(ChatSend cmd, Consumer<ServerMsg> reply) {
+        enqueueCmd(cmd.id(), reply, () -> {
+            String text = cmd.text() == null ? "" : cmd.text().strip();
+            if (text.isEmpty() || text.length() > ChatSend.MAX_LENGTH) {
+                reply.accept(Err.re(cmd.id(), ErrorCode.BAD_MESSAGE, text.isEmpty()
+                        ? "chat text is empty"
+                        : "chat text exceeds " + ChatSend.MAX_LENGTH + " chars"));
+                return;
+            }
+            if (chatId == null) {
+                reply.accept(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME, "the game chat is not open yet"));
+                return;
+            }
+            if (xmage.session().sendChatMessage(chatId, text)) {
+                // the line comes back to every seat as CHATMESSAGE → game.log kind:chat
+                reply.accept(new Ack(cmd.id()));
+            } else {
+                reply.accept(Err.re(cmd.id(), ErrorCode.UPSTREAM_ERROR,
+                        "the game server rejected the chat message"));
+            }
+        });
+    }
+
+    /**
+     * Session-layer entry: the XMage transport dropped (design §5). Best-effort
+     * recovery — the browser is told via status log lines, positional answers
+     * are rejected while it runs, and the seat re-joins on success.
+     */
+    public void onXmageDisconnected() {
+        try {
+            exec.execute(this::startRecovery);
+        } catch (RejectedExecutionException e) {
+            // torn down — nothing to recover
+        }
+    }
+
+    private void startRecovery() {
+        if (over || recovering || gameId == null) {
+            // pre-game drops are the lobby's problem (table setup fails loudly)
+            return;
+        }
+        recovering = true;
+        logLine(LogEntry.Kind.STATUS, null, "reconnecting to the game server…", null, null);
+        Thread.ofVirtual().name("recover-" + xmage.username()).start(this::recoveryLoop);
+    }
+
+    /** Off-pump: blocking reconnect attempts with backoff; result hops back onto the pump. */
+    private void recoveryLoop() {
+        for (long backoff : RECOVER_BACKOFF_MILLIS) {
+            try {
+                Thread.sleep(backoff);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (xmage.reconnect()) {
+                try {
+                    exec.execute(this::recovered);
+                } catch (RejectedExecutionException ignored) {
+                    // torn down while we were reconnecting
+                }
+                return;
+            }
+        }
+        try {
+            exec.execute(() -> {
+                recovering = false;
+                log.error("seat recovery failed after {} attempts — seat lost", RECOVER_BACKOFF_MILLIS.length);
+                logLine(LogEntry.Kind.STATUS, null,
+                        "could not reconnect to the game server — this seat is lost", null, null);
+                sink.send(Err.fatal(null, ErrorCode.UPSTREAM_ERROR,
+                        "lost the connection to the game server; this seat cannot continue"));
+                // a lost seat never sees GAME_OVER — count it toward teardown
+                // or the game (and its XMage sessions) would leak forever
+                coordinator.seatFinished();
+            });
+        } catch (RejectedExecutionException ignored) {
+        }
+    }
+
+    private void recovered() {
+        recovering = false;
+        if (over) {
+            return;
+        }
+        joinGameAndChat();
+        logLine(LogEntry.Kind.STATUS, null, "reconnected to the game server", null, null);
+        // XMage usually also re-fires the current ask after onReconnect — that
+        // arrives as a fresh prompt and supersedes the re-grounded one cleanly.
+        regroundBrowser();
+    }
+
+    /** Join the game + its chat on the current XMage session (start and recovery). */
+    private void joinGameAndChat() {
+        xmage.session().joinGame(gameId);
+        xmage.session().getGameChatId(gameId).ifPresent(id -> {
+            chatId = id;
+            xmage.session().joinChat(id);
+        });
+    }
+
+    /**
+     * The §14/§5 re-ground: fresh keyframe first, then the pending prompt under
+     * its original promptId with a fresh seq — answers stay fenced across the
+     * gap. A compound replay in flight re-emits nothing: the client already
+     * answered, and promptDone lands when the replay resolves.
+     */
+    private void regroundBrowser() {
+        store.forceKeyframe(gameIdStr).ifPresent(sink::send);
+        if (fsm != null && fsm.pending() != null && !fsm.replaying()) {
+            sink.send(fsm.pending().withSeq(store.nextSeq()));
+        }
+    }
+
+    /**
+     * Registry-thread entry: replay this seat for a (re)connected browser
+     * (protocol §14) — fresh keyframe, pending prompt under its original
+     * promptId, then the log tail. False if the pump is already torn down.
+     */
+    public boolean resume(long lastSeq) {
+        try {
+            exec.execute(() -> replayForResume(lastSeq));
+            return true;
+        } catch (RejectedExecutionException e) {
+            return false;
+        }
+    }
+
+    private void replayForResume(long lastSeq) {
+        if (gameIdStr == null) {
+            return; // resume raced startMatch — the first callbacks will paint state
+        }
+        if (over) {
+            store.forceKeyframe(gameIdStr).ifPresent(sink::send);
+            if (gameOverMsg != null) {
+                sink.send(gameOverMsg); // original seq — history, like the backfill below
+            }
+        } else {
+            regroundBrowser();
+        }
+        List<LogEntry> tail = new ArrayList<>();
+        for (LogEntry e : logRing) {
+            if (e.seq() > lastSeq) {
+                tail.add(e);
+            }
+        }
+        if (tail.size() > backfillSend) {
+            tail = tail.subList(tail.size() - backfillSend, tail.size());
+        }
+        tail.forEach(sink::send);
     }
 
     private static PlayerAction skipAction(GameAction.Action.Skip.Mode mode) {
@@ -366,8 +555,7 @@ public final class SeatPump implements AutoCloseable {
         gameIdStr = gameId.toString();
         answers = new XmageAnswers(xmage.session(), gameId, playerId, () -> lastCallbackNanos);
         fsm = new PromptFsm(answers);
-        xmage.session().joinGame(gameId);
-        xmage.session().getGameChatId(gameId).ifPresent(chatId -> xmage.session().joinChat(chatId));
+        joinGameAndChat();
         coordinator.gameKnown(gameId);
         log.info("joined game {} as player {}", gameId, playerId);
     }
@@ -516,8 +704,10 @@ public final class SeatPump implements AutoCloseable {
         if (fsm != null) {
             fsm.clear();
         }
-        sink.send(new GameOver(store.nextSeq(), gameIdStr, winners(outcome), outcome.reason(), true));
+        gameOverMsg = new GameOver(store.nextSeq(), gameIdStr, winners(outcome), outcome.reason(), true);
+        sink.send(gameOverMsg);
         log.info("game over for this seat: {}", outcome.reason());
+        coordinator.seatFinished();
     }
 
     private List<String> winners(GameCoordinator.Outcome outcome) {

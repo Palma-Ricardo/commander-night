@@ -19,7 +19,8 @@ public record Config(
         int keyframeEvery,
         LogBackfill logBackfill,
         boolean callbackTap,
-        String sampleDecksDir) {
+        String sampleDecksDir,
+        int postGameGraceSecs) {
 
     public record Xmage(String host, int port) {
     }
@@ -33,7 +34,8 @@ public record Config(
             100,
             new LogBackfill(200, 50),
             false,
-            "vendor/xmage-dist/xmage/mage-client/sample-decks/Commander");
+            "vendor/xmage-dist/xmage/mage-client/sample-decks/Commander",
+            900);
 
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
 
@@ -72,7 +74,8 @@ public record Config(
                         lb.buffer != null ? lb.buffer : DEFAULTS.logBackfill.buffer,
                         lb.send != null ? lb.send : DEFAULTS.logBackfill.send),
                 raw.callbackTap != null ? raw.callbackTap : DEFAULTS.callbackTap,
-                raw.sampleDecksDir != null ? raw.sampleDecksDir : DEFAULTS.sampleDecksDir);
+                raw.sampleDecksDir != null ? raw.sampleDecksDir : DEFAULTS.sampleDecksDir,
+                raw.postGameGraceSecs != null ? raw.postGameGraceSecs : DEFAULTS.postGameGraceSecs);
     }
 
     private Config validate() {
@@ -82,6 +85,7 @@ public record Config(
         require(logBackfill.buffer >= 1, "logBackfill.buffer must be >= 1: " + logBackfill.buffer);
         require(logBackfill.send >= 0 && logBackfill.send <= logBackfill.buffer,
                 "logBackfill.send must be between 0 and logBackfill.buffer: " + logBackfill.send);
+        require(postGameGraceSecs >= 0, "postGameGraceSecs must be >= 0: " + postGameGraceSecs);
         return this;
     }
 
@@ -121,6 +125,7 @@ public record Config(
         public RawLogBackfill logBackfill;
         public Boolean callbackTap;
         public String sampleDecksDir;
+        public Integer postGameGraceSecs;
 
         static final class RawXmage {
             public String host;

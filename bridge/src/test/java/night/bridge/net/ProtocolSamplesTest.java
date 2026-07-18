@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import night.bridge.proto.Ack;
 import night.bridge.proto.Answer;
+import night.bridge.proto.ChatSend;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
 import night.bridge.proto.GameAction;
@@ -258,6 +259,14 @@ class ProtocolSamplesTest {
     @Test
     void gameResyncSampleDecodes() throws Exception {
         assertEquals(new GameResync("c30", "g1"), decoded("game.resync.json").msg());
+    }
+
+    // ---- M4: chat ----
+
+    @Test
+    void chatSendSampleDecodes() throws Exception {
+        assertEquals(new ChatSend("c40", "g1", "gg — that Lathril swing was brutal"),
+                decoded("chat.send.json").msg());
     }
 
     @Test

@@ -4,6 +4,7 @@ import mage.cards.decks.DeckCardLists;
 import night.bridge.config.Config;
 import night.bridge.game.GameCoordinator;
 import night.bridge.game.Games;
+import night.bridge.game.SeatPump;
 import night.bridge.net.SessionRegistry;
 import night.bridge.proto.Ack;
 import night.bridge.proto.ClientMsg;
@@ -82,6 +83,8 @@ public final class LobbyService implements AutoCloseable {
         final String hostUserId;
         final LinkedHashMap<String, SeatEntry> seats = new LinkedHashMap<>();
         boolean started;
+        /** Set at launch; the recovery-join path resolves seats through it (design §10). */
+        GameCoordinator game;
         long lastTouch = System.currentTimeMillis();
 
         Lobby(String code, String hostUserId) {
@@ -128,10 +131,12 @@ public final class LobbyService implements AutoCloseable {
                     "unsupported format '" + cmd.format() + "' (v1 speaks commander-ffa)"));
             return;
         }
-        if (byUser.containsKey(userId)) {
+        Lobby existing = byUser.get(userId);
+        if (existing != null && !existing.started) {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "already in a lobby"));
             return;
         }
+        // a started lobby no longer holds its members (protocol §5) — this is the rematch flow
         String code = mintCode();
         Lobby lobby = new Lobby(code, userId);
         byCode.put(code, lobby);
@@ -148,25 +153,45 @@ public final class LobbyService implements AutoCloseable {
             return;
         }
         lobby.lastTouch = System.currentTimeMillis();
+        String name = cmd.displayName() == null ? "" : cmd.displayName().strip();
         if (lobby.seats.containsKey(userId)) {
-            // Pre-game reconnect: same session re-binding to its seat (design §9).
+            // The seat is keyed by userId — the name is redundant here, so a
+            // blank one must not block a re-bind (design §9).
             reply.accept(new Ack(cmd.id()));
-            broadcast(lobby);
+            if (lobby.started) {
+                // Same session re-joining its running game — replay it (protocol §14).
+                resumeSeat(lobby.game, userId, lobby.code);
+            } else {
+                // Pre-game reconnect: same session re-binding to its seat (design §9).
+                broadcast(lobby);
+            }
+            return;
+        }
+        if (name.isEmpty()) {
+            reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "displayName must not be empty"));
             return;
         }
         if (lobby.started) {
-            // Post-start displayName re-bind is the M4 lost-token recovery path.
-            reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "game already started"));
+            // Lost-token recovery (design §10): a displayName matching a seated
+            // player re-binds that seat to the caller's session, then replays.
+            SeatEntry seat = lobby.seats.values().stream()
+                    .filter(s -> s.name.equalsIgnoreCase(name))
+                    .findFirst().orElse(null);
+            if (seat == null) {
+                reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
+                        "game already started (and no seated player is named '" + name + "')"));
+                return;
+            }
+            GameCoordinator game = lobby.game;
+            String code = lobby.code;
+            log.info("recovery join: '{}' reclaims seat {} in lobby {}", name, seat.userId, code);
+            reply.accept(new Ack(cmd.id()));
+            registry.adopt(userId, seat.userId, () -> resumeSeat(game, seat.userId, code));
             return;
         }
         Lobby elsewhere = byUser.get(userId);
-        if (elsewhere != null && elsewhere != lobby) {
+        if (elsewhere != null && elsewhere != lobby && !elsewhere.started) {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "already in another lobby"));
-            return;
-        }
-        String name = cmd.displayName() == null ? "" : cmd.displayName().strip();
-        if (name.isEmpty()) {
-            reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "displayName must not be empty"));
             return;
         }
         boolean nameTaken = lobby.seats.values().stream()
@@ -206,6 +231,10 @@ public final class LobbyService implements AutoCloseable {
             return;
         }
         Lobby lobby = byUser.get(userId);
+        if (lobby.started) {
+            reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "game already started"));
+            return;
+        }
         lobby.lastTouch = System.currentTimeMillis();
         seat.deck = DeckParser.parseDck(cmd.content());
         seat.ready = false; // a new deck resets readiness
@@ -224,6 +253,10 @@ public final class LobbyService implements AutoCloseable {
             return;
         }
         Lobby lobby = byUser.get(userId);
+        if (lobby.started) {
+            reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "game already started"));
+            return;
+        }
         lobby.lastTouch = System.currentTimeMillis();
         seat.ready = cmd.ready();
         reply.accept(new Ack(cmd.id()));
@@ -278,14 +311,15 @@ public final class LobbyService implements AutoCloseable {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, e.getMessage()));
             return;
         }
-        GameCoordinator coordinator = new GameCoordinator(lobby.code, games);
+        GameCoordinator coordinator = new GameCoordinator(lobby.code, games, gateway,
+                config.postGameGraceSecs() * 1000L);
         List<TableRecipe.HumanSeat> recipeSeats = new ArrayList<>();
         int n = 0;
         for (SeatEntry seat : lobby.seats.values()) {
             n++;
             SeatSession session = gateway.connectSeat("cn_" + lobby.code + "_" + n);
             if (session == null) {
-                coordinator.close(gateway);
+                coordinator.close();
                 reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
                         "cannot reach the game server — try again in a moment"));
                 return;
@@ -293,18 +327,20 @@ public final class LobbyService implements AutoCloseable {
             String userId = seat.userId;
             coordinator.addSeat(userId, seat.name, session,
                     registry.sinkFor(userId), config.logBackfill().buffer(),
-                    config.keyframeEvery(), () -> registry.keyframesOnly(userId));
+                    config.logBackfill().send(), config.keyframeEvery(),
+                    () -> registry.keyframesOnly(userId));
             recipeSeats.add(new TableRecipe.HumanSeat(session, seat.deck.deck()));
         }
         try {
             TableRecipe.createAndStart("Commander Night " + lobby.code, recipeSeats, aiDecks);
         } catch (TableRecipe.RecipeException e) {
-            coordinator.close(gateway);
+            coordinator.close();
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
                     "table setup failed at step: " + e.getMessage()));
             return;
         }
         lobby.started = true;
+        lobby.game = coordinator;
         log.info("lobby {} started: {} human(s) + {} AI", lobby.code, lobby.seats.size(), aiSeats);
         reply.accept(new Ack(cmd.id()));
         broadcast(lobby);
@@ -345,6 +381,19 @@ public final class LobbyService implements AutoCloseable {
         return lobby == null ? null : lobby.seats.get(userId);
     }
 
+    /**
+     * Replays a seat for a recovered/re-joined session (protocol §14). Runs on
+     * the lobby executor or the registry executor (adopt's continuation) —
+     * {@code pump.resume} is a thread-safe enqueue either way.
+     */
+    private void resumeSeat(GameCoordinator game, String seatUserId, String code) {
+        SeatPump pump = game == null ? null : game.pumpFor(seatUserId);
+        if (pump == null || !pump.resume(-1)) {
+            // torn down (or never launched) — the joiner keeps lobby.state only
+            log.info("resume for seat {} in lobby {}: game is gone", seatUserId, code);
+        }
+    }
+
     private void broadcast(Lobby lobby) {
         List<LobbyState.Seat> seats = new ArrayList<>();
         for (SeatEntry s : lobby.seats.values()) {
@@ -373,13 +422,18 @@ public final class LobbyService implements AutoCloseable {
         }
     }
 
-    /** Un-started lobbies idle for 4 h evaporate (design §9). */
+    /**
+     * Un-started lobbies idle for 4 h evaporate (design §9); started lobbies
+     * follow once their game is over (they only outlive the game to serve
+     * recovery joins, which touch {@code lastTouch}).
+     */
     private void sweepIdle() {
         long cutoff = System.currentTimeMillis() - IDLE_EXPIRY_MILLIS;
         Iterator<Lobby> it = byCode.values().iterator();
         while (it.hasNext()) {
             Lobby lobby = it.next();
-            if (!lobby.started && lobby.lastTouch < cutoff) {
+            boolean expirable = !lobby.started || (lobby.game != null && lobby.game.over());
+            if (expirable && lobby.lastTouch < cutoff) {
                 log.info("lobby {} expired after 4h idle", lobby.code);
                 it.remove();
                 byUser.remove(lobby.hostUserId, lobby);

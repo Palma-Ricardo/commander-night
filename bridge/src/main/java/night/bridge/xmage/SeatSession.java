@@ -26,6 +26,16 @@ public final class SeatSession implements MageClient {
     private final String username;
     private final Session session;
     private volatile Consumer<ClientCallback> sink = cb -> log.warn("callback {} before sink attached", cb.getMethod());
+    /** Transport-loss notification — the seat pump's recovery entry (design §5). */
+    private volatile Runnable disconnectListener = () -> {
+    };
+    private volatile String host;
+    private volatile int port;
+    /** XMage's server-side restore handshake key: our previous session id. */
+    private volatile String lastSessionId = "";
+    private volatile boolean closing;
+    /** connectStart/connectStop re-fire disconnected() internally; ignore our own noise. */
+    private volatile boolean reconnecting;
 
     public SeatSession(String username) {
         this.username = username;
@@ -37,20 +47,70 @@ public final class SeatSession implements MageClient {
         this.sink = sink;
     }
 
+    /** Transport-loss listener — the seat pump's recovery kick (design §5). */
+    public void onDisconnected(Runnable listener) {
+        this.disconnectListener = listener;
+    }
+
     public boolean connect(String host, int port) {
-        Connection connection = new Connection();
-        connection.setUsername(username);
-        connection.setHost(host);
-        connection.setPort(port);
-        connection.setProxyType(Connection.ProxyType.NONE);
-        boolean ok = session.connectStart(connection);
+        this.host = host;
+        this.port = port;
+        boolean ok = session.connectStart(newConnection());
         if (ok) {
+            lastSessionId = session.getSessionId();
             log.info("xmage session '{}' connected to {}:{}", username, host, port);
         } else {
             log.error("xmage session '{}' failed to connect to {}:{}: {}", username, host, port,
                     session.getLastError());
         }
         return ok;
+    }
+
+    /**
+     * Re-login after transport loss, restoring the server-side user via the
+     * restore-session handshake (source-verified: server {@code Session.validateUser}
+     * matches {@code restoreSessionId}, flags a reconnection, and re-attaches the
+     * user's active tables in {@code User.onReconnect}). Blocking — never call
+     * on the seat pump.
+     */
+    public boolean reconnect() {
+        if (closing) {
+            return false;
+        }
+        reconnecting = true;
+        try {
+            if (!lastSessionId.isEmpty()) {
+                session.setRestoreSessionId(lastSessionId);
+            }
+            boolean ok = session.connectStart(newConnection());
+            if (ok && closing) {
+                // released while the connect was in flight — don't leak a live session
+                log.info("xmage session '{}' reconnected after release — closing again", username);
+                session.connectStop(false, false);
+                return false;
+            }
+            if (ok) {
+                lastSessionId = session.getSessionId();
+                log.info("xmage session '{}' reconnected to {}:{}", username, host, port);
+            } else {
+                log.warn("xmage session '{}' reconnect failed: {}", username, session.getLastError());
+            }
+            return ok;
+        } catch (Exception e) {
+            log.warn("xmage session '{}' reconnect threw: {}", username, e.toString());
+            return false;
+        } finally {
+            reconnecting = false;
+        }
+    }
+
+    private Connection newConnection() {
+        Connection connection = new Connection();
+        connection.setUsername(username);
+        connection.setHost(host);
+        connection.setPort(port);
+        connection.setProxyType(Connection.ProxyType.NONE);
+        return connection;
     }
 
     public Session session() {
@@ -76,6 +136,7 @@ public final class SeatSession implements MageClient {
     }
 
     public void close() {
+        closing = true;
         try {
             session.connectStop(false, false);
         } catch (Exception e) {
@@ -97,10 +158,12 @@ public final class SeatSession implements MageClient {
 
     @Override
     public void disconnected(boolean askToReconnect, boolean keepMySessionActive) {
-        // Seat recovery (design §5) is M4; today we log and the pump notices
-        // failed sends when it next answers.
-        log.warn("'{}' disconnected from xmage (askToReconnect={}, keepSession={})",
+        if (closing || reconnecting) {
+            return; // our own connectStop / connectStart teardown noise
+        }
+        log.warn("'{}' disconnected from xmage (askToReconnect={}, keepSession={}) — kicking seat recovery",
                 username, askToReconnect, keepMySessionActive);
+        disconnectListener.run();
     }
 
     @Override

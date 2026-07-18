@@ -36,6 +36,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = PromptDone.class, name = "game.promptDone"),
         @JsonSubTypes.Type(value = LogEntry.class, name = "game.log"),
         @JsonSubTypes.Type(value = GameOver.class, name = "game.over"),
+        // chat
+        @JsonSubTypes.Type(value = ChatSend.class, name = "chat.send"),
 })
 public sealed interface Msg permits ClientMsg, ServerMsg {
 }

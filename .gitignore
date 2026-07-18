@@ -5,3 +5,4 @@ mage-full_*/
 mage-full_*.zip
 bridge/logs/
 bridge/out/
+.harness-session.json

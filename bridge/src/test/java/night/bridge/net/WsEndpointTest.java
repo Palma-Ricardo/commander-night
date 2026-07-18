@@ -47,9 +47,9 @@ class WsEndpointTest {
 
     @BeforeAll
     static void start() {
-        registry = new SessionRegistry();
-        gateway = new XmageGateway(Config.DEFAULTS);
         Games games = new Games();
+        registry = new SessionRegistry(games);
+        gateway = new XmageGateway(Config.DEFAULTS);
         lobby = new LobbyService(registry, gateway, games, Config.DEFAULTS);
         app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         app.start("127.0.0.1", 0);
@@ -256,6 +256,57 @@ class WsEndpointTest {
         c.ws.sendBinary(ByteBuffer.wrap(new byte[]{1, 2, 3}), true).join();
         JsonNode e = c.next();
         assertEquals("BAD_MESSAGE", e.get("code").asText());
+        c.close();
+    }
+
+    @Test
+    void commandBeforeHelloIsAuthFailed() throws Exception {
+        Client c = Client.connect();
+        c.send("{\"t\":\"lobby.create\",\"id\":\"c1\",\"format\":\"commander-ffa\"}");
+        JsonNode e = c.next();
+        assertEquals("AUTH_FAILED", e.get("code").asText());
+        assertEquals("c1", e.get("re").asText());
+        c.close();
+    }
+
+    @Test
+    void duplicateCommandIdReplaysTheRecordedReplyWithoutReExecuting() throws Exception {
+        Client c = Client.connect();
+        hello(c, "h1");
+        String create = "{\"t\":\"lobby.create\",\"id\":\"dup1\",\"format\":\"commander-ffa\"}";
+        c.send(create);
+        assertEquals("ack", c.next().get("t").asText());
+        assertEquals("lobby.state", c.next().get("t").asText());
+
+        // verbatim retry (protocol §14): the recorded ack again — and no second
+        // lobby.state, because the command must not re-execute
+        c.send(create);
+        JsonNode replayed = c.next();
+        assertEquals("ack", replayed.get("t").asText());
+        assertEquals("dup1", replayed.get("re").asText());
+        c.expectSilence();
+
+        // proof the first execution is still the live one: a *new* create says
+        // we're already in that lobby
+        c.send("{\"t\":\"lobby.create\",\"id\":\"dup2\",\"format\":\"commander-ffa\"}");
+        JsonNode err = c.next();
+        assertEquals("error", err.get("t").asText());
+        assertEquals("LOBBY_STATE", err.get("code").asText());
+        c.close();
+    }
+
+    @Test
+    void errorRepliesAreReplayedForDuplicatesToo() throws Exception {
+        Client c = Client.connect();
+        hello(c, "h1");
+        String bad = "{\"t\":\"chat.send\",\"id\":\"cs1\",\"gameId\":\"nope\",\"text\":\"hi\"}";
+        c.send(bad);
+        JsonNode first = c.next();
+        assertEquals("UNKNOWN_GAME", first.get("code").asText());
+        c.send(bad);
+        JsonNode second = c.next();
+        assertEquals("UNKNOWN_GAME", second.get("code").asText());
+        assertEquals("cs1", second.get("re").asText());
         c.close();
     }
 

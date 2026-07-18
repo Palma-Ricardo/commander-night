@@ -51,9 +51,10 @@ class ConfigTest {
                 logBackfill: { buffer: 500, send: 100 }
                 callbackTap: true
                 sampleDecksDir: /opt/decks
+                postGameGraceSecs: 60
                 """);
         assertEquals(new Config("0.0.0.0:9000", new Config.Xmage("xmage.local", 18000), 25,
-                new Config.LogBackfill(500, 100), true, "/opt/decks"), c);
+                new Config.LogBackfill(500, 100), true, "/opt/decks", 60), c);
         assertEquals("0.0.0.0", c.bindHost());
         assertEquals(9000, c.bindPort());
     }

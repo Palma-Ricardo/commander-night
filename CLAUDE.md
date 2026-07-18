@@ -11,14 +11,17 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M3 (full prompt vocabulary) done 2026-07-17 — all ten live prompt kinds +
-playerRequest, compound `objects` replay, RFC 6902 patches + game.resync, `game.action` set;
-live-validated 8/8 full games (0.8–1.9 MB/seat). Discovered + fixed the XMage 1.4.60
-lost-wakeup race (design.md §5: answer pacing + nudge watchdog). Post-M3 gap fix: combat
-declaration (declare attackers/blockers) — protocol §8 `priority.combat`, one toggle per
-round trip; the 8/8 runs missed it because XMage never asks a creatureless seat and the
-pacifist auto-player never cast (it now plays/casts/attacks, combat asserted live). Next: M4
-(multi-human — seat binding, resume/reconnect, idempotency, chat send, game.over/rematch).
+**Status:** M4 (multi-human) done 2026-07-18 — browser resume (`hello{token,resume}` →
+keyframe → pending prompt re-emitted under its original promptId → log backfill), `chat.send`,
+per-session command idempotency (LRU 64; command ids must be unique across reconnects,
+protocol §3), lost-token recovery join (seat-userId adoption; old token retired), rematch via
+started-lobby release, post-game teardown grace (`postGameGraceSecs`), and design-§5 XMage
+seat recovery (restore-session handshake; implemented, live-verify on the M5 list).
+Exit criterion validated live: `MultiHumanLiveTest` — 2 humans + 2 AIs, full game, mid-prompt
+hard refresh on both seats, chat + duplicate-command probe, mid-game recovery handover,
+post-game resume/rematch/teardown. M3 context: lost-wakeup race guard (design §5), combat
+declaration (§8 `priority.combat`). Next: M5 (commander-damage scrape, golden fixtures,
+conformance corpus both directions, systemd/caddy deploy — a real 4-human night).
 Milestone table in design.md §14.
 
 ## Layout
