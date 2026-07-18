@@ -28,7 +28,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = LobbyState.class, name = "lobby.state"),
         // game
         @JsonSubTypes.Type(value = GameAnswer.class, name = "game.answer"),
+        @JsonSubTypes.Type(value = GameAction.class, name = "game.action"),
+        @JsonSubTypes.Type(value = GameResync.class, name = "game.resync"),
         @JsonSubTypes.Type(value = StateKeyframe.class, name = "game.state"),
+        @JsonSubTypes.Type(value = StatePatch.class, name = "game.patch"),
         @JsonSubTypes.Type(value = GamePrompt.class, name = "game.prompt"),
         @JsonSubTypes.Type(value = PromptDone.class, name = "game.promptDone"),
         @JsonSubTypes.Type(value = LogEntry.class, name = "game.log"),

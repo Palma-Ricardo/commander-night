@@ -9,7 +9,9 @@ import night.bridge.lobby.LobbyService;
 import night.bridge.proto.ClientMsg;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
+import night.bridge.proto.GameAction;
 import night.bridge.proto.GameAnswer;
+import night.bridge.proto.GameResync;
 import night.bridge.proto.Hello;
 import night.bridge.proto.LobbyCreate;
 import night.bridge.proto.LobbyDeck;
@@ -111,7 +113,24 @@ public final class WsEndpoint {
             case Codec.Decoded.Ok(LobbyDeck cmd) -> lobbyRoute(conn, cmd);
             case Codec.Decoded.Ok(LobbyReady cmd) -> lobbyRoute(conn, cmd);
             case Codec.Decoded.Ok(LobbyStart cmd) -> lobbyRoute(conn, cmd);
-            case Codec.Decoded.Ok(GameAnswer cmd) -> answerRoute(conn, cmd);
+            case Codec.Decoded.Ok(GameAnswer cmd) -> {
+                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+                if (pump != null) {
+                    pump.answer(cmd, conn::send);
+                }
+            }
+            case Codec.Decoded.Ok(GameAction cmd) -> {
+                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+                if (pump != null) {
+                    pump.action(cmd, conn::send);
+                }
+            }
+            case Codec.Decoded.Ok(GameResync cmd) -> {
+                SeatPump pump = pumpFor(conn, cmd.id(), cmd.gameId());
+                if (pump != null) {
+                    pump.resync(cmd, conn::send);
+                }
+            }
             // Exhaustive over ClientMsg: a new command type fails to compile
             // here until it is routed to its owning executor (design §4).
         }
@@ -126,22 +145,23 @@ public final class WsEndpoint {
         lobby.handle(userId, cmd, conn::send);
     }
 
-    private void answerRoute(Conn conn, GameAnswer cmd) {
+    /** Resolves the caller's seat pump for a game.* command; error-replies and returns null otherwise. */
+    private SeatPump pumpFor(Conn conn, String cmdId, String gameId) {
         String userId = conn.userId();
         if (userId == null) {
-            conn.send(Err.re(cmd.id(), ErrorCode.AUTH_FAILED, "send session.hello first"));
-            return;
+            conn.send(Err.re(cmdId, ErrorCode.AUTH_FAILED, "send session.hello first"));
+            return null;
         }
-        GameCoordinator game = games.byId(cmd.gameId());
+        GameCoordinator game = games.byId(gameId);
         if (game == null) {
-            conn.send(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME, "unknown game " + cmd.gameId()));
-            return;
+            conn.send(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "unknown game " + gameId));
+            return null;
         }
         SeatPump pump = game.pumpFor(userId);
         if (pump == null) {
-            conn.send(Err.re(cmd.id(), ErrorCode.UNKNOWN_GAME, "no seat in game " + cmd.gameId()));
-            return;
+            conn.send(Err.re(cmdId, ErrorCode.UNKNOWN_GAME, "no seat in game " + gameId));
+            return null;
         }
-        pump.answer(cmd, conn::send);
+        return pump;
     }
 }

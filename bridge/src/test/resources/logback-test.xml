@@ -1,0 +1,14 @@
+<configuration>
+  <!-- Test-tier logging: bridge internals at DEBUG so the live tier's console
+       shows the answer channel (XmageAnswers) and pump flow when a game
+       misbehaves; everything else stays at INFO. -->
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{26} [%X{game:-}/%X{seat:-}] %msg%n</pattern>
+    </encoder>
+  </appender>
+  <logger name="night.bridge" level="DEBUG"/>
+  <root level="INFO">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

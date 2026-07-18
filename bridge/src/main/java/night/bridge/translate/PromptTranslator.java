@@ -1,9 +1,14 @@
 package night.bridge.translate;
 
+import mage.choices.Choice;
+import mage.constants.PlayerAction;
 import mage.players.PlayableObjectStats;
 import mage.players.PlayableObjectsList;
+import mage.util.MultiAmountMessage;
+import mage.view.AbilityPickerView;
 import mage.view.GameClientMessage;
 import mage.view.GameView;
+import mage.view.UserRequestMessage;
 import night.bridge.proto.GamePrompt;
 import night.bridge.proto.state.Card;
 
@@ -17,9 +22,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Dialog callback payloads → protocol prompts (protocol §15 table; M2 covers
- * confirm, priority, chooseTargets, payMana — the kinds a real game against
- * AIs actually fires; the rest land with the M3 FSM).
+ * Dialog callback payloads → protocol prompts (protocol §15 table — all ten
+ * kinds as of M3). Prompt payloads are read through typed getters only
+ * ({@code getChoices()}, {@code getKeyChoices()}, …) — protocol §15 caveat.
  */
 public final class PromptTranslator {
 
@@ -119,6 +124,108 @@ public final class PromptTranslator {
             sources = canPlay.getObjects().keySet().stream().map(UUID::toString).toList();
         }
         return GamePrompt.payMana(promptId, text, remaining, sources, true);
+    }
+
+    /**
+     * GAME_CHOOSE_ABILITY → chooseAbility. The picker's choices map is a
+     * LinkedHashMap (XMage numbers the entries "1. …", "2. …"), so wire order
+     * is XMage's order. No source id exists on the view — protocol §8's
+     * {@code sourceId} stays absent.
+     */
+    public static GamePrompt chooseAbility(long promptId, AbilityPickerView picker) {
+        List<GamePrompt.Option> options = new ArrayList<>();
+        if (picker.getChoices() != null) {
+            for (Map.Entry<UUID, String> e : picker.getChoices().entrySet()) {
+                options.add(GamePrompt.Option.byId(e.getKey().toString(), Html.strip(e.getValue())));
+            }
+        }
+        return GamePrompt.chooseAbility(promptId, Html.strip(picker.getMessage()), options);
+    }
+
+    /**
+     * GAME_CHOOSE_CHOICE → chooseOption. Key choices send their key back;
+     * plain string choices use the string as its own key (protocol §15: the
+     * answer channel is {@code sendPlayerString(choice or key)}). The dialog
+     * subtitle is folded into the message (protocol §8). The special
+     * "remember answer" mode is not exposed in v1.
+     */
+    public static GamePrompt chooseOption(long promptId, GameClientMessage msg) {
+        Choice choice = msg.getChoice();
+        List<GamePrompt.Option> options = new ArrayList<>();
+        if (choice.isKeyChoice()) {
+            for (Map.Entry<String, String> e : choice.getKeyChoices().entrySet()) {
+                options.add(GamePrompt.Option.byKey(e.getKey(), Html.strip(e.getValue())));
+            }
+        } else if (choice.getChoices() != null) {
+            for (String c : choice.getChoices()) {
+                options.add(GamePrompt.Option.byKey(c, Html.strip(c)));
+            }
+        }
+        String message = Html.strip(choice.getMessage());
+        String sub = choice.getSubMessage();
+        if (sub != null && !sub.isBlank()) {
+            message = message + " — " + Html.strip(sub);
+        }
+        return GamePrompt.chooseOption(promptId, message, options, choice.isRequired());
+    }
+
+    /** GAME_CHOOSE_PILE → choosePile. Either pile may be empty (protocol §8). */
+    public static GamePrompt choosePile(long promptId, GameClientMessage msg) {
+        List<Card> pile1 = msg.getCardsView1() == null ? List.of() : ViewTranslator.cards(msg.getCardsView1());
+        List<Card> pile2 = msg.getCardsView2() == null ? List.of() : ViewTranslator.cards(msg.getCardsView2());
+        return GamePrompt.choosePile(promptId, Html.strip(msg.getMessage()), pile1, pile2);
+    }
+
+    /** GAME_GET_AMOUNT → chooseAmount; max Integer.MAX_VALUE passes through (§8). */
+    public static GamePrompt chooseAmount(long promptId, GameClientMessage msg) {
+        return GamePrompt.chooseAmount(promptId, Html.strip(msg.getMessage()), msg.getMin(), msg.getMax());
+    }
+
+    /**
+     * GAME_GET_MULTI_AMOUNT → distribute. Rows are positional
+     * (MultiAmountMessage carries no ids) — row indexes become the wire ids
+     * (protocol §8). The overall message is XMage's dialog header (options
+     * "header", falling back to "title"); msg.min/max are the Σ-bounds.
+     */
+    public static GamePrompt distribute(long promptId, GameClientMessage msg) {
+        List<GamePrompt.Among> among = new ArrayList<>();
+        if (msg.getMessages() != null) {
+            for (int i = 0; i < msg.getMessages().size(); i++) {
+                MultiAmountMessage m = msg.getMessages().get(i);
+                among.add(new GamePrompt.Among(String.valueOf(i), Html.strip(m.message),
+                        m.min, m.max, m.defaultValue));
+            }
+        }
+        String message = option(msg, "header");
+        if (message == null) {
+            message = option(msg, "title");
+        }
+        boolean canCancel = msg.getOptions() != null
+                && Boolean.TRUE.equals(msg.getOptions().get("canCancel"));
+        return GamePrompt.distribute(promptId, Html.strip(message),
+                msg.getMax(), msg.getMin(), among, canCancel);
+    }
+
+    /**
+     * USER_REQUEST_DIALOG → playerRequest. Buttons become options keyed by
+     * their PlayerAction name — the FSM sends the action back — or "dismiss"
+     * for a button with no action (close-only). requestKey = dialog title
+     * (protocol §8: XMage sends no machine key).
+     */
+    public static GamePrompt playerRequest(long promptId, UserRequestMessage msg) {
+        List<GamePrompt.Option> options = new ArrayList<>();
+        addButton(options, msg.getButton1Text(), msg.getButton1Action());
+        addButton(options, msg.getButton2Text(), msg.getButton2Action());
+        addButton(options, msg.getButton3Text(), msg.getButton3Action());
+        return GamePrompt.playerRequest(promptId, Html.strip(msg.getMessage()),
+                msg.getTitle(), options);
+    }
+
+    private static void addButton(List<GamePrompt.Option> options, String text, PlayerAction action) {
+        if (text != null) {
+            options.add(GamePrompt.Option.byKey(action == null ? "dismiss" : action.name(),
+                    Html.strip(text)));
+        }
     }
 
     private static String option(GameClientMessage msg, String key) {

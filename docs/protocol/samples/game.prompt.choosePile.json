@@ -1,0 +1,25 @@
+{
+  "t": "game.prompt",
+  "seq": 610,
+  "gameId": "g1",
+  "promptId": 31,
+  "message": "Choose a pile to put into your hand.",
+  "kind": "choosePile",
+  "piles": [
+    [
+      { "id": "pile-a1", "name": "Counterspell", "set": "MH2", "number": "267",
+        "manaCost": "{U}{U}", "manaValue": 2, "types": ["INSTANT"], "subtypes": [],
+        "supertypes": [], "colors": ["U"], "text": ["Counter target spell."] }
+    ],
+    [
+      { "id": "pile-b1", "name": "Brainstorm", "set": "MH2", "number": "393",
+        "manaCost": "{U}", "manaValue": 1, "types": ["INSTANT"], "subtypes": [],
+        "supertypes": [], "colors": ["U"],
+        "text": ["Draw three cards, then put two cards from your hand on top of your library in any order."] },
+      { "id": "pile-b2", "name": "Ponder", "set": "C18", "number": "97",
+        "manaCost": "{U}", "manaValue": 1, "types": ["SORCERY"], "subtypes": [],
+        "supertypes": [], "colors": ["U"],
+        "text": ["Look at the top three cards of your library, then put them back in any order. You may shuffle. Draw a card."] }
+    ]
+  ]
+}

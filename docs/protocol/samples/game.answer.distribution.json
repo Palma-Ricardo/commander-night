@@ -1,0 +1,3 @@
+{ "t": "game.answer", "id": "c25", "gameId": "g1", "promptId": 49,
+  "answer": { "type": "distribution",
+              "amounts": [ { "id": "0", "amount": 3 }, { "id": "1", "amount": 1 } ] } }

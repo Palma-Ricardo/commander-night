@@ -11,11 +11,12 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M2 (first playable seat) done 2026-07-16 — lobby (create/join/deck/ready/start with
-AI fill) → live game vs 3 AIs, ViewTranslator with keyframes-only sync, prompts
-confirm/priority/chooseTargets/payMana with promptId-fenced answers, game log pipeline,
-game.over. Next: M3 (full prompt vocabulary + compound replay, patches + resync,
-`game.action` set). Milestone table in design.md §14.
+**Status:** M3 (full prompt vocabulary) done 2026-07-17 — all ten live prompt kinds +
+playerRequest, compound `objects` replay, RFC 6902 patches + game.resync, `game.action` set;
+live-validated 8/8 full games (0.8–1.9 MB/seat). Discovered + fixed the XMage 1.4.60
+lost-wakeup race (design.md §5: answer pacing + nudge watchdog). Next: M4 (multi-human — seat
+binding, resume/reconnect, idempotency, chat send, game.over/rematch). Milestone table in
+design.md §14.
 
 ## Layout
 
@@ -54,6 +55,10 @@ cd bridge && mvn -Pspike compile exec:exec     # the spike/fixture-capture tool 
   `-Djava.awt.headless=true` for the XMage session layer; the `-Pspike` exec config sets them.
 - XMage callbacks: always `callback.decompressData()` before `getData()`; read `Choice` payloads
   through typed getters; callbacks arrive on up to 10 threads (bridge serializes per seat pump).
+- **Never answer XMage's positional channel < 150 ms after the ask** — 1.4.60 `HumanPlayer` has a
+  lost-wakeup race that freezes the whole game (design.md §5). All sends must go through
+  `XmageAnswers` (paces automatically; SeatPump nudge-watchdog covers the tail). Never bypass it
+  with raw `session.sendPlayer*`.
 - Logging is split: our code → slf4j/logback; mage classes → log4j-1.x API via reload4j
   (`log4j.properties`). Never add an `slf4j-reload4j` binding.
 

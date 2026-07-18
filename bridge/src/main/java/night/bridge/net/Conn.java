@@ -89,7 +89,10 @@ final class Conn {
         try {
             while (true) {
                 switch (queue.take()) {
-                    case Outbound.Frame f -> ctx.send(f.text());
+                    case Outbound.Frame f -> {
+                        log.debug("ws >> {}", f.text().length() > 120 ? f.text().substring(0, 120) : f.text());
+                        ctx.send(f.text());
+                    }
                     case Outbound.Close c -> {
                         ctx.closeSession(c.code(), c.reason());
                         return;

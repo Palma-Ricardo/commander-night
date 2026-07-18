@@ -1,0 +1,10 @@
+{
+  "t": "game.prompt",
+  "seq": 403,
+  "gameId": "g1",
+  "promptId": 19,
+  "message": "Announce the value for {X}",
+  "kind": "chooseAmount",
+  "min": 0,
+  "max": 2147483647
+}

@@ -12,7 +12,11 @@ import java.util.Map;
  * express a second, flattened discriminator inside a {@code t}-typed message
  * (&#64;JsonUnwrapped and polymorphism don't compose), so this is a single
  * record with nullable kind fields; the static factories are the only
- * constructors used, and each fills exactly its kind's fields.
+ * constructors used, and each fills exactly its kind's fields. Some fields
+ * are shared where the protocol shapes overlap: {@code min}/{@code max}
+ * (chooseTargets, chooseAmount, distribute), {@code required} (chooseTargets,
+ * chooseOption), {@code canCancel} (payMana, distribute), {@code options}
+ * (chooseAbility, chooseOption, playerRequest).
  *
  * <p>All selectable-object hints live here, never in game state (§6).
  * {@code seq} is stamped at emit time — a pending prompt re-emitted on resume
@@ -30,7 +34,7 @@ public record GamePrompt(
         // priority
         Map<String, List<PlayableAction>> playable,
         Boolean canPass,
-        // chooseTargets
+        // chooseTargets (min/max also chooseAmount + distribute; required also chooseOption)
         List<String> candidates,
         Integer min,
         Integer max,
@@ -38,10 +42,19 @@ public record GamePrompt(
         String zone,
         Progress progress,
         List<Card> cards,
-        // payMana
+        // payMana (canCancel also distribute)
         String remaining,
         List<String> sources,
-        Boolean canCancel) implements ServerMsg {
+        Boolean canCancel,
+        // chooseAbility ({id,text}) / chooseOption ({key,text}) / playerRequest ({key,text})
+        List<Option> options,
+        // choosePile
+        List<List<Card>> piles,
+        // distribute
+        Integer total,
+        List<Among> among,
+        // playerRequest
+        String requestKey) implements ServerMsg {
 
     public enum Kind {
         @JsonProperty("confirm") CONFIRM,
@@ -69,39 +82,111 @@ public record GamePrompt(
     public record Progress(int chosen, int of) {
     }
 
+    /**
+     * One selectable option. chooseAbility options carry {@code id} (an XMage
+     * ability UUID); chooseOption/playerRequest options carry {@code key}
+     * (a choice key / PlayerAction name). NON_NULL serialization keeps each
+     * kind's wire shape exact (protocol §8).
+     */
+    public record Option(String id, String key, String text) {
+
+        public static Option byId(String id, String text) {
+            return new Option(id, null, text);
+        }
+
+        public static Option byKey(String key, String text) {
+            return new Option(null, key, text);
+        }
+    }
+
+    /** One distribute row; {@code id} is a bridge-synthesized row index (§8). */
+    public record Among(String id, String label, Integer min, Integer max, Integer suggested) {
+    }
+
     public static GamePrompt confirm(long promptId, String message, String yesText, String noText) {
         return new GamePrompt(0, null, promptId, message, Kind.CONFIRM, yesText, noText,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null);
     }
 
     public static GamePrompt priority(long promptId, String message,
                                       Map<String, List<PlayableAction>> playable) {
         return new GamePrompt(0, null, promptId, message, Kind.PRIORITY, null, null,
-                playable, true, null, null, null, null, null, null, null, null, null, null);
+                playable, true, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null);
     }
 
     public static GamePrompt chooseTargets(long promptId, String message, List<String> candidates,
                                            int min, int max, boolean required, String zone,
                                            Progress progress, List<Card> cards) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_TARGETS, null, null,
-                null, null, candidates, min, max, required, zone, progress, cards, null, null, null);
+                null, null, candidates, min, max, required, zone, progress, cards, null, null, null,
+                null, null, null, null, null);
     }
 
     public static GamePrompt payMana(long promptId, String message, String remaining,
                                      List<String> sources, boolean canCancel) {
         return new GamePrompt(0, null, promptId, message, Kind.PAY_MANA, null, null,
-                null, null, null, null, null, null, null, null, null, remaining, sources, canCancel);
+                null, null, null, null, null, null, null, null, null, remaining, sources, canCancel,
+                null, null, null, null, null);
+    }
+
+    public static GamePrompt chooseAbility(long promptId, String message, List<Option> options) {
+        return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_ABILITY, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                options, null, null, null, null);
+    }
+
+    public static GamePrompt chooseOption(long promptId, String message, List<Option> options,
+                                          boolean required) {
+        return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_OPTION, null, null,
+                null, null, null, null, null, required, null, null, null, null, null, null,
+                options, null, null, null, null);
+    }
+
+    public static GamePrompt choosePile(long promptId, String message,
+                                        List<Card> pile1, List<Card> pile2) {
+        return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_PILE, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                null, List.of(pile1, pile2), null, null, null);
+    }
+
+    public static GamePrompt chooseAmount(long promptId, String message, int min, int max) {
+        return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_AMOUNT, null, null,
+                null, null, null, min, max, null, null, null, null, null, null, null,
+                null, null, null, null, null);
+    }
+
+    public static GamePrompt distribute(long promptId, String message, int total, int min,
+                                        List<Among> among, boolean canCancel) {
+        return new GamePrompt(0, null, promptId, message, Kind.DISTRIBUTE, null, null,
+                null, null, null, min, null, null, null, null, null, null, null, canCancel,
+                null, null, total, among, null);
+    }
+
+    public static GamePrompt playerRequest(long promptId, String message, String requestKey,
+                                           List<Option> options) {
+        return new GamePrompt(0, null, promptId, message, Kind.PLAYER_REQUEST, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                options, null, null, null, requestKey);
     }
 
     /** Stamp the per-seat event seq and game id at emit time. */
     public GamePrompt emitted(long seq, String gameId) {
         return new GamePrompt(seq, gameId, promptId, message, kind, yesText, noText,
                 playable, canPass, candidates, min, max, required, zone, progress, cards,
-                remaining, sources, canCancel);
+                remaining, sources, canCancel, options, piles, total, among, requestKey);
     }
 
     /** Alias of {@link #emitted} for resume re-emission readability. */
     public GamePrompt withSeq(long seq) {
         return emitted(seq, gameId);
+    }
+
+    /** Same ask under a new id — reviving a prompt parked by a playerRequest (design §8). */
+    public GamePrompt withPromptId(long promptId) {
+        return new GamePrompt(seq, gameId, promptId, message, kind, yesText, noText,
+                playable, canPass, candidates, min, max, required, zone, progress, cards,
+                remaining, sources, canCancel, options, piles, total, among, requestKey);
     }
 }

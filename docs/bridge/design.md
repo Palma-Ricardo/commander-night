@@ -102,8 +102,10 @@ Rule: **every piece of mutable state has exactly one owning executor; nothing el
 - Server → client sends: each WS connection has a bounded send queue (default 256 msgs) drained
   by async Jetty writes. Overflow (pathologically slow client) → close the socket; the client
   reconnects into the resume flow, which is cheap by design (keyframe + prompt + log tail).
-- No watchdog auto-pass in the real bridge (the spike's 8 s nudge was a greedy-bot hack). Untimed
-  tables mean XMage waits for humans indefinitely; that is the desired behavior.
+- No watchdog *auto-pass* in the real bridge (the spike's 8 s nudge was a greedy-bot hack).
+  Untimed tables mean XMage waits for humans indefinitely; that is the desired behavior. The
+  M3 lost-wakeup *nudge* watchdog (§5) is different in kind: it re-pokes XMage's answer
+  channel with a rejected sentinel, never answers on the player's behalf.
 
 ## 5. XMage session layer
 
@@ -117,6 +119,28 @@ Per-seat `SeatSession implements MageClient`, connected via `new SessionImpl(thi
 - Keepalive `ping()` on the scheduler; JBoss lease handles transport-level liveness.
 - `GameView.canPlayObjects` is the playable list; mana abilities are *not* priority actions
   (the floating-mana ask-loop lesson — encoded in `PromptTranslator`, protocol §8 `priority`).
+- **The lost-wakeup race** (discovered M3, 2026-07-17). 1.4.60's `HumanPlayer.waitForResponse`
+  sets `responseOpenedForAnswer = true` *before* entering a predicate-less `response.wait()`;
+  an answer whose `notifyAll` lands in that gap is lost, and the game thread waits forever —
+  the whole game freezes until the seat disconnects. Jstack-verified live
+  (`HumanPlayer.java:337`). Crucially, **arrival-time pacing cannot close the race**: every
+  `setResponse*` first parks in `waitResponseOpen()` — a 100 ms spin-poll on that non-volatile
+  flag — so an answer reaching the server while the flag is still closed is *delivered on the
+  flag edge*, racing the game thread's monitor entry no matter how late it was sent (live-
+  verified: 150 ms pacing alone still wedged 6 of 8 games). Human clients rarely lose because
+  their answers arrive long after the flag opens, with the game thread safely parked — the
+  spike's 8 s auto-pass "hack" never wedged because it was unknowingly re-notifying. The
+  guard is therefore two-part: `XmageAnswers` paces every positional send ≥150 ms after the
+  ask (human timing profile — shrinks exposure), and the `SeatPump` watchdog is the actual
+  guarantee: 6 s with *no new ask* after an answer → nudge the channel with the sentinel
+  `new UUID(0,0)` — every ask kind validates-and-rejects it by re-firing the ask
+  (source-verified), so a false positive (AI thinking long) is harmless, while a nudge fired
+  into a parked `wait()` cannot itself be edge-lost. State updates and chat are *not* proof
+  of life (they flow from other seats' activity while the game thread stays wedged) — only a
+  fresh ask or game-over stands the watchdog down. It nudges with exponential backoff (6 s
+  doubling to a 60 s cap) indefinitely and never declares the seat lost: ask-silence is not
+  evidence of loss (AIs think 30 s+ on big boards — live-observed at T45), and transport
+  loss is the session layer's job to detect.
 
 **Seat recovery (best-effort, v1):** if a seat's XMage session drops mid-game, the pump pauses,
 the browser gets `game.log kind:status` ("reconnecting to game server…"), and the scheduler
@@ -284,6 +308,7 @@ what the spike was, promoted to CI.
 | M2 | **First playable seat**: lobby (1 human + AI fill) → live game, ViewTranslator + keyframes-only mode (`stateMode:'keyframes'`), `priority`/`confirm` prompts + answers, log pipeline | A human plays a real game against 3 AIs from a raw-WS harness; **TS client development can start here** |
 | | *M2 done 2026-07-16.* Shipped beyond the letter: `chooseTargets` (one pick per round-trip, §8-style like `payMana`) and `payMana` prompts — an auto-passing seat hits cleanup discards (GAME_TARGET) every game, so priority/confirm alone can't finish the exit criterion. Still M3: remaining 6 prompt kinds, compound `objects` replay, patches/resync, `game.action`. `lobby.start` gained `fillAI` (protocol §5); interactive harness = `mvn -Pharness compile exec:exec`; live tier = `mvn -Plive test` | |
 | M3 | Full prompt vocabulary + FSM (all 11 kinds, compound replay), patches + resync, `game.action` set | Live-integration invariants green over a full game; patch-mode wire size within protocol §7 budget (≈1–3 MB/seat/game) |
+| | *M3 done 2026-07-17.* All ten live prompt kinds + `playerRequest` (park/revive), compound `objects` replay with hostile-script unit tier, RFC 6902 patches (add/remove/replace only) + `game.resync`, `game.action` set (concede/skip/rollback/autoMana/triggerOrder), 17 new corpus samples. Validation: 8/8 full games vs 3 AIs, 138–259 prompts each, 0.8–1.9 MB/seat, keyframes < patches/10. The tier surfaced and fixed the **1.4.60 lost-wakeup race** (§5): answer pacing + ask-keyed nudge watchdog with backoff, live-proven recovering 3–21 wedges/game. Two non-bridge stall classes diagnosed en route: degenerate-board AI think-timeout chains (server-side; test event timeout now 300 s) and a test-harness race that dropped prompts pulled mid-await (stash fix) | |
 | M4 | Multi-human: seat binding, resume/reconnect, idempotency, chat send, `game.over`/rematch | Two-browser game with mid-game refreshes on both sides |
 | M5 | Commander damage scrape, golden-fixture suite, conformance corpus, systemd/caddy deploy docs | A real 4-human friends' night on the deployed host |
 

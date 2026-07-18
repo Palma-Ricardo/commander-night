@@ -1,0 +1,12 @@
+{
+  "t": "game.prompt",
+  "seq": 518,
+  "gameId": "g1",
+  "promptId": 24,
+  "message": "Choose spell or ability to cast",
+  "kind": "chooseAbility",
+  "options": [
+    { "id": "3f2a9d1e-6c47-4b2e-9a10-8e5d21f7b0c4", "text": "1. Cast Far" },
+    { "id": "9b8c7d6e-5f4a-4b2c-8d0e-f9a8b7c6d5e4", "text": "2. Cast Away" }
+  ]
+}

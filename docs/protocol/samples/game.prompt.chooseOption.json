@@ -1,0 +1,13 @@
+{
+  "t": "game.prompt",
+  "seq": 530,
+  "gameId": "g1",
+  "promptId": 25,
+  "message": "Choose a creature type — for Cavern of Souls",
+  "kind": "chooseOption",
+  "required": true,
+  "options": [
+    { "key": "Elf", "text": "Elf" },
+    { "key": "Shade", "text": "Shade" }
+  ]
+}

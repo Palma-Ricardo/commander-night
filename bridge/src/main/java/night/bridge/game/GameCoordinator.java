@@ -44,8 +44,10 @@ public final class GameCoordinator {
 
     /** Called by the lobby while assembling the game, before startMatch. */
     public SeatPump addSeat(String userId, String displayName, SeatSession xmage,
-                            ClientSink sink, int logRingCapacity) {
-        SeatPump pump = new SeatPump(xmage.username(), xmage, sink, this, logRingCapacity);
+                            ClientSink sink, int logRingCapacity,
+                            int keyframeEvery, java.util.function.BooleanSupplier keyframesOnly) {
+        SeatPump pump = new SeatPump(xmage.username(), xmage, sink, this, logRingCapacity,
+                keyframeEvery, keyframesOnly);
         xmage.sink(pump::onCallback);
         seats.add(new Seat(userId, displayName, xmage, pump));
         return pump;

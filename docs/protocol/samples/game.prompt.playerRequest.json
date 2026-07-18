@@ -1,0 +1,13 @@
+{
+  "t": "game.prompt",
+  "seq": 1101,
+  "gameId": "g1",
+  "promptId": 52,
+  "message": "Ricardo asks to roll the game back to the start of turn 3.",
+  "kind": "playerRequest",
+  "options": [
+    { "key": "ADD_PERMISSION_TO_ROLLBACK_TURN", "text": "Accept" },
+    { "key": "DENY_PERMISSION_TO_ROLLBACK_TURN", "text": "Deny" }
+  ],
+  "requestKey": "Request by Ricardo"
+}

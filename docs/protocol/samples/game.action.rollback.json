@@ -1,0 +1,1 @@
+{ "t": "game.action", "id": "c33", "gameId": "g1", "action": { "kind": "requestRollback", "turns": 1 } }

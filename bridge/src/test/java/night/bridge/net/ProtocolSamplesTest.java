@@ -6,9 +6,11 @@ import night.bridge.proto.Ack;
 import night.bridge.proto.Answer;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
+import night.bridge.proto.GameAction;
 import night.bridge.proto.GameAnswer;
 import night.bridge.proto.GameOver;
 import night.bridge.proto.GamePrompt;
+import night.bridge.proto.GameResync;
 import night.bridge.proto.Hello;
 import night.bridge.proto.Json;
 import night.bridge.proto.LobbyCreate;
@@ -22,6 +24,7 @@ import night.bridge.proto.PromptDone;
 import night.bridge.proto.Role;
 import night.bridge.proto.ServerMsg;
 import night.bridge.proto.StateKeyframe;
+import night.bridge.proto.StatePatch;
 import night.bridge.proto.Welcome;
 import night.bridge.proto.state.Card;
 import night.bridge.proto.state.Color;
@@ -187,6 +190,96 @@ class ProtocolSamplesTest {
     void promptDoneSampleIsReproducible() throws Exception {
         assertProduces("game.promptDone.json",
                 new PromptDone(814, "g1", 41, PromptDone.Reason.ANSWERED));
+    }
+
+    // ---- M3: the remaining prompt kinds ----
+
+    private static Card spell(String id, String name, String set, String number, String manaCost,
+                              int manaValue, String type, String text) {
+        return new Card(id, name, set, number, manaCost, manaValue, List.of(type), List.of(),
+                List.of(), List.of(Color.U), List.of(text), null, null, null, null, null, null, null);
+    }
+
+    @Test
+    void m3PromptSamplesAreReproducible() throws Exception {
+        assertProduces("game.prompt.chooseAbility.json",
+                GamePrompt.chooseAbility(24, "Choose spell or ability to cast", List.of(
+                                GamePrompt.Option.byId("3f2a9d1e-6c47-4b2e-9a10-8e5d21f7b0c4", "1. Cast Far"),
+                                GamePrompt.Option.byId("9b8c7d6e-5f4a-4b2c-8d0e-f9a8b7c6d5e4", "2. Cast Away")))
+                        .emitted(518, "g1"));
+        assertProduces("game.prompt.chooseOption.json",
+                GamePrompt.chooseOption(25, "Choose a creature type — for Cavern of Souls", List.of(
+                                GamePrompt.Option.byKey("Elf", "Elf"),
+                                GamePrompt.Option.byKey("Shade", "Shade")), true)
+                        .emitted(530, "g1"));
+        assertProduces("game.prompt.choosePile.json",
+                GamePrompt.choosePile(31, "Choose a pile to put into your hand.",
+                                List.of(spell("pile-a1", "Counterspell", "MH2", "267", "{U}{U}", 2,
+                                        "INSTANT", "Counter target spell.")),
+                                List.of(spell("pile-b1", "Brainstorm", "MH2", "393", "{U}", 1, "INSTANT",
+                                                "Draw three cards, then put two cards from your hand on top of your library in any order."),
+                                        spell("pile-b2", "Ponder", "C18", "97", "{U}", 1, "SORCERY",
+                                                "Look at the top three cards of your library, then put them back in any order. You may shuffle. Draw a card.")))
+                        .emitted(610, "g1"));
+        assertProduces("game.prompt.chooseAmount.json",
+                GamePrompt.chooseAmount(19, "Announce the value for {X}", 0, Integer.MAX_VALUE)
+                        .emitted(403, "g1"));
+        assertProduces("game.prompt.distribute.json",
+                GamePrompt.distribute(47, "Assign damage among targets", 4, 4, List.of(
+                                new GamePrompt.Among("0", "Goblin Guide", 0, 4, 2),
+                                new GamePrompt.Among("1", "Monastery Swiftspear", 0, 4, 2)), false)
+                        .emitted(902, "g1"));
+        assertProduces("game.prompt.playerRequest.json",
+                GamePrompt.playerRequest(52, "Ricardo asks to roll the game back to the start of turn 3.",
+                                "Request by Ricardo", List.of(
+                                        GamePrompt.Option.byKey("ADD_PERMISSION_TO_ROLLBACK_TURN", "Accept"),
+                                        GamePrompt.Option.byKey("DENY_PERMISSION_TO_ROLLBACK_TURN", "Deny")))
+                        .emitted(1101, "g1"));
+    }
+
+    // ---- M3: patches, resync, actions ----
+
+    @Test
+    void gamePatchSampleIsReproducible() throws Exception {
+        // ops ride verbatim (zjsonpatch output) — the envelope is what's under test
+        JsonNode ops = sample("game.patch.json").get("ops");
+        assertProduces("game.patch.json", new StatePatch(812, "g1", 810, ops));
+    }
+
+    @Test
+    void gameResyncSampleDecodes() throws Exception {
+        assertEquals(new GameResync("c30", "g1"), decoded("game.resync.json").msg());
+    }
+
+    @Test
+    void gameActionSamplesDecode() throws Exception {
+        assertEquals(new GameAction("c31", "g1", new GameAction.Action.Concede()),
+                decoded("game.action.concede.json").msg());
+        assertEquals(new GameAction("c32", "g1",
+                        new GameAction.Action.Skip(GameAction.Action.Skip.Mode.END_OF_TURN)),
+                decoded("game.action.skip.json").msg());
+        assertEquals(new GameAction("c33", "g1", new GameAction.Action.RequestRollback(1)),
+                decoded("game.action.rollback.json").msg());
+        assertEquals(new GameAction("c34", "g1", new GameAction.Action.AutoMana(false)),
+                decoded("game.action.autoMana.json").msg());
+        assertEquals(new GameAction("c35", "g1",
+                        new GameAction.Action.TriggerOrder(GameAction.Action.TriggerOrder.Mode.RESET)),
+                decoded("game.action.triggerOrder.json").msg());
+    }
+
+    @Test
+    void m3AnswerSamplesDecode() throws Exception {
+        assertEquals(new GameAnswer("c21", "g1", 45, new Answer.Picks(List.of("aaa-1", "bbb-2"))),
+                decoded("game.answer.objects.json").msg());
+        assertEquals(new GameAnswer("c22", "g1", 46, new Answer.Amount(7)),
+                decoded("game.answer.number.json").msg());
+        assertEquals(new GameAnswer("c23", "g1", 47, new Answer.Option("Shade")),
+                decoded("game.answer.option.json").msg());
+        assertEquals(new GameAnswer("c24", "g1", 48, new Answer.Pile(1)),
+                decoded("game.answer.pile.json").msg());
+        assertEquals(new GameAnswer("c25", "g1", 49, new Answer.Distribution(List.of(
+                        new Answer.Distribution.Share("0", 3), new Answer.Distribution.Share("1", 1)))),
+                decoded("game.answer.distribution.json").msg());
     }
 
     @Test

@@ -18,6 +18,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -190,9 +191,14 @@ class PromptFsmTest {
     }
 
     @Test
-    void wholeSetSubmissionIsRejectedInM2() {
+    void singleItemWholeSetEntersReplayAndResolvesOnTheNextAsk() {
         presentTargets(true);
-        assertRejected(fsm.answer(1, new Answer.Picks(List.of(CANDIDATE))), ErrorCode.INVALID_ANSWER);
+        assertInstanceOf(PromptFsm.Outcome.ReplayStarted.class,
+                fsm.answer(1, new Answer.Picks(List.of(CANDIDATE))));
+        assertEquals(new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(CANDIDATE))), lastSent());
+        // single-target prompts carry no progress: any next ask resolves the replay silently
+        assertInstanceOf(PromptFsm.Flow.CompletedThenPresent.class,
+                fsm.onDialog(GamePrompt.confirm(99, "Pass anyway?", null, null)));
     }
 
     @Test
@@ -243,5 +249,293 @@ class PromptFsmTest {
     void malformedUuidIsInvalidNotAnException() {
         presentPayMana();
         assertRejected(fsm.answer(1, new Answer.Pick("not-a-uuid")), ErrorCode.INVALID_ANSWER);
+    }
+
+    // ---- chooseAbility ----
+
+    @Test
+    void chooseAbilityPickSendsUuidAndValidatesAgainstOptions() {
+        fsm.present(GamePrompt.chooseAbility(fsm.nextPromptId(), "Choose spell or ability",
+                List.of(GamePrompt.Option.byId(CANDIDATE, "1. Cast Far"))));
+        assertRejected(fsm.answer(1, new Answer.Pick(OTHER)), ErrorCode.INVALID_ANSWER);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Pick(CANDIDATE)));
+        assertEquals(new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(CANDIDATE))), lastSent());
+    }
+
+    // ---- chooseOption ----
+
+    private void presentOption(boolean required) {
+        fsm.present(GamePrompt.chooseOption(fsm.nextPromptId(), "Choose a creature type",
+                List.of(GamePrompt.Option.byKey("Elf", "Elf"),
+                        GamePrompt.Option.byKey("Shade", "Shade")), required));
+    }
+
+    @Test
+    void chooseOptionSendsTheKeyAsString() {
+        presentOption(true);
+        assertRejected(fsm.answer(1, new Answer.Option("Dragon")), ErrorCode.INVALID_ANSWER);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Option("Shade")));
+        assertEquals(new Sent("sendPlayerString", List.of(GAME, "Shade")), lastSent());
+    }
+
+    @Test
+    void chooseOptionCancelSendsEmptyStringOnlyWhenOptional() {
+        presentOption(true);
+        assertRejected(fsm.answer(1, new Answer.Cancel()), ErrorCode.INVALID_ANSWER);
+        presentOption(false);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(2, new Answer.Cancel()));
+        assertEquals(new Sent("sendPlayerString", List.of(GAME, "")), lastSent());
+    }
+
+    // ---- choosePile ----
+
+    @Test
+    void choosePileSendsBooleanTrueForPileZero() {
+        fsm.present(GamePrompt.choosePile(fsm.nextPromptId(), "Choose a pile", List.of(), List.of()));
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Pile(0)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, true)), lastSent());
+        fsm.present(GamePrompt.choosePile(fsm.nextPromptId(), "Choose a pile", List.of(), List.of()));
+        sent.clear();
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(2, new Answer.Pile(1)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, false)), lastSent());
+    }
+
+    @Test
+    void choosePileRejectsOtherIndexes() {
+        fsm.present(GamePrompt.choosePile(fsm.nextPromptId(), "Choose a pile", List.of(), List.of()));
+        assertRejected(fsm.answer(1, new Answer.Pile(2)), ErrorCode.INVALID_ANSWER);
+    }
+
+    // ---- chooseAmount ----
+
+    @Test
+    void chooseAmountSendsIntegerWithinBounds() {
+        fsm.present(GamePrompt.chooseAmount(fsm.nextPromptId(), "Announce X", 0, 20));
+        assertRejected(fsm.answer(1, new Answer.Amount(21)), ErrorCode.INVALID_ANSWER);
+        assertRejected(fsm.answer(1, new Answer.Amount(-1)), ErrorCode.INVALID_ANSWER);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Amount(7)));
+        assertEquals(new Sent("sendPlayerInteger", List.of(GAME, 7)), lastSent());
+    }
+
+    @Test
+    void chooseAmountCannotBeCancelled() {
+        fsm.present(GamePrompt.chooseAmount(fsm.nextPromptId(), "Announce X", 0, 20));
+        assertRejected(fsm.answer(1, new Answer.Cancel()), ErrorCode.INVALID_ANSWER);
+    }
+
+    // ---- distribute ----
+
+    private void presentDistribute(boolean canCancel) {
+        fsm.present(GamePrompt.distribute(fsm.nextPromptId(), "Assign damage among targets", 4, 4,
+                List.of(new GamePrompt.Among("0", "Goblin", 0, 4, 2),
+                        new GamePrompt.Among("1", "Elf", 0, 4, 2)), canCancel));
+    }
+
+    @Test
+    void distributionJoinsAmountsInRowOrder() {
+        presentDistribute(false);
+        // client may send rows in any order; the wire string follows prompt row order
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Distribution(
+                List.of(new Answer.Distribution.Share("1", 3), new Answer.Distribution.Share("0", 1)))));
+        assertEquals(new Sent("sendPlayerString", List.of(GAME, "1 3")), lastSent());
+    }
+
+    @Test
+    void distributionValidatesRowsAndTotals() {
+        presentDistribute(false);
+        // missing row 1
+        assertRejected(fsm.answer(1, new Answer.Distribution(
+                        List.of(new Answer.Distribution.Share("0", 4)))),
+                ErrorCode.INVALID_ANSWER);
+        // rows outside their per-row bounds
+        assertRejected(fsm.answer(1, new Answer.Distribution(
+                        List.of(new Answer.Distribution.Share("0", 5),
+                                new Answer.Distribution.Share("1", -1)))),
+                ErrorCode.INVALID_ANSWER);
+        // sums to 2, needs exactly 4
+        assertRejected(fsm.answer(1, new Answer.Distribution(
+                        List.of(new Answer.Distribution.Share("0", 1),
+                                new Answer.Distribution.Share("1", 1)))),
+                ErrorCode.INVALID_ANSWER);
+    }
+
+    @Test
+    void distributionCancelHonoursCanCancel() {
+        presentDistribute(false);
+        assertRejected(fsm.answer(1, new Answer.Cancel()), ErrorCode.INVALID_ANSWER);
+        presentDistribute(true);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(2, new Answer.Cancel()));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, false)), lastSent());
+    }
+
+    // ---- playerRequest ----
+
+    private static final UUID RELATED = UUID.fromString("00000000-0000-0000-0000-00000000cccc");
+
+    private GamePrompt presentRequest() {
+        GamePrompt p = GamePrompt.playerRequest(fsm.nextPromptId(), "Roll back to turn 3?",
+                "Rollback request", List.of(
+                        GamePrompt.Option.byKey("ADD_PERMISSION_TO_ROLLBACK_TURN", "Allow"),
+                        GamePrompt.Option.byKey("DENY_PERMISSION_TO_ROLLBACK_TURN", "Deny"),
+                        GamePrompt.Option.byKey(PromptFsm.DISMISS_KEY, "Close")));
+        fsm.present(p, RELATED);
+        return p;
+    }
+
+    @Test
+    void playerRequestOptionSendsThePlayerActionWithRelatedUser() {
+        presentRequest();
+        PromptFsm.Outcome.Applied a = assertInstanceOf(PromptFsm.Outcome.Applied.class,
+                fsm.answer(1, new Answer.Option("ADD_PERMISSION_TO_ROLLBACK_TURN")));
+        assertNull(a.revived(), "nothing was parked");
+        assertEquals(new Sent("sendPlayerAction",
+                List.of(mage.constants.PlayerAction.ADD_PERMISSION_TO_ROLLBACK_TURN, GAME, RELATED)), lastSent());
+    }
+
+    @Test
+    void playerRequestDismissSendsNothing() {
+        presentRequest();
+        assertInstanceOf(PromptFsm.Outcome.Applied.class,
+                fsm.answer(1, new Answer.Option(PromptFsm.DISMISS_KEY)));
+        assertTrue(sent.isEmpty(), "dismiss must not touch XMage");
+        assertNull(fsm.pending());
+    }
+
+    @Test
+    void playerRequestRejectsUnofferedActions() {
+        presentRequest();
+        // CONCEDE is a real PlayerAction but was not a button on this dialog
+        assertRejected(fsm.answer(1, new Answer.Option("CONCEDE")), ErrorCode.INVALID_ANSWER);
+    }
+
+    @Test
+    void playerRequestParksAndRevivesThePositionalPrompt() {
+        presentPriority();                      // promptId 1, positional
+        GamePrompt request = GamePrompt.playerRequest(fsm.nextPromptId(), "Allow rollback?",
+                "Rollback request", List.of(GamePrompt.Option.byKey("DENY_PERMISSION_TO_ROLLBACK_TURN", "Deny")));
+        assertEquals(1, fsm.present(request, RELATED).promptId(), "priority prompt superseded");
+        // the positional answer channel still awaits its answer — a stale priority answer stays fenced
+        assertRejected(fsm.answer(1, new Answer.Confirm(false)), ErrorCode.PROMPT_STALE);
+        PromptFsm.Outcome.Applied a = assertInstanceOf(PromptFsm.Outcome.Applied.class,
+                fsm.answer(2, new Answer.Option("DENY_PERMISSION_TO_ROLLBACK_TURN")));
+        assertNotNull(a.revived(), "the parked priority prompt must come back");
+        assertEquals(GamePrompt.Kind.PRIORITY, a.revived().kind());
+        assertEquals(3, a.revived().promptId(), "revival mints a fresh promptId");
+        // and the revived prompt answers normally
+        fsm.present(a.revived());
+        sent.clear();
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(3, new Answer.Confirm(false)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, false)), lastSent());
+    }
+
+    @Test
+    void positionalPromptDropsAStalePark() {
+        presentPriority();
+        presentRequest();                       // parks the priority prompt
+        // a fresh positional ask arrives before the request is answered → park is stale
+        fsm.present(GamePrompt.confirm(fsm.nextPromptId(), "Mulligan?", null, null));
+        PromptFsm.Outcome.Applied a = assertInstanceOf(PromptFsm.Outcome.Applied.class,
+                fsm.answer(3, new Answer.Confirm(true)));
+        assertNull(a.revived(), "the superseded park must not resurface");
+    }
+
+    // ---- compound replay (§8) ----
+
+    private static final String THIRD = "33333333-3333-3333-3333-333333333333";
+
+    private GamePrompt targetsPrompt(long promptId, int chosen, int of) {
+        return GamePrompt.chooseTargets(promptId,
+                "Select target creatures (selected " + chosen + " of " + of + ")",
+                List.of(CANDIDATE, OTHER, THIRD), 1, of, true, null,
+                new GamePrompt.Progress(chosen, of), null);
+    }
+
+    @Test
+    void wholeSetReplaySendsUuidsThenDoneBoolean() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 3));
+        assertInstanceOf(PromptFsm.Outcome.ReplayStarted.class,
+                fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER))));
+        assertTrue(fsm.replaying());
+        // continuation 1: XMage acknowledged the first pick
+        assertInstanceOf(PromptFsm.Flow.Consumed.class, fsm.onDialog(targetsPrompt(99, 1, 3)));
+        // all sent; XMage asks once more → done-boolean
+        PromptFsm.Flow.Completed done = assertInstanceOf(PromptFsm.Flow.Completed.class,
+                fsm.onDialog(targetsPrompt(99, 2, 3)));
+        assertEquals(1, done.promptId());
+        assertEquals(List.of(
+                        new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(CANDIDATE))),
+                        new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(OTHER))),
+                        new Sent("sendPlayerBoolean", List.of(GAME, true))),
+                sent);
+        assertNull(fsm.pending());
+        assertTrue(!fsm.replaying());
+    }
+
+    @Test
+    void replayCompletesSilentlyWhenXmageMovesOn() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 2));
+        assertInstanceOf(PromptFsm.Outcome.ReplayStarted.class,
+                fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER))));
+        assertInstanceOf(PromptFsm.Flow.Consumed.class, fsm.onDialog(targetsPrompt(99, 1, 2)));
+        // max reached — XMage proceeds straight to the next ask
+        GamePrompt next = GamePrompt.confirm(fsm.nextPromptId(), "Pass anyway?", null, null);
+        PromptFsm.Flow.CompletedThenPresent flow = assertInstanceOf(
+                PromptFsm.Flow.CompletedThenPresent.class, fsm.onDialog(next));
+        assertEquals(1, flow.promptId());
+        assertEquals(List.of(
+                        new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(CANDIDATE))),
+                        new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(OTHER)))),
+                sent, "no done-boolean when XMage already moved on");
+    }
+
+    @Test
+    void unadvancedProgressAbortsTheReplay() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 3));
+        fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER)));
+        // XMage rejected the pick: same ask, progress did not advance
+        PromptFsm.Flow.Aborted aborted = assertInstanceOf(PromptFsm.Flow.Aborted.class,
+                fsm.onDialog(targetsPrompt(99, 0, 3)));
+        assertEquals(1, aborted.promptId());
+        assertEquals(1, sent.size(), "only the first UUID was ever sent");
+        assertTrue(!fsm.replaying());
+        assertNull(fsm.pending(), "the aborting prompt is presented by the pump, not the FSM");
+    }
+
+    @Test
+    void unrelatedDialogMidQueueAbortsTheReplay() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 3));
+        fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER)));
+        assertInstanceOf(PromptFsm.Flow.Aborted.class,
+                fsm.onDialog(GamePrompt.confirm(99, "Sacrifice a creature?", null, null)));
+    }
+
+    @Test
+    void answersDuringReplayAreFenced() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 3));
+        fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER)));
+        sent.clear();
+        assertRejected(fsm.answer(1, new Answer.Pick(THIRD)), ErrorCode.PROMPT_STALE);
+    }
+
+    @Test
+    void picksAreValidatedBeforeAnythingIsSent() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 0, 2));
+        assertRejected(fsm.answer(1, new Answer.Picks(List.of())), ErrorCode.INVALID_ANSWER);
+        assertRejected(fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, CANDIDATE))), ErrorCode.INVALID_ANSWER);
+        assertRejected(fsm.answer(1, new Answer.Picks(
+                List.of("44444444-4444-4444-4444-444444444444"))), ErrorCode.INVALID_ANSWER);
+        assertRejected(fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER, THIRD))),
+                ErrorCode.INVALID_ANSWER); // 3 > max 2
+        assertInstanceOf(PromptFsm.Outcome.ReplayStarted.class,
+                fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER))));
+    }
+
+    @Test
+    void progressAlreadyChosenCountsAgainstMax() {
+        fsm.present(targetsPrompt(fsm.nextPromptId(), 2, 3));
+        assertRejected(fsm.answer(1, new Answer.Picks(List.of(CANDIDATE, OTHER))),
+                ErrorCode.INVALID_ANSWER); // 2 chosen + 2 submitted > 3
+        assertInstanceOf(PromptFsm.Outcome.ReplayStarted.class,
+                fsm.answer(1, new Answer.Picks(List.of(CANDIDATE))));
     }
 }

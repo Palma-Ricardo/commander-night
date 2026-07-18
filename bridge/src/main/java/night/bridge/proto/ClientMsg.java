@@ -5,7 +5,8 @@ package night.bridge.proto;
  * reply ({@code ack} or {@code error}) echoes as {@code re} (protocol §3).
  */
 public sealed interface ClientMsg extends Msg
-        permits Hello, LobbyCreate, LobbyJoin, LobbyDeck, LobbyReady, LobbyStart, GameAnswer {
+        permits Hello, LobbyCreate, LobbyJoin, LobbyDeck, LobbyReady, LobbyStart,
+        GameAnswer, GameAction, GameResync {
 
     String id();
 }

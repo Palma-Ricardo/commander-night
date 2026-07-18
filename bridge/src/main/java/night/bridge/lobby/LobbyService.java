@@ -290,8 +290,10 @@ public final class LobbyService implements AutoCloseable {
                         "cannot reach the game server — try again in a moment"));
                 return;
             }
-            coordinator.addSeat(seat.userId, seat.name, session,
-                    registry.sinkFor(seat.userId), config.logBackfill().buffer());
+            String userId = seat.userId;
+            coordinator.addSeat(userId, seat.name, session,
+                    registry.sinkFor(userId), config.logBackfill().buffer(),
+                    config.keyframeEvery(), () -> registry.keyframesOnly(userId));
             recipeSeats.add(new TableRecipe.HumanSeat(session, seat.deck.deck()));
         }
         try {

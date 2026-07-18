@@ -1,0 +1,15 @@
+{
+  "t": "game.prompt",
+  "seq": 902,
+  "gameId": "g1",
+  "promptId": 47,
+  "message": "Assign damage among targets",
+  "kind": "distribute",
+  "min": 4,
+  "canCancel": false,
+  "total": 4,
+  "among": [
+    { "id": "0", "label": "Goblin Guide", "min": 0, "max": 4, "suggested": 2 },
+    { "id": "1", "label": "Monastery Swiftspear", "min": 0, "max": 4, "suggested": 2 }
+  ]
+}

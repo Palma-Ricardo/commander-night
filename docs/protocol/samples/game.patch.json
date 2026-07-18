@@ -1,0 +1,16 @@
+{
+  "t": "game.patch",
+  "seq": 812,
+  "gameId": "g1",
+  "base": 810,
+  "ops": [
+    { "op": "replace", "path": "/turn/step", "value": "UPKEEP" },
+    { "op": "replace", "path": "/turn/priorityPlayerId", "value": "p1" },
+    { "op": "remove", "path": "/players/0/battlefield/2" },
+    { "op": "add", "path": "/players/0/graveyard/1",
+      "value": { "id": "gy-2", "name": "Llanowar Elves", "set": "M19", "number": "314",
+                 "manaCost": "{G}", "manaValue": 1, "types": ["CREATURE"],
+                 "subtypes": ["Elf", "Druid"], "supertypes": [], "colors": ["G"],
+                 "text": ["{T}: Add {G}."], "power": "1", "toughness": "1" } }
+  ]
+}

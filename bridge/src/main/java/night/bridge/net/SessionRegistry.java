@@ -53,6 +53,8 @@ public final class SessionRegistry implements AutoCloseable {
     private final Map<String, Session> byToken = new HashMap<>();
     /** userId → live connection; read from pumps/lobby via {@link #sinkFor}. */
     private final ConcurrentHashMap<String, Conn> liveByUser = new ConcurrentHashMap<>();
+    /** userId → hello asked for stateMode:'keyframes' (§7 debug escape hatch); read by pumps. */
+    private final ConcurrentHashMap<String, Boolean> keyframesOnlyByUser = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     void hello(Conn conn, Hello hello) {
@@ -117,8 +119,14 @@ public final class SessionRegistry implements AutoCloseable {
         session.conn = conn;
         conn.userId(session.userId);
         liveByUser.put(session.userId, conn);
+        keyframesOnlyByUser.put(session.userId, "keyframes".equals(hello.stateMode()));
         conn.send(new Welcome(hello.id(), PROTOCOL_VERSION, session.userId,
                 fresh ? session.token : null, Role.PLAYER, false));
+    }
+
+    /** Whether this user's last hello chose keyframes-only state sync (protocol §7). */
+    public boolean keyframesOnly(String userId) {
+        return Boolean.TRUE.equals(keyframesOnlyByUser.get(userId));
     }
 
     /** 128-bit random session token, base64url — never shown to a human (design §10). */

@@ -1,0 +1,2 @@
+{ "t": "game.answer", "id": "c21", "gameId": "g1", "promptId": 45,
+  "answer": { "type": "objects", "objectIds": ["aaa-1", "bbb-2"] } }
