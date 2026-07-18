@@ -2,6 +2,10 @@ package night.bridge.translate;
 
 import mage.view.GameClientMessage;
 import night.bridge.proto.GamePrompt;
+import night.bridge.proto.state.CombatGroup;
+import night.bridge.proto.state.GameState;
+import night.bridge.proto.state.Permanent;
+import night.bridge.proto.state.Player;
 import org.junit.jupiter.api.Test;
 
 import java.io.Serializable;
@@ -45,10 +49,85 @@ class PromptTranslatorTest {
     @Test
     void priorityWithoutViewHasEmptyPlayable() {
         GamePrompt p = PromptTranslator.priority(3,
-                new GameClientMessage(null, null, "Play spells and abilities"), null);
+                new GameClientMessage(null, null, "Play spells and abilities"), null, null, null);
         assertEquals(GamePrompt.Kind.PRIORITY, p.kind());
         assertTrue(p.playable().isEmpty());
         assertEquals(Boolean.TRUE, p.canPass());
+        assertNull(p.combat());
+    }
+
+    // ---- combat declaration (GAME_SELECT with possibleAttackers/possibleBlockers) ----
+
+    @Test
+    void attackersAskBecomesCombatPriorityWithEmptyPlayable() {
+        UUID elf = UUID.randomUUID();
+        UUID bear = UUID.randomUUID();
+        Map<String, Serializable> options = new HashMap<>();
+        options.put("possibleAttackers", new java.util.ArrayList<>(java.util.List.of(elf, bear)));
+        options.put("specialButton", "All attack");
+        GamePrompt p = PromptTranslator.priority(16,
+                new GameClientMessage(null, options, "Select attackers"), null, null, null);
+        assertEquals(GamePrompt.Kind.PRIORITY, p.kind());
+        assertTrue(p.playable().isEmpty(), "a combat ask is not a cast window");
+        assertEquals(new GamePrompt.Combat(GamePrompt.Combat.ATTACKERS,
+                java.util.List.of(elf.toString(), bear.toString()),
+                java.util.List.of(), "All attack"), p.combat());
+    }
+
+    @Test
+    void blockersAskCarriesNoSpecialButton() {
+        Map<String, Serializable> options = new HashMap<>();
+        options.put("possibleBlockers", new java.util.ArrayList<>(java.util.List.of(UUID.randomUUID())));
+        GamePrompt p = PromptTranslator.priority(17,
+                new GameClientMessage(null, options, "Select blockers"), null, null, null);
+        assertEquals(GamePrompt.Combat.BLOCKERS, p.combat().role());
+        assertNull(p.combat().special());
+        assertTrue(p.combat().declared().isEmpty());
+    }
+
+    @Test
+    void declaredCombatantsComeFromStateFilteredToMyBattlefield() {
+        Map<String, Serializable> options = new HashMap<>();
+        options.put("possibleBlockers", new java.util.ArrayList<>(java.util.List.of(UUID.randomUUID())));
+        // my blocker and another defender's blocker share the combat view
+        GameState state = state(
+                java.util.List.of(player("me", "my-blocker"), player("them", "their-blocker")),
+                java.util.List.of(new CombatGroup(java.util.List.of("atk-1"), "me",
+                        java.util.List.of("my-blocker", "their-blocker"), true)));
+        GamePrompt p = PromptTranslator.priority(18,
+                new GameClientMessage(null, options, "Select blockers"), null, state, "me");
+        assertEquals(java.util.List.of("my-blocker"), p.combat().declared());
+    }
+
+    @Test
+    void declaredAttackersComeFromCombatGroups() {
+        Map<String, Serializable> options = new HashMap<>();
+        options.put("possibleAttackers", new java.util.ArrayList<>(java.util.List.of(UUID.randomUUID())));
+        GameState state = state(
+                java.util.List.of(player("me", "elf-1", "kni-3"), player("them")),
+                java.util.List.of(new CombatGroup(java.util.List.of("kni-3"), "them",
+                        java.util.List.of(), false)));
+        GamePrompt p = PromptTranslator.priority(19,
+                new GameClientMessage(null, options, "Select attackers"), null, state, "me");
+        assertEquals(java.util.List.of("kni-3"), p.combat().declared());
+    }
+
+    private static GameState state(java.util.List<Player> players, java.util.List<CombatGroup> combat) {
+        return new GameState("g1", GameState.Status.ACTIVE, null, players,
+                java.util.List.of(), combat, null, null, null);
+    }
+
+    private static Player player(String id, String... permanentIds) {
+        java.util.List<Permanent> battlefield = new java.util.ArrayList<>();
+        for (String permanentId : permanentIds) {
+            battlefield.add(new Permanent(permanentId, permanentId, null, null, null, 0,
+                    java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                    java.util.List.of(), java.util.List.of(), null, null, null, null, null,
+                    null, null, id, false, null, null, null, null, null, null, null, null));
+        }
+        return new Player(id, id, true, 40, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
+                0, 0, battlefield, java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), null, null, null);
     }
 
     @Test

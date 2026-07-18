@@ -1,0 +1,1 @@
+{"t":"game.prompt","seq":915,"gameId":"g1","promptId":44,"message":"Select attackers","kind":"priority","playable":{},"canPass":true,"combat":{"role":"attackers","candidates":["elf-1","elf-2"],"declared":["kni-3"],"special":"All attack"}}

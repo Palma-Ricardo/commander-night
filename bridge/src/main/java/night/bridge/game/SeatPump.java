@@ -245,8 +245,11 @@ public final class SeatPump implements AutoCloseable {
             }
             case GAME_SELECT -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();
+                // updateState first: a combat ask's declared list reads lastState,
+                // which must be the same combat view the client just received
                 updateState(msg.getGameView());
-                dialog(PromptTranslator.priority(fsm.nextPromptId(), msg, msg.getGameView()));
+                dialog(PromptTranslator.priority(fsm.nextPromptId(), msg, msg.getGameView(),
+                        lastState, playerId == null ? null : playerId.toString()));
             }
             case GAME_TARGET -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();

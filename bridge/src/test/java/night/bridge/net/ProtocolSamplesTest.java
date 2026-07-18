@@ -187,6 +187,15 @@ class ProtocolSamplesTest {
     }
 
     @Test
+    void combatPrioritySampleIsReproducible() throws Exception {
+        assertProduces("game.prompt.priority.combat.json",
+                GamePrompt.priority(44, "Select attackers", Map.of(),
+                                new GamePrompt.Combat(GamePrompt.Combat.ATTACKERS,
+                                        List.of("elf-1", "elf-2"), List.of("kni-3"), "All attack"))
+                        .emitted(915, "g1"));
+    }
+
+    @Test
     void promptDoneSampleIsReproducible() throws Exception {
         assertProduces("game.promptDone.json",
                 new PromptDone(814, "g1", 41, PromptDone.Reason.ANSWERED));

@@ -1,6 +1,7 @@
 package night.bridge.translate;
 
 import mage.choices.Choice;
+import mage.constants.Constants;
 import mage.constants.PlayerAction;
 import mage.players.PlayableObjectStats;
 import mage.players.PlayableObjectsList;
@@ -11,12 +12,18 @@ import mage.view.GameView;
 import mage.view.UserRequestMessage;
 import night.bridge.proto.GamePrompt;
 import night.bridge.proto.state.Card;
+import night.bridge.proto.state.CombatGroup;
+import night.bridge.proto.state.GameState;
+import night.bridge.proto.state.Player;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,8 +52,18 @@ public final class PromptTranslator {
      * lists are package-private), so the mana/play/cast/ability classification
      * is derived from XMage's own ability text conventions. The point of the
      * split is protocol §8's rule: bare mana taps must not read as actions.
+     *
+     * <p>A GAME_SELECT whose options carry possibleAttackers/possibleBlockers is
+     * a combat declaration, not a cast window (HumanPlayer.selectAttackers/
+     * selectBlockers accept nothing but toggles) — the prompt then carries
+     * {@code combat} and an empty playable map (protocol §8).
      */
-    public static GamePrompt priority(long promptId, GameClientMessage msg, GameView view) {
+    public static GamePrompt priority(long promptId, GameClientMessage msg, GameView view,
+                                      GameState state, String myPlayerId) {
+        GamePrompt.Combat combat = combat(msg, state, myPlayerId);
+        if (combat != null) {
+            return GamePrompt.priority(promptId, Html.strip(msg.getMessage()), Map.of(), combat);
+        }
         Map<String, List<GamePrompt.PlayableAction>> playable = new LinkedHashMap<>();
         PlayableObjectsList canPlay = view == null ? null : view.getCanPlayObjects();
         if (canPlay != null) {
@@ -59,6 +76,53 @@ public final class PromptTranslator {
             }
         }
         return GamePrompt.priority(promptId, Html.strip(msg.getMessage()), playable);
+    }
+
+    private static GamePrompt.Combat combat(GameClientMessage msg, GameState state, String myPlayerId) {
+        if (msg.getOptions() == null) {
+            return null;
+        }
+        Serializable attackers = msg.getOptions().get(Constants.Option.POSSIBLE_ATTACKERS);
+        Serializable blockers = msg.getOptions().get(Constants.Option.POSSIBLE_BLOCKERS);
+        if (attackers == null && blockers == null) {
+            return null;
+        }
+        boolean attacking = attackers != null;
+        List<String> candidates = new ArrayList<>();
+        for (Object id : (List<?>) (attacking ? attackers : blockers)) {
+            candidates.add(id.toString());
+        }
+        return new GamePrompt.Combat(
+                attacking ? GamePrompt.Combat.ATTACKERS : GamePrompt.Combat.BLOCKERS,
+                candidates,
+                declared(state, myPlayerId, attacking),
+                option(msg, Constants.Option.SPECIAL_BUTTON));
+    }
+
+    /**
+     * The seat's creatures already in combat — the toggle-out half of the ask.
+     * POSSIBLE_ATTACKERS/BLOCKERS list only what can still be toggled <em>in</em>
+     * (FilterCreatureForCombat excludes attacking creatures), so the current
+     * combatants come from the translated state emitted just before this prompt.
+     * Filtered to this seat's battlefield: with several defending players,
+     * another defender's blockers are in the combat view but not ours to withdraw.
+     */
+    private static List<String> declared(GameState state, String myPlayerId, boolean attacking) {
+        if (state == null || state.combat() == null || myPlayerId == null) {
+            return List.of();
+        }
+        Set<String> mine = new HashSet<>();
+        for (Player p : state.players()) {
+            if (myPlayerId.equals(p.id())) {
+                p.battlefield().forEach(perm -> mine.add(perm.id()));
+            }
+        }
+        Set<String> declared = new LinkedHashSet<>();
+        for (CombatGroup g : state.combat()) {
+            declared.addAll(attacking ? g.attackerIds() : g.blockerIds());
+        }
+        declared.retainAll(mine);
+        return List.copyOf(declared);
     }
 
     private static String classify(String abilityText) {

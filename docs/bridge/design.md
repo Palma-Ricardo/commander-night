@@ -208,6 +208,13 @@ at most one pending prompt; bridge-monotonic `promptId`; answers fenced by `prom
   itself offered.
 - **`payMana` is not compound**: each `GAME_PLAY_MANA` round-trip is its own prompt (remaining
   cost changes every time). One click (`object` / `mana` / `cancel`) per prompt.
+- **Combat declaration is per-toggle** (protocol §8): a `GAME_SELECT` whose options carry
+  `possibleAttackers`/`possibleBlockers` becomes `priority` + `combat` — XMage re-fires the ask
+  after every toggle, so each toggle is its own prompt round trip (a toggle-in on a
+  multi-defender board is followed by a normal "Select defender" `chooseTargets`). Done
+  declaring = boolean of either value (`HumanPlayer` ignores the value); "All attack" =
+  `sendPlayerString("special")`. Never compound: these asks carry no `selected k of n` progress
+  for the replay matcher to key on, so `{type:'objects'}` is rejected there.
 - **Provisional kinds** (`distribute` from `GET_MULTI_AMOUNT`, `PLAY_XMANA` routing): mapped and
   implemented from source per protocol §15/§16 — 21 coverage games never fired them (structural:
   greedy bot always fills max targets, so distribution rides `chooseTargets`; X rides
@@ -309,6 +316,7 @@ what the spike was, promoted to CI.
 | | *M2 done 2026-07-16.* Shipped beyond the letter: `chooseTargets` (one pick per round-trip, §8-style like `payMana`) and `payMana` prompts — an auto-passing seat hits cleanup discards (GAME_TARGET) every game, so priority/confirm alone can't finish the exit criterion. Still M3: remaining 6 prompt kinds, compound `objects` replay, patches/resync, `game.action`. `lobby.start` gained `fillAI` (protocol §5); interactive harness = `mvn -Pharness compile exec:exec`; live tier = `mvn -Plive test` | |
 | M3 | Full prompt vocabulary + FSM (all 11 kinds, compound replay), patches + resync, `game.action` set | Live-integration invariants green over a full game; patch-mode wire size within protocol §7 budget (≈1–3 MB/seat/game) |
 | | *M3 done 2026-07-17.* All ten live prompt kinds + `playerRequest` (park/revive), compound `objects` replay with hostile-script unit tier, RFC 6902 patches (add/remove/replace only) + `game.resync`, `game.action` set (concede/skip/rollback/autoMana/triggerOrder), 17 new corpus samples. Validation: 8/8 full games vs 3 AIs, 138–259 prompts each, 0.8–1.9 MB/seat, keyframes < patches/10. The tier surfaced and fixed the **1.4.60 lost-wakeup race** (§5): answer pacing + ask-keyed nudge watchdog with backoff, live-proven recovering 3–21 wedges/game. Two non-bridge stall classes diagnosed en route: degenerate-board AI think-timeout chains (server-side; test event timeout now 300 s) and a test-harness race that dropped prompts pulled mid-await (stash fix) | |
+| | *Post-M3 gap fix 2026-07-17.* Combat declaration (declare attackers/blockers) never reached the wire: `GAME_SELECT` with `possibleAttackers`/`possibleBlockers` was translated as a bare priority prompt (candidates dropped), the FSM rejected the done-boolean, and protocol v1 had no combat vocabulary at all. 8/8 validation games missed it twice over: the pacifist auto-player never controlled a creature, and XMage skips the ask entirely for a creatureless seat (`Combat.selectAttackers` first-time gate on `getAvailableAttackers`; `selectBlockers` early-returns on zero possible blockers) — and even when the ask fires, a pass (`confirm:false`) is a legal "declare nothing". Now specced (protocol §8 `combat`, §15 rows) and wired through translator/FSM/harness; the live auto-player plays lands, casts (each castable tried once, payMana-cancel bounded), and attacks with one creature per combat, so the toggle → defender-pick → done round-trip is a permanent live invariant (`combatPrompts >= 1` asserted) | |
 | M4 | Multi-human: seat binding, resume/reconnect, idempotency, chat send, `game.over`/rematch | Two-browser game with mid-game refreshes on both sides |
 | M5 | Commander damage scrape, golden-fixture suite, conformance corpus, systemd/caddy deploy docs | A real 4-human friends' night on the deployed host |
 

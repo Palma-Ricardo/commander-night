@@ -60,6 +60,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *   <li>at most one prompt pending — every prompt is promptDone'd before the next;</li>
  *   <li>required target selections are answered whole-set ({@code objects}),
  *       exercising the §8 replay live;</li>
+ *   <li>combat declaration fires and completes: the seat plays lands, casts,
+ *       and attacks with one creature per combat, so `priority`+`combat`
+ *       toggle → defender pick → done round-trips run in every game (the
+ *       pacifist M3 auto-player never held a creature, and XMage skips the
+ *       ask entirely for a creatureless seat — the blind spot that hid the
+ *       combat gap through 8/8 validation games);</li>
  *   <li>no error frames beyond benign PROMPT_STALE races;</li>
  *   <li>the game reaches game.over with a final keyframe first, and total
  *       game.* wire bytes stay within the §7 budget.</li>
@@ -88,6 +94,7 @@ class LiveGameTest {
         int patches;
         int promptsSeen;
         int promptsAnswered;
+        int combatPrompts;
         int logLines;
         long gameBytes;
         String lastStatus;
@@ -166,6 +173,13 @@ class LiveGameTest {
                 }
                 case "game.prompt" -> {
                     promptsSeen++;
+                    if (n.path("combat").isObject()) {
+                        combatPrompts++;
+                        if (!n.path("playable").isEmpty()) {
+                            violations.add("combat prompt " + n.path("promptId").asLong()
+                                    + " carries a non-empty playable map (§8: not a cast window)");
+                        }
+                    }
                     if (pendingPromptId != null) {
                         violations.add("prompt " + n.path("promptId").asLong()
                                 + " arrived while " + pendingPromptId + " still pending");
@@ -394,6 +408,11 @@ class LiveGameTest {
         assertTrue(a.promptsSeen >= 1 && a.promptsAnswered >= 1,
                 "expected at least the mulligan prompt (seen=" + a.promptsSeen
                         + ", answered=" + a.promptsAnswered + ")");
+        // the seat casts creatures now, so combat declaration must fire — a zero
+        // here means the auto-player regressed to pacifism and the combat path
+        // (the M3 blind spot) went unexercised again
+        assertTrue(a.combatPrompts >= 1,
+                "expected at least one combat declaration ask (priority+combat), got 0");
         assertTrue(a.logLines > 10, "expected a real game log, got " + a.logLines + " lines");
         assertTrue(a.sawOver, "final keyframe must carry status:over before game.over");
         assertNotNull(a.gameOver);
@@ -411,14 +430,19 @@ class LiveGameTest {
             assertTrue(playerIds.contains(w.asText()), "winner must be a seated player");
         }
         System.out.printf("[live] game over: %s | patches=%d keyframes=%d prompts=%d/%d "
-                        + "logLines=%d lastSeq=%d gameBytes=%.1fMB resyncs=%d%n",
+                        + "combat=%d logLines=%d lastSeq=%d gameBytes=%.1fMB resyncs=%d%n",
                 a.gameOver.path("reason").asText(), a.patches, a.keyframes,
-                a.promptsAnswered, a.promptsSeen, a.logLines, a.lastSeq,
+                a.promptsAnswered, a.promptsSeen, a.combatPrompts, a.logLines, a.lastSeq,
                 a.gameBytes / 1_000_000.0, resyncsDone);
     }
 
     /**
-     * The auto-player: keep hands, pass priority, never pay mana; required
+     * The auto-player: keep hands, play lands, try casting each castable once
+     * (autoMana on; a payMana ask is cancelled and that object never retried,
+     * so aborted casts can't loop), and attack with one creature per combat —
+     * a creatureless seat never even receives "Select attackers"
+     * (Combat.selectAttackers first-time gate on getAvailableAttackers), which
+     * is how 8/8 pacifist M3 games hid the combat-declaration gap. Required
      * selections are submitted whole-set ({@code objects}) to exercise the §8
      * replay live; the M3 kinds answer first-option/minimum.
      */
@@ -441,7 +465,56 @@ class LiveGameTest {
                 }
                 answer.put("type", "confirm").put("value", yes);
             }
-            case "priority" -> answer.put("type", "confirm").put("value", false);
+            case "priority" -> {
+                JsonNode combat = prompt.path("combat");
+                if (combat.isObject()) {
+                    JsonNode candidates = combat.path("candidates");
+                    boolean attacking = "attackers".equals(combat.path("role").asText());
+                    // one attacker per combat; capped in case an attack cost reverts the
+                    // toggle (declared back to 0 would otherwise re-toggle forever)
+                    if (attacking && candidates.size() > 0 && combat.path("declared").isEmpty()
+                            && repeats.merge("combatToggles", 1, Integer::sum) <= 20) {
+                        answer.put("type", "object").put("objectId", candidates.get(0).asText());
+                    } else {
+                        answer.put("type", "confirm").put("value", true);   // done declaring
+                    }
+                } else {
+                    // lands first (free mana growth), then creature casts (the path to
+                    // combat), then anything else castable — each object tried once
+                    String land = null;
+                    String creature = null;
+                    String other = null;
+                    for (var e : prompt.path("playable").properties()) {
+                        boolean play = false;
+                        boolean cast = false;
+                        for (JsonNode a : e.getValue()) {
+                            play |= "play".equals(a.path("kind").asText());
+                            cast |= "cast".equals(a.path("kind").asText());
+                        }
+                        if (!play && !cast) {
+                            continue;
+                        }
+                        String id = e.getKey();
+                        if (repeats.getOrDefault("tried|" + id, 0) > 0) {
+                            continue;
+                        }
+                        if (play && land == null) {
+                            land = id;
+                        } else if (cast && creature == null && isCreatureInHand(c, id)) {
+                            creature = id;
+                        } else if (cast && other == null) {
+                            other = id;
+                        }
+                    }
+                    String act = land != null ? land : creature != null ? creature : other;
+                    if (act != null) {
+                        repeats.merge("tried|" + act, 1, Integer::sum);
+                        answer.put("type", "object").put("objectId", act);
+                    } else {
+                        answer.put("type", "confirm").put("value", false);
+                    }
+                }
+            }
             case "chooseTargets" -> {
                 boolean required = prompt.path("required").asBoolean();
                 JsonNode candidates = prompt.path("candidates");
@@ -461,7 +534,25 @@ class LiveGameTest {
                     answer.put("type", "cancel");
                 }
             }
-            case "payMana" -> answer.put("type", "cancel");
+            case "payMana" -> {
+                // pay it: one source click per round trip (§8's payMana shape) —
+                // a 3-color deck surfaces PLAY_MANA on most casts because XMage's
+                // auto-payment can't disambiguate multi-color sources. Sources are
+                // canPlayObjects and may include objects that can't contribute to
+                // the remaining cost — XMage then re-asks without tapping anything
+                // (observed live: a {B}{G} remainder looping on the same source),
+                // so rotate through the sources and cancel once each has had a
+                // try. Progress changes the message (remaining shrinks), which
+                // resets the attempt counter.
+                JsonNode sources = prompt.path("sources");
+                int attempt = repeats.merge("pay|" + message, 1, Integer::sum);
+                if (sources.isArray() && sources.size() > 0 && attempt <= sources.size()) {
+                    answer.put("type", "object")
+                            .put("objectId", sources.get((attempt - 1) % sources.size()).asText());
+                } else {
+                    answer.put("type", "cancel");
+                }
+            }
             case "chooseAbility" -> answer.put("type", "object")
                     .put("objectId", prompt.path("options").get(0).path("id").asText());
             case "chooseOption" -> answer.put("type", "option")
@@ -483,5 +574,23 @@ class LiveGameTest {
         }
         System.out.printf("[live] prompt #%d %s '%.60s' -> %s%n", promptId, kind, message, answer);
         c.send("game.answer", Map.of("gameId", gameId, "promptId", promptId, "answer", answer));
+    }
+
+    /** Card-type lookup in the patch-maintained state tree (me.hand carries full views). */
+    private boolean isCreatureInHand(Client c, String objectId) {
+        JsonNode state = c.auditor.applied;
+        if (state == null) {
+            return false;
+        }
+        for (JsonNode card : state.path("me").path("hand")) {
+            if (objectId.equals(card.path("id").asText())) {
+                for (JsonNode type : card.path("types")) {
+                    if ("CREATURE".equals(type.asText())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 }

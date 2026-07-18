@@ -215,7 +215,9 @@ public final class PromptFsm {
                 case Answer.Confirm(boolean value) -> applied(() -> answers.bool(value));
                 default -> invalid("a confirm prompt takes {type:'confirm'}");
             };
-            case PRIORITY -> switch (answer) {
+            case PRIORITY -> pending.combat() != null
+                    ? combatAnswer(pending.combat(), answer)
+                    : switch (answer) {
                 case Answer.Confirm(boolean value) -> value
                         ? invalid("pass priority is {type:'confirm', value:false}")
                         : applied(() -> answers.bool(false));
@@ -289,6 +291,42 @@ public final class PromptFsm {
                 });
                 default -> invalid("playerRequest takes {type:'option'}");
             };
+        };
+    }
+
+    /**
+     * Combat declaration (protocol §8, priority + combat): a pick toggles one
+     * creature in or out of combat, a confirm of EITHER value is "done
+     * declaring" (HumanPlayer.selectAttackers/selectBlockers check only that a
+     * boolean arrived — the value is ignored), and the special button answers
+     * with the literal string XMage keys on. The toggle lists are authoritative
+     * (XMage sent them with the ask), so unlike {@link #pickFrom}'s
+     * empty-means-unenumerated rule, an unknown id is always rejected here —
+     * XMage would silently discard it and re-fire the same ask.
+     */
+    private Outcome combatAnswer(GamePrompt.Combat combat, Answer answer) {
+        return switch (answer) {
+            case Answer.Pick(String objectId) -> {
+                UUID id;
+                try {
+                    id = UUID.fromString(objectId);
+                } catch (IllegalArgumentException e) {
+                    yield invalid("objectId is not a UUID");
+                }
+                if (!combat.candidates().contains(objectId) && !combat.declared().contains(objectId)) {
+                    yield invalid("not a toggleable creature of this " + combat.role() + " declaration");
+                }
+                yield applied(() -> answers.pick(id));
+            }
+            case Answer.Confirm(boolean value) -> applied(() -> answers.bool(value));
+            case Answer.Cancel() -> applied(() -> answers.bool(false));
+            case Answer.Option(String key) ->
+                    combat.special() != null && GamePrompt.Combat.SPECIAL_KEY.equals(key)
+                            ? applied(() -> answers.text(GamePrompt.Combat.SPECIAL_KEY))
+                            : invalid("not an offered option");
+            default -> invalid("combat declaration takes {type:'object'} to toggle, "
+                    + "{type:'confirm'} when done declaring"
+                    + (combat.special() == null ? "" : ", or {type:'option', key:'special'}"));
         };
     }
 

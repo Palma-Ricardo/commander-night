@@ -33,7 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   p                             pass priority
  *   y / n                         answer a confirm
  *   1..n                          pick the numbered candidate/option
- *                                 (on a chooseAmount prompt: the number itself)
+ *                                 (on a chooseAmount prompt: the number itself;
+ *                                 on a combat ask: toggle the creature, done to finish)
  *   take 1 3 4                    submit several numbered candidates at once
  *   split 3 1 0                   distribute amounts, one per numbered row
  *   pile 1 | pile 2               choose a pile
@@ -362,14 +363,33 @@ public final class WsHarness implements WebSocket.Listener {
                 .append(p.path("message").asText());
         switch (p.path("kind").asText()) {
             case "priority" -> {
-                p.path("playable").properties().forEach(e -> {
-                    numbered.add(new Numbered(e.getKey(), "object"));
-                    sb.append("\n  ").append(numbered.size()).append(") ").append(nameOf(e.getKey()));
-                    List<String> texts = new ArrayList<>();
-                    e.getValue().forEach(a -> texts.add(a.path("text").asText()));
-                    sb.append("  — ").append(String.join(" / ", texts));
-                });
-                sb.append("\n  p) pass");
+                JsonNode combat = p.path("combat");
+                if (combat.isObject()) {
+                    for (JsonNode c : combat.path("candidates")) {
+                        numbered.add(new Numbered(c.asText(), "object"));
+                        sb.append("\n  ").append(numbered.size()).append(") ").append(nameOf(c.asText()));
+                    }
+                    for (JsonNode c : combat.path("declared")) {
+                        numbered.add(new Numbered(c.asText(), "object"));
+                        sb.append("\n  ").append(numbered.size()).append(") ").append(nameOf(c.asText()))
+                                .append("  — in combat, pick to withdraw");
+                    }
+                    if (combat.hasNonNull("special")) {
+                        numbered.add(new Numbered("special", "option"));
+                        sb.append("\n  ").append(numbered.size()).append(") [")
+                                .append(combat.path("special").asText()).append(']');
+                    }
+                    sb.append("\n  N toggles a creature; done (or p) finishes declaring");
+                } else {
+                    p.path("playable").properties().forEach(e -> {
+                        numbered.add(new Numbered(e.getKey(), "object"));
+                        sb.append("\n  ").append(numbered.size()).append(") ").append(nameOf(e.getKey()));
+                        List<String> texts = new ArrayList<>();
+                        e.getValue().forEach(a -> texts.add(a.path("text").asText()));
+                        sb.append("  — ").append(String.join(" / ", texts));
+                    });
+                    sb.append("\n  p) pass");
+                }
             }
             case "chooseTargets" -> {
                 for (JsonNode c : p.path("candidates")) {

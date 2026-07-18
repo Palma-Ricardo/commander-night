@@ -150,6 +150,71 @@ class PromptFsmTest {
         assertRejected(fsm.answer(1, new Answer.Confirm(true)), ErrorCode.INVALID_ANSWER);
     }
 
+    // ---- priority: combat declaration ----
+
+    private static final String DECLARED = "33333333-3333-3333-3333-333333333333";
+
+    private void presentCombat(String special) {
+        fsm.present(GamePrompt.priority(fsm.nextPromptId(), "Select attackers", Map.of(),
+                new GamePrompt.Combat(GamePrompt.Combat.ATTACKERS,
+                        List.of(CANDIDATE), List.of(DECLARED), special)));
+    }
+
+    @Test
+    void combatToggleInSendsUuid() {
+        presentCombat("All attack");
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Pick(CANDIDATE)));
+        assertEquals(new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(CANDIDATE))), lastSent());
+    }
+
+    @Test
+    void combatToggleOutOfDeclaredSendsUuid() {
+        presentCombat("All attack");
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Pick(DECLARED)));
+        assertEquals(new Sent("sendPlayerUUID", List.of(GAME, UUID.fromString(DECLARED))), lastSent());
+    }
+
+    @Test
+    void combatRejectsUnknownCreature() {
+        presentCombat("All attack");
+        assertRejected(fsm.answer(1, new Answer.Pick(OTHER)), ErrorCode.INVALID_ANSWER);
+    }
+
+    @Test
+    void combatConfirmTrueIsDoneDeclaring() {
+        presentCombat(null);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Confirm(true)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, true)), lastSent());
+    }
+
+    @Test
+    void combatConfirmFalseIsAlsoDoneDeclaring() {
+        // XMage checks only that a boolean arrived — the pacifist pass stays legal
+        presentCombat(null);
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Confirm(false)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, false)), lastSent());
+    }
+
+    @Test
+    void combatSpecialSendsTheLiteralString() {
+        presentCombat("All attack");
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Option("special")));
+        assertEquals(new Sent("sendPlayerString", List.of(GAME, "special")), lastSent());
+    }
+
+    @Test
+    void combatSpecialRejectedWhenNoButtonWasOffered() {
+        presentCombat(null);
+        assertRejected(fsm.answer(1, new Answer.Option("special")), ErrorCode.INVALID_ANSWER);
+    }
+
+    @Test
+    void combatRejectsWholeSetSubmission() {
+        // combat asks carry no progress for the replay matcher — per-toggle only (§8)
+        presentCombat("All attack");
+        assertRejected(fsm.answer(1, new Answer.Picks(List.of(CANDIDATE))), ErrorCode.INVALID_ANSWER);
+    }
+
     // ---- chooseTargets ----
 
     private void presentTargets(boolean required) {

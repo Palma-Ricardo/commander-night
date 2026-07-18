@@ -14,9 +14,12 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 **Status:** M3 (full prompt vocabulary) done 2026-07-17 — all ten live prompt kinds +
 playerRequest, compound `objects` replay, RFC 6902 patches + game.resync, `game.action` set;
 live-validated 8/8 full games (0.8–1.9 MB/seat). Discovered + fixed the XMage 1.4.60
-lost-wakeup race (design.md §5: answer pacing + nudge watchdog). Next: M4 (multi-human — seat
-binding, resume/reconnect, idempotency, chat send, game.over/rematch). Milestone table in
-design.md §14.
+lost-wakeup race (design.md §5: answer pacing + nudge watchdog). Post-M3 gap fix: combat
+declaration (declare attackers/blockers) — protocol §8 `priority.combat`, one toggle per
+round trip; the 8/8 runs missed it because XMage never asks a creatureless seat and the
+pacifist auto-player never cast (it now plays/casts/attacks, combat asserted live). Next: M4
+(multi-human — seat binding, resume/reconnect, idempotency, chat send, game.over/rematch).
+Milestone table in design.md §14.
 
 ## Layout
 
