@@ -52,11 +52,18 @@ export interface NightSnapshot {
 }
 
 declare global {
-  interface Window { __night?: { snapshot(): NightSnapshot } }
+  interface Window {
+    __night?: {
+      snapshot(): NightSnapshot;
+      /** C5 layout harness (temporary): the full keyframe, for fixture capture. */
+      dumpState(): unknown;
+    };
+  }
 }
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   window.__night = {
+    dumpState: () => appStores.game.getState().state ?? null,
     snapshot: () => {
       const g = appStores.game.getState();
       const p = appStores.prompt.getState();
