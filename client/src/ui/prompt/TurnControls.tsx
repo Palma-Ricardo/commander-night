@@ -127,7 +127,7 @@ function ConcedeControl() {
     <>
       <button className="concede-btn" onClick={() => { setText(''); setOpen(true); }}>Concede</button>
       {open && (
-        <Modal title="Concede the game?" onClose={() => setOpen(false)}>
+        <Modal title="Concede the game?" onClose={() => setOpen(false)} suspendsShortcuts>
           <p className="modal-msg">This cannot be undone. Type <b>concede</b> to confirm.</p>
           <input
             autoFocus

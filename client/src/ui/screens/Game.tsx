@@ -115,7 +115,7 @@ export function Game() {
       <LogPanel state={state} />
 
       {browse !== null && (
-        <Modal title={browse.title} onClose={() => setBrowse(null)}>
+        <Modal title={browse.title} onClose={() => setBrowse(null)} suspendsShortcuts>
           <CardGrid cards={browse.cards} browsable />
         </Modal>
       )}
