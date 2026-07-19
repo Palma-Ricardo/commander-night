@@ -12,11 +12,12 @@ import { KEYS, memoryKV, type KV } from '../src/stores/storage';
 let kv: KV;
 let stores: Stores;
 let sent: ClientMsg[];
+let connects: number;
 let scripted: (cmd: ClientMsg) => CommandReply | Promise<CommandReply>;
 let actions: Actions;
 
 const fakeManager: SocketManager = {
-  connect() {},
+  connect() { connects++; },
   disconnect() {},
   resyncNow() {},
   dispose() {},
@@ -30,6 +31,7 @@ beforeEach(() => {
   kv = memoryKV();
   stores = createStores(kv);
   sent = [];
+  connects = 0;
   scripted = cmd => ({ t: 'ack', re: cmd.id });
   actions = createActions(stores, fakeManager, kv);
 });
@@ -95,6 +97,8 @@ describe('leaveGame (play again, protocol §5)', () => {
       over: { t: 'game.over', gameId: 'g1', seq: 42, reason: 'x', winnerPlayerIds: [], finalState: true },
     });
     stores.log.setState({ entries: [{ t: 'game.log', gameId: 'g1', seq: 1, ts: 0, kind: 'game', text: 'hi' }] });
+    stores.session.setState({ resume: { gameId: 'g1', lastSeq: 42 } });
+    kv.set(KEYS.resume, JSON.stringify({ gameId: 'g1', lastSeq: 42 }));
 
     actions.leaveGame();
 
@@ -103,6 +107,8 @@ describe('leaveGame (play again, protocol §5)', () => {
     expect(stores.prompt.getState().pending).toBeUndefined();
     expect(stores.lobby.getState().state).toBeUndefined();
     expect(stores.session.getState()).toMatchObject({ token: 't-1', userId: 'u1' });
+    expect(stores.session.getState().resume).toBeUndefined();   // deliberate walk-away (§10)
+    expect(kv.get(KEYS.resume)).toBeNull();
     expect(kv.get(KEYS.name)).toBe('Ricardo');
     expect(kv.get(KEYS.deck)).toBe('1 [C21:263] Command Tower');
   });
@@ -145,6 +151,124 @@ describe('turn-control actions (§9 game.action)', () => {
     stores.game.setState({ state: undefined });
     await actions.setSkip('stack');
     await actions.concede();
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('chat (§8, protocol §10)', () => {
+  beforeEach(() => {
+    stores.game.setState({ state: { gameId: 'g1' } as never });
+  });
+
+  it('trims and sends; renders nothing locally (echo-only, §4)', async () => {
+    await actions.sendChat('  gg wp  ');
+    expect(sent[0]).toMatchObject({ t: 'chat.send', gameId: 'g1', text: 'gg wp' });
+    expect(stores.log.getState().entries).toEqual([]);
+  });
+
+  it('no-ops on empty text or outside a game', async () => {
+    await actions.sendChat('   ');
+    stores.game.setState({ state: undefined });
+    await actions.sendChat('hello?');
+    expect(sent).toEqual([]);
+  });
+
+  it('markChatRead zeroes the unread badge', () => {
+    stores.log.setState({ unreadChat: 3 });
+    actions.markChatRead();
+    expect(stores.log.getState().unreadChat).toBe(0);
+  });
+});
+
+describe('rematch flow (§10 — pure client convention)', () => {
+  beforeEach(() => {
+    actions.setDisplayName('Ricardo');
+    actions.setDeckText('1 [C21:263] Command Tower');
+    stores.game.setState({ state: { gameId: 'g-old' } as never });
+    stores.session.setState({ resume: { gameId: 'g-old', lastSeq: 99 } });
+    kv.set(KEYS.resume, JSON.stringify({ gameId: 'g-old', lastSeq: 99 }));
+    stores.lobby.setState({ state: { t: 'lobby.state', code: 'OLD123', hostUserId: 'u1', seats: [] } });
+    scripted = cmd => {
+      if (cmd.t === 'lobby.create') {
+        queueMicrotask(() => stores.lobby.setState({
+          state: { t: 'lobby.state', code: 'NEW456', hostUserId: 'u1', seats: [] },
+        }));
+      }
+      return { t: 'ack', re: cmd.id };
+    };
+  });
+
+  it('host: create → join → "Rematch → CODE" into the old game chat → fresh stores, lobby kept, deck resubmitted', async () => {
+    const code = await actions.rematch();
+    expect(code).toBe('NEW456');
+    expect(sent.map(c => c.t)).toEqual(['lobby.create', 'lobby.join', 'chat.send', 'lobby.deck']);
+    expect(sent[2]).toMatchObject({ gameId: 'g-old', text: 'Rematch → NEW456' });
+    expect(stores.game.getState().state).toBeUndefined();
+    expect(stores.lobby.getState().state?.code).toBe('NEW456');
+    expect(stores.session.getState().resume).toBeUndefined();   // no resume into the dead game
+    expect(kv.get(KEYS.resume)).toBeNull();
+  });
+
+  it('a failed chat announce is surfaced, not swallowed — the host must know to read the code out', async () => {
+    scripted = cmd => {
+      if (cmd.t === 'lobby.create') {
+        queueMicrotask(() => stores.lobby.setState({
+          state: { t: 'lobby.state', code: 'NEW456', hostUserId: 'u1', seats: [] },
+        }));
+      }
+      if (cmd.t === 'chat.send') {
+        return { t: 'error', re: cmd.id, code: 'UNKNOWN_GAME', message: 'game torn down' };
+      }
+      return { t: 'ack', re: cmd.id };
+    };
+    const code = await actions.rematch();     // still succeeds — the lobby exists
+    expect(code).toBe('NEW456');
+    expect(stores.notices.getState().toasts).toMatchObject([
+      { kind: 'error', text: expect.stringContaining('NEW456') as unknown as string },
+    ]);
+  });
+
+  it('guest: joinRematch joins, waits for the lobby, resets keeping it, and resubmits the deck', async () => {
+    scripted = cmd => {
+      if (cmd.t === 'lobby.join') {
+        queueMicrotask(() => stores.lobby.setState({
+          state: { t: 'lobby.state', code: 'NEW456', hostUserId: 'u1', seats: [] },
+        }));
+      }
+      return { t: 'ack', re: cmd.id };
+    };
+    await actions.joinRematch('NEW456');
+    expect(sent.map(c => c.t)).toEqual(['lobby.join', 'lobby.deck']);
+    expect(sent[0]).toMatchObject({ code: 'NEW456', displayName: 'Ricardo' });
+    expect(stores.game.getState().state).toBeUndefined();
+    expect(stores.lobby.getState().state?.code).toBe('NEW456');
+    expect(stores.session.getState().resume).toBeUndefined();
+  });
+});
+
+describe('returnToGame (§10 rejoin affordance)', () => {
+  it('ready session: resyncs the anchored game — the keyframe re-opens the screen', async () => {
+    stores.connection.setState({ status: 'ready' });
+    stores.session.setState({ resume: { gameId: 'g1', lastSeq: 41 } });
+    await actions.returnToGame();
+    expect(sent[0]).toMatchObject({ t: 'game.resync', gameId: 'g1' });
+  });
+
+  it('a dead game drops the anchor so the affordance stops dangling', async () => {
+    stores.connection.setState({ status: 'ready' });
+    stores.session.setState({ resume: { gameId: 'g1', lastSeq: 41 } });
+    kv.set(KEYS.resume, JSON.stringify({ gameId: 'g1', lastSeq: 41 }));
+    scripted = cmd => ({ t: 'error', re: cmd.id, code: 'UNKNOWN_GAME', message: 'gone' });
+    await expect(actions.returnToGame()).rejects.toThrow('gone');
+    expect(stores.session.getState().resume).toBeUndefined();
+    expect(kv.get(KEYS.resume)).toBeNull();
+  });
+
+  it('not ready: reconnects instead (hello carries the anchor)', async () => {
+    stores.connection.setState({ status: 'idle' });
+    stores.session.setState({ resume: { gameId: 'g1', lastSeq: 41 } });
+    await actions.returnToGame();
+    expect(connects).toBe(1);
     expect(sent).toEqual([]);
   });
 });

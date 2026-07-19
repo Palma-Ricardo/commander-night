@@ -240,7 +240,7 @@ describe('resume failure (§5)', () => {
   });
 });
 
-describe('command pipeline', () => {
+describe('command pipeline (§5: retry-once-same-id, park-and-flush)', () => {
   const ctx = defaultContext();
 
   it('resolves a command with its ack', async () => {
@@ -252,23 +252,89 @@ describe('command pipeline', () => {
     await expect(reply).resolves.toMatchObject({ t: 'ack', re: cmd.id });
   });
 
-  it('rejects on the 8 s timeout', async () => {
+  it('retries once with the SAME id after 8 s on an open socket, then resolves on the replayed ack', async () => {
+    manager.connect();
+    openAndWelcome(lastWs());
+    const cmd = chatSend(ctx, { gameId: 'g1', text: 'hi' });
+    const reply = manager.send(cmd);
+    expect(lastWs().sent).toHaveLength(2);   // hello + cmd
+
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(lastWs().sent).toHaveLength(3);
+    expect(lastWs().sent[2]).toBe(lastWs().sent[1]);   // byte-identical resend — the idempotency key
+
+    lastWs().receive({ t: 'ack', re: cmd.id });
+    await expect(reply).resolves.toMatchObject({ t: 'ack', re: cmd.id });
+  });
+
+  it('rejects after the retry also times out (16 s total)', async () => {
     manager.connect();
     openAndWelcome(lastWs());
     const reply = manager.send(chatSend(ctx, { gameId: 'g1', text: 'hi' }));
     const assertion = expect(reply).rejects.toThrow('timed out');
-    await vi.advanceTimersByTimeAsync(8000);
+    await vi.advanceTimersByTimeAsync(16000);
     await assertion;
   });
 
-  it('rejects immediately when the socket is not open, and fails in-flight commands on drop', async () => {
+  it('parks in-flight and newly-sent commands across a drop and flushes them in order after resume', async () => {
+    manager.connect();
+    openAndWelcome(lastWs());
+    const c1 = chatSend(ctx, { gameId: 'g1', text: 'one' });
+    const c2 = chatSend(ctx, { gameId: 'g1', text: 'two' });
+    const r1 = manager.send(c1);
+    lastWs().serverClose(1006);   // c1 parks — no rejection
+
+    const r2 = manager.send(c2);  // sent while dropped → parked too
+    expect(stores.connection.getState().status).toBe('dropped');
+
+    await vi.advanceTimersByTimeAsync(1000);   // reconnect ladder rung 1
+    const ws2 = lastWs();
+    openAndWelcome(ws2);
+
+    // hello first, then the parked commands in send order, same ids (§14 LRU)
+    expect(ws2.sent.map(s => (JSON.parse(s) as { t: string }).t))
+      .toEqual(['session.hello', 'chat.send', 'chat.send']);
+    expect((JSON.parse(ws2.sent[1]!) as { id: string }).id).toBe(c1.id);
+    expect((JSON.parse(ws2.sent[2]!) as { id: string }).id).toBe(c2.id);
+
+    ws2.receive({ t: 'ack', re: c1.id });
+    ws2.receive({ t: 'ack', re: c2.id });
+    await expect(r1).resolves.toMatchObject({ t: 'ack', re: c1.id });
+    await expect(r2).resolves.toMatchObject({ t: 'ack', re: c2.id });
+  });
+
+  it('a command whose timeout fires while the socket is down parks instead of rejecting, and flushes on resume', async () => {
+    manager.connect();
+    openAndWelcome(lastWs());
+    const cmd = chatSend(ctx, { gameId: 'g1', text: 'hi' });
+    const reply = manager.send(cmd);
+    lastWs().serverClose(1006);
+
+    await vi.advanceTimersByTimeAsync(9000);   // past the original arm — parked, silent
+    const ws2 = lastWs();
+    openAndWelcome(ws2);
+    expect((JSON.parse(ws2.sent[1]!) as { id: string }).id).toBe(cmd.id);
+    ws2.receive({ t: 'ack', re: cmd.id });
+    await expect(reply).resolves.toMatchObject({ t: 'ack', re: cmd.id });
+  });
+
+  it('rejects immediately from terminal states (idle), and rejects parked commands on bumped', async () => {
     await expect(manager.send(chatSend(ctx, { gameId: 'g1', text: 'hi' }))).rejects.toThrow('not connected');
 
     manager.connect();
     openAndWelcome(lastWs());
     const reply = manager.send(chatSend(ctx, { gameId: 'g1', text: 'hi' }));
-    const assertion = expect(reply).rejects.toThrow('socket closed');
-    lastWs().serverClose(1006);
+    const assertion = expect(reply).rejects.toThrow('another tab');
+    lastWs().serverClose(1008);   // bumped: no reconnect is coming (§10)
+    await assertion;
+  });
+
+  it('rejects in-flight commands on manual disconnect', async () => {
+    manager.connect();
+    openAndWelcome(lastWs());
+    const reply = manager.send(chatSend(ctx, { gameId: 'g1', text: 'hi' }));
+    const assertion = expect(reply).rejects.toThrow('disconnected');
+    manager.disconnect();
     await assertion;
   });
 });

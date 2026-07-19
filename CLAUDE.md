@@ -12,18 +12,36 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** Client C3 done 2026-07-18 — patch mode is the default (`state/apply.ts`: base-check
-→ resync gate, fast-json-patch; dev keyframe-verify deep-equals every backstop keyframe — the
-bridge now emits the backstop *after* the 100th patch with the same tree at the next seq,
-v1.md §7, so the probe is exact), all 11 prompt kinds polished (combat toggle badges/pulse,
-chooseAbility popover anchored to its source card), §9 turn controls (skip menu from `me.skip`,
-auto-mana ack-confirmed, rollback gated, trigger-order reset) + keyboard shortcuts
-(`state/shortcuts.ts` resolver), and the Playwright auto-player (`e2e/pw/autoplayer.spec.ts`)
-**live-verified**: full game vs 3 AIs through visible DOM to `game.over` in patch mode —
-2,672 patches, 26 keyframe-verifies, 0 divergences, 0 resyncs, ≥1 combat declared through the
-board, no dead-end prompts. Auto-player policy notes: pay payMana before cancelling (cancel-first
-never resolves a spell) and answer the "mana will be lost. Pass anyway?" confirm with Yes.
-Next: C4 (multi-human resilience). Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
+**Status:** Client C4 done 2026-07-19 — multi-human resilience, **live-verified** end to end
+(`e2e/pw/resilience.spec.ts`, 10.2 min): two browsers, mid-game reload on *both* seats with the
+same `promptId` re-rendered after resume, chat both ways with the unread badge, a bumped
+round-trip (second tab steals the seat → takeover screen → *Use here* steals it back), a
+cleared-storage **recovery join** that reclaims a live seat by name and lands on that exact
+pending prompt, game 1 to `game.over` on every seat, then a **rematch into a second completed
+game**. `net/pending` is now §5-complete (retry-once-same-id on the 8 s timeout, park on drop,
+in-order flush on `welcome`); chat panel, toasts, fatal modal, reconnect/upstream banners, and
+the post-game banner all landed. The C3 auto-player loop moved to the shared `e2e/pw/driver.ts`.
+Three things this milestone learned the hard way, all now fixed + regression-tested:
+(1) **post-game chat does not relay at all** on 1.4.60 — XMage stops delivering `CHATMESSAGE`
+once `GAME_OVER` fires, so a line posted after the banner reaches nobody, *not even its sender*,
+though protocol §10/§14 and client §10 all promise otherwise (in-game chat is fine). The §10
+rematch announce is therefore best-effort (failure → toast naming the code) and the banner's
+rematch code is always typeable. **Open bridge-side fix:** fan post-game chat out to the seats'
+sinks instead of relying on XMage's echo.
+(2) **seat identity after a recovery join** — protocol §5 has the re-bound session adopt the
+seat's `userId`, but the bridge swaps it silently, so the client stayed on its stale welcome id
+and was invisible to itself in every *later* lobby (ready toggle dead forever). `net/route` now
+reconciles on each `lobby.state` by display name. The game screen masks this bug entirely — it
+renders from seat-scoped `state.me` and never reads `userId`.
+(3) **dead-end `chooseTargets`** — candidates in a pile zone (e.g. "Select a nonland card from
+<opponent> graveyard") highlighted nothing and exposed zero enabled controls; the dock now
+offers unreachable candidates itself (`selectors.isBoardReachable`).
+Auto-player policy notes: pay payMana before cancelling (cancel-first never resolves a spell),
+answer the "mana will be lost. Pass anyway?" confirm with Yes, and never re-click a pool
+colour/source that failed to shrink `remaining` — payMana re-asks mint a **fresh promptId** each
+time, so progress is fingerprinted on the remaining cost, not the prompt id. E2E phases are
+sequenced on *events*, never wall-clock: AI-pace games have ended in as little as 3 min.
+Next: C5 (friends'-night readiness). Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
 (`translate/CommanderDamage`, pinned to the 1.4.60 watcher strings, canary WARN on drift,
 fields land per protocol §6; watcher lines no longer leak into card text), callback tap
 productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,

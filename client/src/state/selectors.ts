@@ -3,7 +3,7 @@
 // board affordances (§7: all object affordances derive from the pending
 // prompt, never from state). Pure functions — headless-testable, React-free.
 
-import type { Card, GameState, Id, Player, Step } from '../protocol/protocol';
+import type { Card, GameState, Id, LogEntry, Player, Step } from '../protocol/protocol';
 import type { PromptStoreState } from '../stores/prompt';
 
 // ── players ──────────────────────────────────────────────────────────────────
@@ -149,4 +149,48 @@ export function affordanceFor(prompt: PromptStoreState, objectId: Id): Affordanc
     default:
       return undefined;
   }
+}
+
+/** §10 rematch convention (zero protocol surface): the host posts
+ *  "Rematch → CODE" into the still-open game chat; every client
+ *  pattern-matches its own chat rendering. Latest line wins; tolerant of the
+ *  arrow surviving XMage's chat round-trip imperfectly. */
+export function rematchCode(entries: LogEntry[]): string | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.kind !== 'chat') continue;
+    const m = /^Rematch\b\W*([A-Z0-9]{4,12})\s*$/.exec(e.text.trim());
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+/** Zones the board renders as directly clickable objects. Graveyard and exile
+ *  are face piles that only render inside a browser modal (§8), and an id can
+ *  be absent from the seat's view entirely — targets living there are
+ *  unreachable by clicking, so the prompt dock has to offer them itself
+ *  (§13's no-dead-end invariant; live-caught 2026-07-19 by "Select a nonland
+ *  card from <opponent> graveyard", which rendered zero enabled controls). */
+export function isBoardReachable(state: GameState, id: Id): boolean {
+  for (const p of state.players) {
+    if (p.battlefield.some(c => c.id === id)) return true;
+    if (p.commandZone.some(c => c.id === id)) return true;
+    // attachments render nested but are themselves entries in `battlefield`
+  }
+  if (state.me.hand.some(c => c.id === id)) return true;
+  if (state.stack.some(s => s.id === id || s.card?.id === id)) return true;
+  for (const w of [...(state.revealed ?? []), ...(state.lookedAt ?? [])]) {
+    if (w.cards.some(c => c.id === id)) return true;
+  }
+  return false;
+}
+
+/** Candidates the board cannot offer, paired with whatever the state knows
+ *  about them (undefined → render the id stub; the answer still works). */
+export function unreachableCandidates(
+  state: GameState, candidates: readonly Id[],
+): { id: Id; card: Card | undefined; label: string }[] {
+  return candidates
+    .filter(id => !isBoardReachable(state, id))
+    .map(id => ({ id, card: findObject(state, id), label: targetName(state, id) }));
 }

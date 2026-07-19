@@ -6,9 +6,10 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { decode } from '../src/protocol/codec';
-import type { GameState, Prompt, StateKeyframe } from '../src/protocol/protocol';
+import type { GameState, LogEntry, Prompt, StateKeyframe } from '../src/protocol/protocol';
 import {
-  affordanceFor, combatLines, commanderDamageRows, findObject, me, opponents, statusLine, targetName,
+  affordanceFor, combatLines, commanderDamageRows, findObject, isBoardReachable, me, opponents,
+  rematchCode, statusLine, targetName, unreachableCandidates,
 } from '../src/state/selectors';
 import { emptyScratch, type PromptStoreState } from '../src/stores/prompt';
 
@@ -140,5 +141,52 @@ describe('affordanceFor (§7)', () => {
 
   it('no pending prompt → no affordances anywhere', () => {
     expect(affordanceFor(scratchWith({}), 'perm-1')).toBeUndefined();
+  });
+});
+
+describe('rematchCode (§10 rematch convention)', () => {
+  const chat = (seq: number, text: string, kind: 'chat' | 'game' = 'chat'): LogEntry =>
+    ({ t: 'game.log', seq, gameId: 'g1', ts: 0, kind, text, playerId: 'p2' });
+
+  it('matches the posted line, latest wins, tolerant of arrow mangling', () => {
+    expect(rematchCode([chat(1, 'Rematch → AB12CD')])).toBe('AB12CD');
+    expect(rematchCode([chat(1, 'Rematch -> AB12CD')])).toBe('AB12CD');
+    expect(rematchCode([chat(1, 'Rematch AB12CD ')])).toBe('AB12CD');
+    expect(rematchCode([chat(1, 'Rematch → OLD111'), chat(2, 'Rematch → NEW222')])).toBe('NEW222');
+  });
+
+  it('ignores non-chat lines, mid-sentence mentions, and plain chatter', () => {
+    expect(rematchCode([chat(1, 'Rematch → AB12CD', 'game')])).toBeUndefined();
+    expect(rematchCode([chat(1, 'shall we Rematch → AB12CD?')])).toBeUndefined();
+    expect(rematchCode([chat(1, 'rematch anyone?')])).toBeUndefined();
+    expect(rematchCode([])).toBeUndefined();
+  });
+});
+
+// Live-caught 2026-07-19: "Select a nonland card from ai_2 graveyard" rendered
+// a required chooseTargets whose only candidates sat in a graveyard — a face
+// pile (§8), so nothing highlighted and the dock exposed zero enabled
+// controls. The dock now offers unreachable candidates itself (§13).
+describe('board reachability (no-dead-end targets)', () => {
+  it('battlefield, my hand, command zone and stack are clickable on the board', () => {
+    const s = state();
+    for (const id of ['perm-1', 'hand-1', 'cmd-1', 'stack-1']) {
+      expect(isBoardReachable(s, id), id).toBe(true);
+    }
+  });
+
+  it('graveyard cards and ids outside this seat’s view are not', () => {
+    const s = state();
+    expect(isBoardReachable(s, 'gy-1')).toBe(false);
+    expect(isBoardReachable(s, 'nobody-knows-this-id')).toBe(false);
+  });
+
+  it('unreachableCandidates strands exactly the pile/unknown ones, labelled', () => {
+    const s = state();
+    const stranded = unreachableCandidates(s, ['perm-1', 'gy-1', 'ghost-9']);
+    expect(stranded.map(x => x.id)).toEqual(['gy-1', 'ghost-9']);
+    expect(stranded[0]!.card?.id).toBe('gy-1');
+    expect(stranded[0]!.label).not.toBe('');
+    expect(stranded[1]!.card).toBeUndefined();   // unknown id still answerable
   });
 });

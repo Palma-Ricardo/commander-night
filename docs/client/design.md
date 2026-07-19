@@ -237,6 +237,14 @@ question (protocol §16.4) — v1 renders the current face the server sends.
   prefills and focuses join. Below: rejoin affordances for a live resume anchor ("Return to
   game") and the recovery path ("Rejoin as <name>" → `lobby.join{code, displayName}` — the
   lost-token flow, protocol §5/§14 — for the friend whose browser ate localStorage).
+  **Seat-identity adoption (C4):** protocol §5 has the re-bound session adopt the *seat's*
+  `userId` and abandon the one its fresh `welcome` carried, but the bridge performs that swap
+  silently — no message announces it. `net/route` therefore reconciles on every `lobby.state`,
+  matching by display name exactly as the bridge did (names are unique within a lobby). Skipping
+  this makes a recovered seat invisible to itself in every *later* lobby — `seats.find(s =>
+  s.userId === userId)` misses, the ready toggle never enables, and the player can never start
+  another game. The game screen hides the bug completely, since it renders from the seat-scoped
+  `state.me` and never consults `userId`; it surfaced only in the C4 rematch flow.
 - **Lobby**: the code, huge and copyable (+ copy-invite-URL button); seat list from
   `lobby.state` (name, deck validity, `problems[]` per line, ready); deck textarea (`.dck` or
   plain list) submitted via `lobby.deck`, acked diagnostics rendered inline, text persisted
@@ -245,9 +253,20 @@ question (protocol §16.4) — v1 renders the current face the server sends.
 - **Game** → §8. **Post-game**: `game.over` banner (winners, reason) over the final keyframe —
   board stays browsable, chat stays live through the bridge's teardown grace (bridge §6).
 - **Rematch** (pure client convention, zero protocol surface): host's *Rematch* button runs
-  `lobby.create`, then posts `Rematch → <CODE>` into the still-open game chat; every client
-  pattern-matches its own chat rendering and shows *Join rematch* (auto join + re-submit the
+  `lobby.create`, then posts `Rematch → <CODE>` into the game chat; every client
+  pattern-matches its own chat rendering and prefills *Join rematch* (auto join + re-submit the
   persisted deck). Exactly the automation bridge §6 anticipated when seat pre-fill was cut.
+  **Post-game chat does not actually relay (live-probed 2026-07-18, C4):** XMage 1.4.60 stops
+  delivering `CHATMESSAGE` for a game's chat once `GAME_OVER` fires, so a line posted after the
+  banner reaches nobody — not even its own sender — even though protocol §10 ("valid … until
+  post-game teardown"), protocol §14 ("its chat open" through the grace period) and this
+  section all promise otherwise. In-game chat is unaffected. Consequence for v1: the announce
+  is **best-effort** (a failed one raises the §11 toast naming the code, so the host knows to
+  read it out) and the rematch code is **always typeable** in the post-game banner — the path a
+  table at one house uses anyway. The field prefills from chat, so whenever the bridge does
+  relay post-game chat the one-click path returns with no client change. Closing the gap is a
+  **bridge** fix (fan the line out to the seats' sinks itself instead of relying on XMage's
+  echo) and is deliberately left out of C4's client scope.
 - **Bumped** (second tab took the token — bridge §10 single-tab rule): full-screen notice with
   *Use here* (reconnect, bumping back). No auto-reconnect loop from this state: two tabs
   auto-bumping each other is a fork bomb made of WebSockets.
@@ -298,7 +317,7 @@ is demonstrable end-to-end, per the bridge tradition.
 | C1 | Connection + lobby: socket FSM, token persistence, home/lobby screens, deck upload with inline diagnostics, `#/join` deep link, fillAI start; keyframes mode | Two browsers create/join a lobby on the real bridge, submit decks, host starts with AI fill; both land on a stub game screen with live keyframes rendering as raw state |
 | C2 | **First playable game**: board/hand/stack/log rendering, status line, prompt dock with `confirm`/`priority`/`chooseTargets`/`payMana` (the set a real game actually needs — bridge M2 learned cleanup discards force targets), Scryfall images + text-frame fallback | A human plays a full game against 3 AIs **in the browser** to `game.over` — the client-side mirror of bridge M2's criterion |
 | C3 | Full vocabulary + patches: all 11 prompt kinds incl. combat declaration UI, patch mode + resync gate, turn controls (`game.action` set), keyboard shortcuts, Playwright auto-player | Auto-player finishes a patch-mode game through the DOM with ≥1 combat declared; no-dead-end-prompt invariant and dev keyframe-verify green over the whole game |
-| C4 | Multi-human resilience: resume UX, chat panel, retry/idempotent flush, recovery join, bumped screen, rematch flow, post-game screen | Two-browser Playwright game with mid-game reloads on both sides (same-promptId re-render asserted), chat both ways, recovery-join takeover from a cleared-storage context, rematch into a second completed game |
+| C4 ✅ | Multi-human resilience: resume UX, chat panel, retry/idempotent flush, recovery join, bumped screen, rematch flow, post-game screen | **Met 2026-07-19** (`e2e/pw/resilience.spec.ts`, 10.2 min): two-browser game, mid-game reload on both sides with the same `promptId` re-rendered, chat both ways + unread badge, bumped round-trip, recovery-join takeover from a cleared-storage context onto the exact pending prompt, rematch into a second completed game. Found and fixed en route: dead-end `chooseTargets` on pile-zone candidates (§7), silent seat-identity loss after a recovery join (§10), and the upstream post-game chat gap (§10) |
 | C5 | Friends'-night readiness: image cache warm-up, layout pass at common laptop sizes, hover previews and pile browsers polished, notification nudge when priority arrives in a background tab (title flash + optional chime), prod build wired into `deploy/` (caddy static site + runbook update) | **The real 4-human night on the deployed host** — the same event as bridge M5's outstanding exit; both docs close together |
 
 ## 15. Risks
@@ -321,7 +340,11 @@ is demonstrable end-to-end, per the bridge tradition.
   too, bridge §8).
 - **Browser sleep beyond teardown grace** — resume handles blips and locks, but a laptop shut
   overnight returns to `RESUME_FAILED`/`UNKNOWN_GAME`; the client must land that gracefully on
-  home with an explanation, not a spinner.
+  home with an explanation, not a spinner. *(C4: it does — anchor dropped, `info` toast, home.)*
+- **Post-game chat is dead upstream** (found at C4, §10) — three documents promise it and
+  XMage 1.4.60 does not deliver it. Anything else built on "the chat stays open after the
+  banner" (post-game banter, a future spectator recap) inherits the same gap until the bridge
+  fans those lines out itself.
 
 ## 16. Open questions (two protocol gaps found while writing this — both since closed)
 

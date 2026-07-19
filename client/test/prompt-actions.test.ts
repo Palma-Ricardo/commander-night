@@ -56,10 +56,11 @@ beforeEach(() => {
   actions = createActions(stores, fake.manager, kv);
   ctx = {
     stores,
-    pending: new PendingCommands(),
+    pending: new PendingCommands(() => true),
     session: new SessionWriter(stores, kv, () => 0),
     requestResync: () => {},
     rehello: () => {},
+    flushParked: () => {},
     devVerify: true,
   };
   route(keyframe, ctx);

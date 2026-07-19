@@ -2,14 +2,19 @@
 // owning store. This module is the single place server events mutate stores;
 // replay (C1+) reuses it to re-drive stores headlessly.
 
-import type { LogEntry, ServerMsg } from '../protocol/protocol';
+import type { LobbyState, LogEntry, ServerMsg } from '../protocol/protocol';
 import { applyKeyframe, applyStatePatch } from '../state/apply';
 import type { Stores } from '../stores';
+import { pushNotice } from '../stores/notices';
 import { emptyScratch } from '../stores/prompt';
 import type { PendingCommands } from './pending';
 import type { SessionWriter } from './session';
 
 const LOG_RING = 500;
+
+/** §11's silent set: fenced-late answers and per-command errors that already
+ *  render in place (deck diagnostics, join failures) never toast. */
+const SILENT_ERRORS = new Set(['PROMPT_STALE']);
 
 export interface RouteCtx {
   stores: Stores;
@@ -19,6 +24,8 @@ export interface RouteCtx {
   requestResync(): void;
   /** Re-send hello on the open socket (RESUME_FAILED fallback, §5). */
   rehello(): void;
+  /** Transmit commands parked during the drop, in order (§5). */
+  flushParked(): void;
   /** Dev keyframe-verify probe (§6) — dev builds and tests. */
   devVerify: boolean;
 }
@@ -29,6 +36,10 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
     case 'session.welcome': {
       ctx.session.onWelcome(msg);
       stores.connection.setState({ status: 'ready', attempt: 0, lastError: undefined });
+      // §5: commands parked during the drop go out now, in order. On resume the
+      // bridge fences answers by promptId; a fresh session answers them with
+      // UNKNOWN_GAME/PROMPT_STALE, which the senders already absorb.
+      ctx.flushParked();
       return;
     }
 
@@ -47,21 +58,27 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
         // restart, or post-game teardown). Drop the anchor and hello again on
         // the same socket — an unknown token *without* resume is a fresh
         // session (protocol §14), so the retry is welcomed. Anchorless repeat
-        // would loop forever, so it parks in helloSent instead. Recovery join
-        // + toast land in C4 (§10/§11).
+        // would loop forever, so it parks in helloSent instead. The user lands
+        // on home with an explanation, not a spinner (§10/§15).
         console.warn('[bridge]', msg.code, msg.message);
         const hadAnchor = stores.session.getState().resume !== undefined;
         ctx.session.clearResumeAnchor();
-        if (hadAnchor) ctx.rehello();
-      } else if (!settled) {
-        // Unsolicited non-fatal error; toast surface lands in C4 (§11)
+        if (hadAnchor) {
+          pushNotice(stores.notices, 'info',
+            'Your previous game is no longer available — it ended or the server restarted.');
+          ctx.rehello();
+        }
+      } else if (!settled && !SILENT_ERRORS.has(msg.code)) {
+        // Unsolicited non-fatal error → toast (§11)
         console.warn('[bridge]', msg.code, msg.message);
+        pushNotice(stores.notices, 'error', msg.message);
       }
       return;
     }
 
     case 'lobby.state': {
       stores.lobby.setState({ state: msg });
+      adoptSeatIdentity(stores, msg);
       return;
     }
 
@@ -70,7 +87,20 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
       // touches the prompt store: mid-game keyframes arrive with a prompt
       // still pending, and on resume the re-emitted prompt follows the
       // keyframe (protocol §14).
+      const prevGameId = stores.game.getState().state?.gameId;
       applyKeyframe(msg, ctx);
+      if (stores.game.getState().upstreamNotice !== undefined) {
+        stores.game.setState({ upstreamNotice: undefined });   // §11: keyframe clears the banner
+      }
+      if (prevGameId !== msg.gameId) {
+        // a different game landed (rematch after reset): purge stray lines
+        // from the old game — log seqs are per-game, mixing them breaks the
+        // ring's dedupe/order
+        const kept = stores.log.getState().entries.filter(e => e.gameId === msg.gameId);
+        if (kept.length !== stores.log.getState().entries.length) {
+          stores.log.setState({ entries: kept });
+        }
+      }
       ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
       return;
     }
@@ -79,7 +109,9 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
       applyStatePatch(msg, ctx);
       // The anchor advances even past a gated/failed patch: resume state comes
       // from the keyframe regardless; lastSeq only trims log backfill (§14).
-      ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
+      if (inCurrentGame(stores, msg.gameId)) {
+        ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
+      }
       return;
     }
 
@@ -111,25 +143,70 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
     }
 
     case 'game.log': {
-      appendLog(stores, msg);
-      ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
+      const appended = appendLog(stores, msg);
+      if (appended && msg.kind === 'chat'
+          && msg.playerId !== stores.game.getState().state?.me.playerId) {
+        // others' chat counts as unread; the chat tab clears it (§8)
+        stores.log.setState(s => ({ unreadChat: s.unreadChat + 1 }));
+      }
+      if (msg.kind === 'status') {
+        // §11: bridge-side upstream trouble → board banner, replaced by the
+        // next status line, cleared by the next keyframe
+        stores.game.setState({ upstreamNotice: msg.text });
+      }
+      // Guarded: teardown-grace chat from a game already left via rematch/
+      // leaveGame must not resurrect the cleared anchor (§10).
+      if (inCurrentGame(stores, msg.gameId)) {
+        ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
+      }
       return;
     }
 
     case 'game.over': {
       stores.game.setState({ over: msg });
-      // The game stays browsable through teardown grace (§14); the anchor is
-      // cleared so a later visit doesn't try to resume a torn-down game. C4
-      // refines this (post-game screen still allows resume within grace).
-      ctx.session.clearResumeAnchor();
+      // The anchor survives game.over: a finished game stays resumable — and
+      // its chat open — through the bridge's teardown grace (protocol §14), so
+      // a reload during post-game chat comes back to this screen. A stale
+      // anchor after teardown lands on the RESUME_FAILED path above; walking
+      // away deliberately (leaveGame/rematch) clears it.
       return;
     }
   }
 }
 
-function appendLog(stores: Stores, entry: LogEntry): void {
+/**
+ * protocol §5: a recovery join re-binds the named seat to this session, and
+ * "the re-bound session **adopts the seat's `userId`**; the `userId` from the
+ * caller's fresh `welcome` is abandoned". The bridge performs that swap
+ * silently (`registry.adopt`) — no message announces it — so the client
+ * reconciles the same way the bridge matched us: by display name, which is
+ * unique within a lobby (duplicate names are rejected at join).
+ *
+ * Without this a recovered seat is invisible to itself in every later lobby:
+ * `seats.find(s => s.userId === userId)` misses, so the ready toggle stays
+ * disabled and the seat can never start a game again. Live-caught 2026-07-19
+ * — the game screen hid it, because that renders from the seat-scoped
+ * `state.me` and never consults `userId`.
+ */
+function adoptSeatIdentity(stores: Stores, lobby: LobbyState): void {
+  const { userId, name } = stores.session.getState();
+  if (userId !== undefined && lobby.seats.some(s => s.userId === userId)) return;
+  const wanted = name.trim().toLowerCase();
+  if (wanted === '') return;
+  const mine = lobby.seats.filter(s => s.name.trim().toLowerCase() === wanted);
+  if (mine.length === 1 && mine[0]!.userId !== userId) {
+    stores.session.setState({ userId: mine[0]!.userId });
+  }
+}
+
+function inCurrentGame(stores: Stores, gameId: string): boolean {
+  return stores.game.getState().state?.gameId === gameId;
+}
+
+function appendLog(stores: Stores, entry: LogEntry): boolean {
   const cur = stores.log.getState().entries;
-  if (cur.some(e => e.seq === entry.seq)) return;   // backfill duplicates (§14)
+  if (cur.some(e => e.seq === entry.seq)) return false;   // backfill duplicates (§14)
   const next = [...cur, entry].sort((a, b) => a.seq - b.seq).slice(-LOG_RING);
   stores.log.setState({ entries: next });
+  return true;
 }

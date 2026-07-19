@@ -495,3 +495,76 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .ability-popover button { text-align: left; font-size: 0.8rem; padding: 0.3rem 0.5rem; }
 
 .debug-diverged { color: var(--error); }
+
+/* ── C4: resilience surfaces ── */
+
+.rejoin {
+  display: flex; align-items: center; gap: 1rem;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 6px;
+  padding: 0.75rem 1rem; margin-bottom: 1.25rem;
+}
+.rejoin p { margin: 0; }
+.hint { font-size: 0.78rem; color: var(--muted); margin: 0.5rem 0 0; }
+
+.bumped-screen {
+  max-width: 32rem; margin: 18vh auto 0; text-align: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 2rem;
+}
+.bumped-screen p { color: var(--muted); }
+.bumped-screen .use-here { margin-top: 1rem; font-size: 1rem; padding: 0.5rem 1.5rem; }
+
+.fatal-overlay {
+  position: fixed; inset: 0; background: #000a; z-index: 120;
+  display: flex; align-items: center; justify-content: center;
+}
+.fatal-modal {
+  background: var(--bg); border: 1px solid var(--error); border-radius: 8px;
+  padding: 1.5rem 2rem; max-width: 30rem; display: flex; flex-direction: column; gap: 0.75rem;
+}
+.fatal-modal h2 { margin: 0; color: var(--error); }
+.fatal-modal p { margin: 0; color: var(--muted); }
+
+.toaster {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 130;
+  display: flex; flex-direction: column; gap: 0.5rem; max-width: 24rem;
+}
+.toast {
+  text-align: left; font-size: 0.85rem; padding: 0.6rem 0.9rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 30px #000b; cursor: pointer;
+}
+.toast-error { border-color: var(--error); }
+.toast-info { border-color: var(--accent); }
+
+.board-banner {
+  background: color-mix(in srgb, var(--error) 20%, var(--panel));
+  border: 1px solid var(--error); border-radius: 6px;
+  padding: 0.4rem 0.75rem; margin: 0.5rem 0; font-size: 0.85rem;
+}
+
+/* ── C4: chat panel ── */
+
+.log-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.3rem; }
+.log-tabs .tab {
+  font-size: 0.8rem; padding: 0.15rem 0.6rem; color: var(--muted);
+  background: none; border: 1px solid transparent; border-radius: 4px;
+}
+.log-tabs .tab-active { color: var(--fg); border-color: var(--border); background: var(--bg); }
+.chat-unread {
+  margin-left: 0.35rem; padding: 0 0.35rem; font-size: 0.7rem;
+  background: var(--accent); color: var(--bg); border-radius: 8px;
+}
+.chat-input { display: flex; gap: 0.3rem; margin-top: 0.4rem; flex-wrap: wrap; }
+.chat-input input { flex: 1; min-width: 0; font-size: 0.8rem; }
+.chat-input .error { flex-basis: 100%; font-size: 0.75rem; margin: 0; }
+
+.rematch-controls { margin-left: 1rem; display: inline-flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.join-rematch-field { display: inline-flex; gap: 0.3rem; align-items: center; }
+.rematch-code { font-family: ui-monospace, monospace; text-transform: uppercase; }
+
+/* Targets the board can't highlight (pile zones / outside this seat's view) —
+   offered in the dock so a required prompt is never a dead end (§13). */
+.stranded-targets { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+.stranded-target { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
+.stranded-target.card-selected { border-color: var(--accent); color: var(--accent); }

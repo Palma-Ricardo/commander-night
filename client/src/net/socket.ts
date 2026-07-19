@@ -57,7 +57,7 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
   const wsFactory = opts.wsFactory ?? ((url: string) => new WebSocket(url));
   const ctx = defaultContext();
 
-  const pending = new PendingCommands();
+  const pending = new PendingCommands(transmit);
   const sessionWriter = new SessionWriter(stores, opts.kv, now);
   const routeCtx: RouteCtx = {
     stores,
@@ -65,10 +65,19 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     session: sessionWriter,
     requestResync: () => resyncNow(),
     rehello: () => { if (ws?.readyState === WebSocket.OPEN) sendHello(); },
+    flushParked: () => pending.flush(),
     devVerify: opts.devVerify,
   };
 
   let ws: WebSocket | null = null;
+
+  /** The one wire hand-off; pending re-uses it for retries and flushes. */
+  function transmit(cmd: ClientMsg): boolean {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    recorder.record('out', cmd);
+    ws.send(encode(cmd));
+    return true;
+  }
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let manualClose = false;
   let hiddenAt: number | null = null;
@@ -129,19 +138,25 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
 
   function onClose(ev: CloseEvent): void {
     ws = null;
-    pending.rejectAll(`socket closed (${ev.code})`);
     const status = stores.connection.getState().status;
 
     if (manualClose) {
       manualClose = false;
+      pending.rejectAll('disconnected');
       stores.connection.setState({ status: 'idle' });
       return;
     }
     if (ev.code === CLOSE_BUMPED) {
+      pending.rejectAll('session opened in another tab');
       stores.connection.setState({ status: 'bumped', lastError: 'this session was opened in another tab' });
       return;   // no auto-reconnect from bumped (§5/§10)
     }
-    if (status === 'fatal') return;   // route() already parked us; stay
+    if (status === 'fatal') {
+      pending.rejectAll('connection failed');
+      return;   // route() already parked us; stay
+    }
+    // a reconnect is coming: park in-flight commands, flush after resume (§5)
+    pending.parkAll();
 
     const attempt = stores.connection.getState().attempt + 1;
     stores.connection.setState({
@@ -155,13 +170,14 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
   }
 
   function send(cmd: ClientMsg): Promise<CommandReply> {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('not connected'));   // C4 parks & flushes instead
+    if (ws?.readyState === WebSocket.OPEN) return pending.send(cmd);
+    const status = stores.connection.getState().status;
+    // mid-blip (§5): park and flush in order after resume; terminal states
+    // (idle/bumped/fatal) have no reconnect coming, so fail fast instead
+    if (status === 'connecting' || status === 'helloSent' || status === 'dropped') {
+      return pending.park(cmd);
     }
-    const reply = pending.track(cmd.id);
-    recorder.record('out', cmd);
-    ws.send(encode(cmd));
-    return reply;
+    return Promise.reject(new Error('not connected'));
   }
 
   function resyncNow(): void {
@@ -210,6 +226,7 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     dispose(): void {
       disposed = true;
       clearTimer();
+      pending.rejectAll('disposed');
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
       if (typeof window !== 'undefined') window.removeEventListener('online', onOnline);
       manualClose = true;

@@ -36,12 +36,16 @@ export function bootApp(): void {
 // reads only — the auto-player drives the game through visible UI, but asserts
 // sync health (counters, §6) through here.
 export interface NightSnapshot {
+  gameId: string | null;
   over: boolean;
   syncMode: 'live' | 'awaitingKeyframe';
   lastAppliedSeq: number;
   counters: { patches: number; keyframes: number; resyncs: number; verifies: number; divergences: number };
   promptId: number | null;
   promptKind: string | null;
+  /** payMana only: the remaining cost — re-asks mint fresh promptIds, so this
+   *  is the auto-player's real progress signal for payment loops. */
+  payRemaining: string | null;
   combatRole: 'attackers' | 'blockers' | null;
   inflight: boolean;
   turn: number | null;
@@ -57,12 +61,14 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
       const g = appStores.game.getState();
       const p = appStores.prompt.getState();
       return {
+        gameId: g.state?.gameId ?? null,
         over: g.over !== undefined,
         syncMode: g.syncMode,
         lastAppliedSeq: g.lastAppliedSeq,
         counters: { ...g.counters },
         promptId: p.pending?.promptId ?? null,
         promptKind: p.pending?.kind ?? null,
+        payRemaining: p.pending?.kind === 'payMana' ? p.pending.remaining : null,
         combatRole: p.pending?.kind === 'priority' ? p.pending.combat?.role ?? null : null,
         inflight: p.inflight,
         turn: g.state?.turn.n ?? null,

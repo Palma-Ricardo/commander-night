@@ -1,5 +1,7 @@
 // Home (design §10): display name, create / join with code, #/join deep link
-// prefill. Rejoin/recovery affordances land in C4.
+// prefill, and the rejoin affordances — "Return to game" for a live resume
+// anchor, and the recovery path (join a running game with your seat name to
+// take the seat back — the lost-token flow, protocol §5/§14).
 
 import { useState } from 'react';
 import { useStore } from 'zustand';
@@ -9,6 +11,7 @@ import { CommandError } from '../../net/actions';
 
 export function Home() {
   const name = useStore(appStores.session, s => s.name);
+  const resume = useStore(appStores.session, s => s.resume);
   const ready = useStore(appStores.connection, s => s.status === 'ready');
   const [code, setCode] = useState(() =>
     typeof location !== 'undefined' ? (parseJoinHash(location.hash) ?? '') : '');
@@ -27,6 +30,15 @@ export function Home() {
 
   return (
     <section className="home">
+      {resume !== undefined && (
+        <div className="rejoin">
+          <p>You have a game in progress.</p>
+          <button disabled={busy} onClick={() => run(() => appActions.returnToGame())}>
+            Return to game
+          </button>
+        </div>
+      )}
+
       <label className="field">
         <span>Display name</span>
         <input
@@ -57,6 +69,10 @@ export function Home() {
           >
             Join
           </button>
+          <p className="hint">
+            Rejoining a game already in progress? Enter its code and your seat
+            name — you take your seat back, mid-game.
+          </p>
         </div>
       </div>
 

@@ -28,6 +28,7 @@ let stores: Stores;
 let ctx: RouteCtx;
 let resyncs: number;
 let rehellos: number;
+let flushes: number;
 let clock: number;
 
 beforeEach(() => {
@@ -35,13 +36,15 @@ beforeEach(() => {
   stores = createStores(kv);
   resyncs = 0;
   rehellos = 0;
+  flushes = 0;
   clock = 0;
   ctx = {
     stores,
-    pending: new PendingCommands(),
+    pending: new PendingCommands(() => true),
     session: new SessionWriter(stores, kv, () => clock),
     requestResync: () => resyncs++,
     rehello: () => rehellos++,
+    flushParked: () => flushes++,
     devVerify: true,
   };
 });
@@ -124,18 +127,22 @@ describe('route', () => {
     warn.mockRestore();
   });
 
-  it('fatal error parks the connection; non-fatal unmatched errors only warn', () => {
+  it('fatal error parks the connection; PROMPT_STALE stays silent; other unmatched errors toast (§11)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     route({ t: 'error', code: 'PROMPT_STALE', message: 'stale' }, ctx);
     expect(stores.connection.getState().status).toBe('idle');
-    expect(warn).toHaveBeenCalled();
+    expect(stores.notices.getState().toasts).toHaveLength(0);   // §7 silent set
+
+    route({ t: 'error', code: 'BAD_MESSAGE', message: 'too long' }, ctx);
+    expect(stores.notices.getState().toasts).toMatchObject([{ kind: 'error', text: 'too long' }]);
+
     route({ t: 'error', code: 'UPSTREAM_ERROR', message: 'seat lost', fatal: true }, ctx);
     expect(stores.connection.getState()).toMatchObject({ status: 'fatal' });
     warn.mockRestore();
   });
 
   it('acks settle pending commands', async () => {
-    const reply = ctx.pending.track('c77');
+    const reply = ctx.pending.send({ t: 'chat.send', id: 'c77', gameId: 'g1', text: 'hi' });
     route({ t: 'ack', re: 'c77' }, ctx);
     await expect(reply).resolves.toMatchObject({ t: 'ack', re: 'c77' });
   });
@@ -154,17 +161,102 @@ describe('route', () => {
     expect(JSON.parse(kv.get(KEYS.resume)!).lastSeq).toBe(keyframe.seq + 2);
   });
 
-  it('game.over records the result and clears the resume anchor', () => {
+  it('game.over records the result and keeps the anchor (resumable through teardown grace, §14)', () => {
     route(keyframe, ctx);
     route({ t: 'game.over', seq: 999, gameId: 'g1', winnerPlayerIds: ['p1'], reason: 'done', finalState: true }, ctx);
     expect(stores.game.getState().over?.reason).toBe('done');
-    expect(stores.session.getState().resume).toBeUndefined();
-    expect(kv.get(KEYS.resume)).toBeNull();
+    expect(stores.session.getState().resume).toMatchObject({ gameId: 'g1' });
+    expect(JSON.parse(kv.get(KEYS.resume)!)).toMatchObject({ gameId: 'g1' });
   });
 
   it('lobby.state replaces the snapshot', () => {
     const lobby = sample<ServerMsg & { code: string }>('lobby.state.json');
     route(lobby, ctx);
     expect(stores.lobby.getState().state?.code).toBe(lobby.code);
+  });
+
+  describe('seat identity after a recovery join (protocol §5 adopt)', () => {
+    const lobbyWith = (seats: { userId: string; name: string }[]) => ({
+      t: 'lobby.state' as const, code: 'AB12CD', hostUserId: 'host-1',
+      seats: seats.map(s => ({ ...s, ready: false })),
+    });
+
+    it('adopts the seat userId matched by display name when our own id is absent', () => {
+      // the bridge re-bound "Marta"'s seat to us and never said so
+      stores.session.setState({ userId: 'fresh-welcome-id', name: 'Marta' });
+      route(lobbyWith([{ userId: 'seat-marta', name: 'Marta' }, { userId: 'seat-ric', name: 'Ricardo' }]), ctx);
+      expect(stores.session.getState().userId).toBe('seat-marta');
+    });
+
+    it('leaves a seated identity alone (the ordinary join path)', () => {
+      stores.session.setState({ userId: 'seat-ric', name: 'Ricardo' });
+      route(lobbyWith([{ userId: 'seat-ric', name: 'Ricardo' }]), ctx);
+      expect(stores.session.getState().userId).toBe('seat-ric');
+    });
+
+    it('does not guess when no seat carries our name', () => {
+      stores.session.setState({ userId: 'fresh', name: 'Nobody' });
+      route(lobbyWith([{ userId: 'seat-ric', name: 'Ricardo' }]), ctx);
+      expect(stores.session.getState().userId).toBe('fresh');
+    });
+  });
+
+  it('welcome flushes commands parked during the drop (§5)', () => {
+    route({ t: 'session.welcome', re: 'c1', v: 1, userId: 'u1', role: 'player', resumed: true }, ctx);
+    expect(flushes).toBe(1);
+  });
+
+  it("chat from others bumps unreadChat; own echo and backfill duplicates don't (§8)", () => {
+    route(keyframe, ctx);   // me.playerId = p1
+    const chat = (seq: number, playerId: string) => ({
+      t: 'game.log' as const, seq, gameId: 'g1', ts: 0, kind: 'chat' as const, text: 'hi', playerId,
+    });
+    route(chat(10, 'p2'), ctx);
+    route(chat(11, 'p1'), ctx);   // own echo
+    route(chat(10, 'p2'), ctx);   // backfill duplicate
+    expect(stores.log.getState().unreadChat).toBe(1);
+  });
+
+  it('status lines raise the board banner; the next status line replaces it, a keyframe clears it (§11)', () => {
+    route(keyframe, ctx);
+    const status = (seq: number, text: string) => ({
+      t: 'game.log' as const, seq, gameId: 'g1', ts: 0, kind: 'status' as const, text,
+    });
+    route(status(10, 'reconnecting to the game server…'), ctx);
+    expect(stores.game.getState().upstreamNotice).toBe('reconnecting to the game server…');
+    route(status(11, 'reconnected'), ctx);
+    expect(stores.game.getState().upstreamNotice).toBe('reconnected');
+    route({ ...keyframe, seq: 12 }, ctx);
+    expect(stores.game.getState().upstreamNotice).toBeUndefined();
+  });
+
+  it('RESUME_FAILED with an anchor explains itself with a toast and lands home, not a spinner (§10/§15)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stores.session.setState({ token: 't-1', resume: { gameId: 'g1', lastSeq: 41 } });
+    route({ t: 'error', code: 'RESUME_FAILED', message: 'unknown game' }, ctx);
+    expect(stores.session.getState().resume).toBeUndefined();
+    expect(rehellos).toBe(1);
+    expect(stores.notices.getState().toasts).toMatchObject([{ kind: 'info' }]);
+    warn.mockRestore();
+  });
+
+  it('a keyframe for a different game purges stray log lines from the old game (§10 rematch)', () => {
+    route(keyframe, ctx);
+    route({ t: 'game.log', seq: 900, gameId: 'g1', ts: 0, kind: 'chat', text: 'Rematch → AB12CD', playerId: 'p2' }, ctx);
+    const g2 = JSON.parse(JSON.stringify(keyframe).replace(/"g1"/g, '"g2"')) as StateKeyframe;
+    route({ ...g2, seq: 3 }, ctx);
+    expect(stores.log.getState().entries).toEqual([]);
+    route({ t: 'game.log', seq: 1, gameId: 'g2', ts: 0, kind: 'game', text: 'first' }, ctx);
+    expect(stores.log.getState().entries.map(e => e.gameId)).toEqual(['g2']);
+  });
+
+  it('teardown-grace chat from a game already left never resurrects the cleared anchor (§10)', () => {
+    route(keyframe, ctx);
+    stores.game.setState({ state: undefined });                    // rematch reset
+    stores.session.setState({ resume: undefined });
+    kv.remove(KEYS.resume);
+    route({ t: 'game.log', seq: 950, gameId: 'g1', ts: 0, kind: 'chat', text: 'gg', playerId: 'p2' }, ctx);
+    expect(stores.session.getState().resume).toBeUndefined();
+    expect(kv.get(KEYS.resume)).toBeNull();
   });
 });

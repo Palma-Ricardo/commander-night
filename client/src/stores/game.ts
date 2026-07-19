@@ -29,12 +29,17 @@ export interface GameStoreState {
   /** protocol §9 autoMana — no state echo exists, so this is the ack-confirmed
    *  last value we sent; server default is ON. */
   autoMana: boolean;
+  /** Latest game.log kind:'status' line — bridge-side upstream trouble,
+   *  rendered as a banner over the board until the next status line or
+   *  keyframe clears it (§11). */
+  upstreamNotice?: string;
   over?: GameOver;
 }
 
 export const freshGame = (): GameStoreState => ({
   state: undefined,
   over: undefined,
+  upstreamNotice: undefined,
   lastAppliedSeq: -1,
   lastAppliedWasPatch: false,
   syncMode: 'live',

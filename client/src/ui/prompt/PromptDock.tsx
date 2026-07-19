@@ -11,7 +11,7 @@ import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
 import type { AnswerValue, Card, Prompt } from '../../protocol/protocol';
 import { parseManaCost } from '../../state/mana';
-import { me } from '../../state/selectors';
+import { me, unreachableCandidates } from '../../state/selectors';
 import { CardGrid, Modal } from '../board/Modal';
 import { ManaSymbols } from '../cards/ManaSymbols';
 
@@ -103,7 +103,7 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
     }
 
     case 'chooseTargets':
-      return <ChooseTargetsControls p={p} busy={busy} answer={answer} prompt={prompt} />;
+      return <ChooseTargetsControls p={p} busy={busy} answer={answer} prompt={prompt} state={state} />;
 
     case 'payMana': {
       const pool = me(state)?.manaPool;
@@ -225,16 +225,25 @@ function ChooseAbilityControls({ p, busy, answer }: {
 
 // ── chooseTargets (§7): scratch accumulates, Submit sends the whole set ──────
 
-function ChooseTargetsControls({ p, busy, answer, prompt }: {
+function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
   p: Extract<Prompt, { kind: 'chooseTargets' }>;
   busy: boolean;
   answer(a: AnswerValue): void;
   prompt: CtrlProps['prompt'];
+  state: CtrlProps['state'];
 }) {
   const k = prompt.selected.length;
   const range = p.min === p.max ? String(p.min) : `${p.min}–${p.max}`;
   const declinable = !p.required || p.min === 0;
   const oneClick = p.max === 1;
+
+  // Candidates the board can't highlight — pile zones (graveyard/exile) and
+  // ids outside this seat's view. Without this the dock said "click a
+  // highlighted target" over an empty board: a real dead end, live-caught
+  // 2026-07-19 on "Select a nonland card from ai_2 graveyard". The server
+  // sends these without a `cards` array, so the modal-grid path (§7) misses
+  // them and they have to be offered right here.
+  const stranded = p.cards !== undefined ? [] : unreachableCandidates(state, p.candidates);
 
   const grid = p.cards !== undefined && p.cards.length > 0 && (
     <Modal title={p.message}>
@@ -267,8 +276,27 @@ function ChooseTargetsControls({ p, busy, answer, prompt }: {
       {p.progress !== undefined && (
         <span className="dock-hint">{p.progress.chosen} of {p.progress.of} chosen</span>
       )}
+      {stranded.length > 0 && (
+        <span className="dock-list stranded-targets">
+          {stranded.map(s => (
+            <button
+              key={s.id}
+              className={prompt.selected.includes(s.id) ? 'stranded-target card-selected' : 'stranded-target'}
+              data-card-id={s.id}
+              disabled={busy}
+              title={s.card === undefined ? undefined : s.card.types.join(' ')}
+              onClick={() => {
+                if (oneClick) answer({ type: 'object', objectId: s.id });
+                else appActions.toggleTarget(p.promptId, s.id);
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </span>
+      )}
       {oneClick
-        ? <span className="dock-hint">click a highlighted target</span>
+        ? stranded.length === 0 && <span className="dock-hint">click a highlighted target</span>
         : (
           <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
