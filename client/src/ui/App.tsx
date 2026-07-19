@@ -11,6 +11,7 @@ import { DebugPanel } from './DebugPanel';
 import { Game } from './screens/Game';
 import { Home } from './screens/Home';
 import { Lobby } from './screens/Lobby';
+import { startNudge } from './nudge';
 
 const STATUS_LABEL: Record<SocketStatus, string> = {
   idle: 'disconnected',
@@ -40,6 +41,14 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // C5: a backgrounded tab announces priority in the tab strip. Mounted for
+  // the app's lifetime — the module no-ops until a priority prompt is pending
+  // while document.hidden.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    return startNudge({ doc: document, prompt: appStores.prompt });
   }, []);
 
   // §10: the takeover screen replaces everything — reconnect only on explicit
