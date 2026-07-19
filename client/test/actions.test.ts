@@ -273,6 +273,39 @@ describe('returnToGame (§10 rejoin affordance)', () => {
   });
 });
 
+describe('submitDeck image warm-up (C5)', () => {
+  it('queues every deck identity at pile priority on submit', async () => {
+    const warmed: { set: string; number: string; name: string; priority: number }[] = [];
+    const warmActions = createActions(stores, fakeManager, kv, {
+      scryfall: { resolve: (card, priority) => warmed.push({ ...card, priority }) },
+    });
+    warmActions.setDeckText('1 [MKC:145] Agitator Ant\nSB: 1 [NEC:1] Chishiro\n');
+
+    await warmActions.submitDeck();
+
+    expect(warmed).toEqual([
+      { set: 'MKC', number: '145', name: 'Agitator Ant', priority: 2 },
+      { set: 'NEC', number: '1', name: 'Chishiro', priority: 2 },
+    ]);
+  });
+
+  it('still submits the deck when no resolver is wired', async () => {
+    actions.setDeckText('1 [MKC:145] Agitator Ant\n');
+    await actions.submitDeck();
+    expect(sent.some(c => c.t === 'lobby.deck')).toBe(true);
+  });
+
+  it('does not warm when the deck text is empty', async () => {
+    const warmed: unknown[] = [];
+    const warmActions = createActions(stores, fakeManager, kv, {
+      scryfall: { resolve: () => warmed.push(1) },
+    });
+    warmActions.setDeckText('');
+    await warmActions.submitDeck();
+    expect(warmed).toHaveLength(0);
+  });
+});
+
 describe('persistence', () => {
   it('display name and deck text persist under cn.*', () => {
     actions.setDisplayName('Ricardo');

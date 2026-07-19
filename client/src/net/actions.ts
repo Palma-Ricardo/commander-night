@@ -3,6 +3,8 @@
 // (deck diagnostics, join failures — design §11); lobby membership itself
 // renders from lobby.state events, never from these calls.
 
+import { parseDeckIdentities } from '../images/deck';
+import type { ScryfallResolver } from '../images/scryfall';
 import {
   chatSend, defaultContext, gameAction, gameAnswer, gameResync,
   lobbyCreate, lobbyDeck, lobbyJoin, lobbyReady, lobbyStart,
@@ -29,7 +31,18 @@ function unwrap(reply: CommandReply): void {
 
 export type Actions = ReturnType<typeof createActions>;
 
-export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
+export interface ActionsOpts {
+  /** C5 image warm-up: deck identities are queued here on submit (design §9).
+   *  Optional so headless tests and the replay tier need no resolver. */
+  scryfall?: Pick<ScryfallResolver, 'resolve'>;
+}
+
+export function createActions(
+  stores: Stores,
+  manager: SocketManager,
+  kv: KV,
+  opts: ActionsOpts = {},
+) {
   const ctx = defaultContext();
 
   function requireName(): string {
@@ -110,9 +123,16 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
     return code;
   }
 
+  /** Submit the deck, then warm the image cache from its identities (C5,
+   *  design §9): ~90 unique printings at pile priority during lobby idle, so
+   *  the first turns are not a slideshow on a cold cache. Fire-and-forget —
+   *  the resolver queues internally and a warm failure is cosmetic. */
   async function submitDeckFlow(): Promise<void> {
     const content = stores.session.getState().deckText;
     unwrap(await manager.send(lobbyDeck(ctx, { format: 'dck', content })));
+    if (opts.scryfall !== undefined && content.trim() !== '') {
+      for (const card of parseDeckIdentities(content)) opts.scryfall.resolve(card, 2);
+    }
   }
 
   /** Reset the game-scoped stores. keepLobby: the rematch flows have already

@@ -25,8 +25,8 @@ export const appManager = createSocketManager({
   strictDecode: import.meta.env.DEV,
   devVerify: import.meta.env.DEV,
 });
-export const appActions = createActions(appStores, appManager, appKV);
 export const appScryfall = createScryfallResolver({ kv: appKV });
+export const appActions = createActions(appStores, appManager, appKV, { scryfall: appScryfall });
 
 export function bootApp(): void {
   appManager.connect();
