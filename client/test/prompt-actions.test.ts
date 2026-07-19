@@ -60,6 +60,7 @@ beforeEach(() => {
     session: new SessionWriter(stores, kv, () => 0),
     requestResync: () => {},
     rehello: () => {},
+    devVerify: true,
   };
   route(keyframe, ctx);
 });

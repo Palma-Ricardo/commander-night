@@ -12,7 +12,18 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** M5 engineering done 2026-07-18 — commander damage/tax scrape
+**Status:** Client C3 done 2026-07-18 — patch mode is the default (`state/apply.ts`: base-check
+→ resync gate, fast-json-patch; dev keyframe-verify deep-equals every backstop keyframe — the
+bridge now emits the backstop *after* the 100th patch with the same tree at the next seq,
+v1.md §7, so the probe is exact), all 11 prompt kinds polished (combat toggle badges/pulse,
+chooseAbility popover anchored to its source card), §9 turn controls (skip menu from `me.skip`,
+auto-mana ack-confirmed, rollback gated, trigger-order reset) + keyboard shortcuts
+(`state/shortcuts.ts` resolver), and the Playwright auto-player (`e2e/pw/autoplayer.spec.ts`)
+**live-verified**: full game vs 3 AIs through visible DOM to `game.over` in patch mode —
+2,672 patches, 26 keyframe-verifies, 0 divergences, 0 resyncs, ≥1 combat declared through the
+board, no dead-end prompts. Auto-player policy notes: pay payMana before cancelling (cancel-first
+never resolves a spell) and answer the "mana will be lost. Pass anyway?" confirm with Yes.
+Next: C4 (multi-human resilience). Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
 (`translate/CommanderDamage`, pinned to the 1.4.60 watcher strings, canary WARN on drift,
 fields land per protocol §6; watcher lines no longer leak into card text), callback tap
 productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,

@@ -51,6 +51,9 @@ export function DebugPanel() {
         <h2>Debug</h2>
         <span className="debug-meta">
           seq {game.lastAppliedSeq} · {game.syncMode}
+          {' · '}p{game.counters.patches} k{game.counters.keyframes} r{game.counters.resyncs}
+          {' · '}verify {game.counters.verifies}
+          {game.counters.divergences > 0 && <b className="debug-diverged"> ⚠ {game.counters.divergences} diverged</b>}
         </span>
         <label title="hello stateMode:'keyframes' — applies on the next connect (§6)">
           <input type="checkbox" checked={keyframesMode} onChange={() => appActions.toggleKeyframesMode()} />

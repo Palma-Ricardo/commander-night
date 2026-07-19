@@ -58,7 +58,7 @@ function makeManager(): SocketManager {
     kv,
     recorder: new Recorder({ now: () => 0 }),
     url: 'ws://test/ws',
-    strictDecode: true,
+    strictDecode: true, devVerify: true,
     wsFactory: url => new FakeWS(url) as unknown as WebSocket,
     jitter: () => 0.5,          // 0.8 + 0.4·0.5 = ×1.0 — delays are exactly the ladder
     now: () => 0,
@@ -97,23 +97,23 @@ afterEach(() => {
 });
 
 describe('hello construction', () => {
-  it('sends v1 hello with stateMode keyframes (C1 default) and no token on first connect', () => {
+  it('sends v1 hello without stateMode (patch mode, the C3 default) and no token on first connect', () => {
     manager.connect();
     expect(stores.connection.getState().status).toBe('connecting');
     lastWs().open();
     const hello = helloOf(lastWs());
     expect(hello.t).toBe('session.hello');
     expect(hello.v).toBe(1);
-    expect(hello.stateMode).toBe('keyframes');
+    expect(hello.stateMode).toBeUndefined();
     expect(hello.token).toBeUndefined();
     expect(stores.connection.getState().status).toBe('helloSent');
   });
 
-  it('omits stateMode when the keyframes toggle is off', () => {
-    stores.settings.setState({ keyframesMode: false });
+  it('sends stateMode keyframes when the debug toggle is on', () => {
+    stores.settings.setState({ keyframesMode: true });
     manager.connect();
     lastWs().open();
-    expect(helloOf(lastWs()).stateMode).toBeUndefined();
+    expect(helloOf(lastWs()).stateMode).toBe('keyframes');
   });
 
   it('presents token + resume anchor on reconnect, and resume never rides without a token', () => {

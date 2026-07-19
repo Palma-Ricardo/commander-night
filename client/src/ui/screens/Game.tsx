@@ -1,7 +1,8 @@
 // Game screen (design §8): opponents' seat panels + battlefields on top, stack
 // and reveal windows mid, my battlefield and hand below, status line + prompt
-// dock + concede in the control bar, log panel right. Post-game (§10): the
-// game.over banner renders over the final keyframe; the board stays browsable.
+// dock + turn controls in the control bar, log panel right. Post-game (§10):
+// the game.over banner renders over the final keyframe; the board stays
+// browsable.
 
 import { useState } from 'react';
 import { useStore } from 'zustand';
@@ -16,11 +17,14 @@ import { CardView } from '../cards/CardView';
 import { HoverPreview } from '../cards/HoverPreview';
 import { LogPanel } from '../log/LogPanel';
 import { PromptDock } from '../prompt/PromptDock';
+import { TurnControls } from '../prompt/TurnControls';
+import { useShortcuts } from '../shortcuts';
 
 export function Game() {
   const game = useStore(appStores.game);
   const pendingMessage = useStore(appStores.prompt, s => s.pending?.message);
   const [browse, setBrowse] = useState<BrowseRequest | null>(null);
+  useShortcuts();
 
   const state = game.state;
   if (state === undefined) return null;
@@ -77,7 +81,7 @@ export function Game() {
 
         <div className="control-bar">
           <span className="status-line">{statusLine(state, pendingMessage)}</span>
-          {game.over === undefined && <ConcedeControl />}
+          <TurnControls />
         </div>
 
         <PromptDock />
@@ -104,40 +108,5 @@ export function Game() {
       )}
       <HoverPreview />
     </div>
-  );
-}
-
-/** Concede is irreversible → type-to-confirm (§7). */
-function ConcedeControl() {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState('');
-  return (
-    <>
-      <button className="concede-btn" onClick={() => { setText(''); setOpen(true); }}>Concede</button>
-      {open && (
-        <Modal title="Concede the game?" onClose={() => setOpen(false)}>
-          <p className="modal-msg">This cannot be undone. Type <b>concede</b> to confirm.</p>
-          <input
-            autoFocus
-            value={text}
-            onChange={e => setText(e.target.value)}
-            placeholder="concede"
-          />
-          <footer className="modal-actions">
-            <button
-              className="danger"
-              disabled={text.trim().toLowerCase() !== 'concede'}
-              onClick={() => {
-                setOpen(false);
-                void appActions.concede().catch(() => { /* surfaced via log/status */ });
-              }}
-            >
-              Concede
-            </button>
-            <button onClick={() => setOpen(false)}>Keep playing</button>
-          </footer>
-        </Modal>
-      )}
-    </>
   );
 }

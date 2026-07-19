@@ -2,13 +2,11 @@
 // surface above the hand; all board affordances derive from the same pending
 // prompt (CardView/SeatPanel side). Answers capture the promptId they rendered
 // with; `inflight` disables the dock until promptDone or a superseding prompt.
-//
-// C2 ships the four kinds a real game needs (confirm/priority/chooseTargets/
-// payMana) with full board affordances, plus functional dock surfaces for the
-// remaining kinds so no known prompt can dead-end a live game; C3 polishes
-// those (combat badges/pulse UX, chooseAbility popover anchoring, shortcuts).
+// All 11 kinds render here (C3); chooseAbility anchors to its source card when
+// it is on the board, falling back to the dock list otherwise.
 
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
 import type { AnswerValue, Card, Prompt } from '../../protocol/protocol';
@@ -75,8 +73,9 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
                 : 'nothing can be declared'}
             </span>
             {p.combat.special !== undefined && (
-              <button disabled={busy} onClick={() => answer({ type: 'option', key: 'special' })}>
-                {p.combat.special}
+              <button data-answer="special" disabled={busy}
+                onClick={() => answer({ type: 'option', key: 'special' })}>
+                {p.combat.special} <kbd>A</kbd>
               </button>
             )}
             <button className="primary" data-answer="done" disabled={busy}
@@ -114,39 +113,32 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
           <span className="dock-cost"><ManaSymbols symbols={parseManaCost(p.remaining)} /></span>
           {(p.sources ?? []).length > 0 && <span className="dock-hint">click a highlighted source</span>}
           {held.map(c => (
-            <button key={c} className="pool-spend" disabled={busy} title={`pay ${c} from pool`}
+            <button key={c} className="pool-spend" data-mana={c} disabled={busy} title={`pay ${c} from pool`}
               onClick={() => answer({ type: 'mana', color: c })}>
               <ManaSymbols symbols={[c]} /> ×{pool![c]}
             </button>
           ))}
           {p.canCancel && (
-            <button disabled={busy} onClick={() => answer({ type: 'cancel' })}>Cancel</button>
+            <button data-answer="cancel" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Cancel</button>
           )}
         </>
       );
     }
 
     case 'chooseAbility':
-      return (
-        <span className="dock-list">
-          {p.options.map(o => (
-            <button key={o.id} disabled={busy} onClick={() => answer({ type: 'object', objectId: o.id })}>
-              {o.text}
-            </button>
-          ))}
-        </span>
-      );
+      return <ChooseAbilityControls p={p} busy={busy} answer={answer} />;
 
     case 'chooseOption':
       return (
         <span className={p.options.length > 4 ? 'dock-list dock-list-col' : 'dock-list'}>
           {p.options.map(o => (
-            <button key={o.key} disabled={busy} onClick={() => answer({ type: 'option', key: o.key })}>
+            <button key={o.key} data-option-key={o.key} disabled={busy}
+              onClick={() => answer({ type: 'option', key: o.key })}>
               {o.text}
             </button>
           ))}
           {p.required === false && (
-            <button disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>
+            <button data-answer="decline" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>
           )}
         </span>
       );
@@ -157,7 +149,8 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
           <div className="piles">
             {([0, 1] as const).map(i => (
               <div key={i} className="pile-col">
-                <button className="primary" disabled={busy} onClick={() => answer({ type: 'pile', index: i })}>
+                <button className="primary" data-answer={`pile-${i}`} disabled={busy}
+                  onClick={() => answer({ type: 'pile', index: i })}>
                   Choose pile {i + 1}
                 </button>
                 <CardGrid cards={p.piles[i]} />
@@ -179,7 +172,8 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
           <p className="modal-msg">{p.message}</p>
           <div className="dock-list">
             {p.options.map(o => (
-              <button key={o.key} disabled={busy} onClick={() => answer({ type: 'option', key: o.key })}>
+              <button key={o.key} data-option-key={o.key} disabled={busy}
+                onClick={() => answer({ type: 'option', key: o.key })}>
                 {o.text}
               </button>
             ))}
@@ -187,6 +181,46 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
         </Modal>
       );
   }
+}
+
+// ── chooseAbility (§7): popover anchored to the source card when it's on the
+// board; dock-fallback when off-board (or the anchor isn't in the DOM yet) ────
+
+function ChooseAbilityControls({ p, busy, answer }: {
+  p: Extract<Prompt, { kind: 'chooseAbility' }>;
+  busy: boolean;
+  answer(a: AnswerValue): void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+
+  useLayoutEffect(() => {
+    if (p.sourceId === undefined) return;
+    const el = document.querySelector(`.board [data-card-id="${CSS.escape(p.sourceId)}"]`);
+    setAnchor(el?.getBoundingClientRect() ?? null);
+  }, [p.promptId, p.sourceId]);
+
+  const buttons = p.options.map(o => (
+    <button key={o.id} data-option-id={o.id} disabled={busy}
+      onClick={() => answer({ type: 'object', objectId: o.id })}>
+      {o.text}
+    </button>
+  ));
+
+  if (anchor === null) return <span className="dock-list dock-list-col">{buttons}</span>;
+  return (
+    <>
+      <span className="dock-hint">choose for the highlighted card</span>
+      {createPortal(
+        <div
+          className="ability-popover"
+          style={{ left: anchor.left + anchor.width / 2, top: anchor.top }}
+        >
+          {buttons}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 // ── chooseTargets (§7): scratch accumulates, Submit sends the whole set ──────
@@ -215,12 +249,14 @@ function ChooseTargetsControls({ p, busy, answer, prompt }: {
       />
       <footer className="modal-actions">
         {!oneClick && (
-          <button className="primary" disabled={busy || k < p.min || k > p.max}
+          <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
             Submit {k} / {range}
           </button>
         )}
-        {declinable && <button disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>}
+        {declinable && (
+          <button data-answer="decline" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>
+        )}
       </footer>
     </Modal>
   );
@@ -234,16 +270,18 @@ function ChooseTargetsControls({ p, busy, answer, prompt }: {
       {oneClick
         ? <span className="dock-hint">click a highlighted target</span>
         : (
-          <button className="primary" disabled={busy || k < p.min || k > p.max}
+          <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
             Submit {k} / {range}
           </button>
         )}
       {/* incremental flow (§8): once the server has ≥ min, confirm=true means done */}
       {p.progress !== undefined && p.progress.chosen >= p.min && (
-        <button disabled={busy} onClick={() => answer({ type: 'confirm', value: true })}>Done</button>
+        <button data-answer="done" disabled={busy} onClick={() => answer({ type: 'confirm', value: true })}>Done</button>
       )}
-      {declinable && <button disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>}
+      {declinable && (
+        <button data-answer="decline" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>
+      )}
     </>
   );
 }
@@ -269,7 +307,8 @@ function AmountControls({ min, max, busy, answer }: {
       />
       <button disabled={busy || value >= stepMax} onClick={() => setValue(v => v + 1)}>+</button>
       {/* no cancel control — the answer is required (§8) */}
-      <button className="primary" disabled={busy || !valid} onClick={() => answer({ type: 'number', value })}>
+      <button className="primary" data-answer="ok" disabled={busy || !valid}
+        onClick={() => answer({ type: 'number', value })}>
         OK
       </button>
     </>
@@ -310,11 +349,13 @@ function DistributeControls({ p, busy, answer }: {
       </div>
       <p className={valid ? 'muted' : 'error'}>total {sum} (need {p.min === p.total ? p.total : `${p.min}–${p.total}`})</p>
       <footer className="modal-actions">
-        <button className="primary" disabled={busy || !valid}
+        <button className="primary" data-answer="submit" disabled={busy || !valid}
           onClick={() => answer({ type: 'distribution', amounts: p.among.map((row, i) => ({ id: row.id, amount: amounts[i] ?? 0 })) })}>
           Submit
         </button>
-        {p.canCancel === true && <button disabled={busy} onClick={() => answer({ type: 'cancel' })}>Cancel</button>}
+        {p.canCancel === true && (
+          <button data-answer="cancel" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Cancel</button>
+        )}
       </footer>
     </Modal>
   );

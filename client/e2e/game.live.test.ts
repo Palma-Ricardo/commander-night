@@ -25,7 +25,7 @@ it('auto-played full game vs 3 AIs reaches game.over through the client stack', 
   const kv = memoryKV();
   const stores = createStores(kv);
   const recorder = new Recorder({ capacity: 10_000 });
-  const manager = createSocketManager({ stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true });
+  const manager = createSocketManager({ stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true, devVerify: true });
   const actions = createActions(stores, manager, kv);
 
   // the auto-player: answer every pending prompt by policy, escalating on

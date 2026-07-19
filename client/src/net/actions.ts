@@ -6,8 +6,10 @@
 import {
   defaultContext, gameAction, gameAnswer, lobbyCreate, lobbyDeck, lobbyJoin, lobbyReady, lobbyStart,
 } from '../protocol/commands';
-import type { AnswerValue, Id } from '../protocol/protocol';
+import type { AnswerValue, GameActionValue, Id } from '../protocol/protocol';
 import type { Stores } from '../stores';
+import { freshGame } from '../stores/game';
+import { persistSettings } from '../stores/settings';
 import { emptyScratch } from '../stores/prompt';
 import { KEYS, type KV } from '../stores/storage';
 import type { CommandReply } from './pending';
@@ -87,8 +89,41 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
     }
   }
 
+  /** §9 game.action sender (no prompt required). State-reflected effects
+   *  (me.skip) render from the server echo, never from the call. */
+  async function sendGameAction(action: GameActionValue): Promise<void> {
+    const gameId = stores.game.getState().state?.gameId;
+    if (gameId === undefined) return;
+    unwrap(await manager.send(gameAction(ctx, { gameId, action })));
+  }
+
   return {
     answerPrompt,
+    sendGameAction,
+
+    /** Skip menu (§7): the active toggle renders from me.skip — the server
+     *  clears skips on its own, and skip:'stack' on an empty stack is a
+     *  server no-op; state is the only truth. */
+    async setSkip(mode: 'stack'|'endOfTurn'|'nextMain'|'myNextTurn'|'endStepBeforeMyTurn'|'cancel'): Promise<void> {
+      await sendGameAction({ kind: 'skip', mode });
+    },
+
+    /** autoMana has no state echo (§9) — the game store holds the
+     *  ack-confirmed last value instead (server default ON). */
+    async setAutoMana(enabled: boolean): Promise<void> {
+      await sendGameAction({ kind: 'autoMana', enabled });
+      stores.game.setState({ autoMana: enabled });
+    },
+
+    /** Gated by GameState.rollbackTurnsAllowed (§6) — the UI hides this
+     *  entirely when false (any AI-filled table). */
+    async requestRollback(turns: number): Promise<void> {
+      await sendGameAction({ kind: 'requestRollback', turns });
+    },
+
+    async resetTriggerOrder(): Promise<void> {
+      await sendGameAction({ kind: 'triggerOrder', mode: 'reset' });
+    },
 
     setDisplayName(name: string): void {
       stores.session.setState({ name });
@@ -153,9 +188,7 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
 
     /** Concede (§9, no prompt required). The UI gates this behind type-to-confirm. */
     async concede(): Promise<void> {
-      const gameId = stores.game.getState().state?.gameId;
-      if (gameId === undefined) return;
-      unwrap(await manager.send(gameAction(ctx, { gameId, action: { kind: 'concede' } })));
+      await sendGameAction({ kind: 'concede' });
     },
 
     /** Post-game "play again" (protocol §5): a started lobby has already
@@ -163,7 +196,7 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
      *  fresh one (name + deck text persist). Pure local reset — the session
      *  and socket stay up. */
     leaveGame(): void {
-      stores.game.setState({ state: undefined, over: undefined, lastAppliedSeq: -1, syncMode: 'live' });
+      stores.game.setState(freshGame());
       stores.log.setState({ entries: [] });
       stores.prompt.setState({ pending: undefined, ...emptyScratch() });
       stores.lobby.setState({ state: undefined });
@@ -173,7 +206,7 @@ export function createActions(stores: Stores, manager: SocketManager, kv: KV) {
     toggleKeyframesMode(): void {
       const next = { keyframesMode: !stores.settings.getState().keyframesMode };
       stores.settings.setState(next);
-      kv.set(KEYS.settings, JSON.stringify(next));
+      persistSettings(kv, next);
     },
   };
 }

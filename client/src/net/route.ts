@@ -3,6 +3,7 @@
 // replay (C1+) reuses it to re-drive stores headlessly.
 
 import type { LogEntry, ServerMsg } from '../protocol/protocol';
+import { applyKeyframe, applyStatePatch } from '../state/apply';
 import type { Stores } from '../stores';
 import { emptyScratch } from '../stores/prompt';
 import type { PendingCommands } from './pending';
@@ -18,6 +19,8 @@ export interface RouteCtx {
   requestResync(): void;
   /** Re-send hello on the open socket (RESUME_FAILED fallback, §5). */
   rehello(): void;
+  /** Dev keyframe-verify probe (§6) — dev builds and tests. */
+  devVerify: boolean;
 }
 
 export function route(msg: ServerMsg, ctx: RouteCtx): void {
@@ -63,24 +66,20 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
     }
 
     case 'game.state': {
-      // Keyframe replaces the tree wholesale (§6; dev deep-equal verify lands
-      // with patch mode in C3). Does NOT touch the prompt store: mid-game
-      // keyframes arrive with a prompt still pending, and on resume the
-      // re-emitted prompt follows the keyframe (protocol §14).
-      stores.game.setState({ state: msg.state, lastAppliedSeq: msg.seq, syncMode: 'live' });
+      // state/apply owns the keyframe/patch discipline (§6). Neither case
+      // touches the prompt store: mid-game keyframes arrive with a prompt
+      // still pending, and on resume the re-emitted prompt follows the
+      // keyframe (protocol §14).
+      applyKeyframe(msg, ctx);
       ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
       return;
     }
 
     case 'game.patch': {
-      // C1 runs keyframes-mode (§6); patch application is C3 (state/apply.ts).
-      // A patch here means the server is in patch mode — recover via resync
-      // and gate further patches until the keyframe arrives (§6).
-      const { syncMode } = stores.game.getState();
-      if (syncMode === 'awaitingKeyframe') return;
-      console.warn(`[sync] patch seq ${msg.seq} before patch support (C3) — resyncing`);
-      stores.game.setState({ syncMode: 'awaitingKeyframe' });
-      ctx.requestResync();
+      applyStatePatch(msg, ctx);
+      // The anchor advances even past a gated/failed patch: resume state comes
+      // from the keyframe regardless; lastSeq only trims log backfill (§14).
+      ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
       return;
     }
 

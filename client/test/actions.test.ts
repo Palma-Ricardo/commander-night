@@ -108,6 +108,47 @@ describe('leaveGame (play again, protocol §5)', () => {
   });
 });
 
+describe('turn-control actions (§9 game.action)', () => {
+  beforeEach(() => {
+    stores.game.setState({ state: { gameId: 'g1' } as never });
+  });
+
+  it('setSkip sends the mode; the toggle renders from me.skip, not from here', async () => {
+    await actions.setSkip('endOfTurn');
+    expect(sent[0]).toMatchObject({ t: 'game.action', gameId: 'g1', action: { kind: 'skip', mode: 'endOfTurn' } });
+    await actions.setSkip('cancel');
+    expect(sent[1]).toMatchObject({ action: { kind: 'skip', mode: 'cancel' } });
+    expect(stores.game.getState().state).toMatchObject({ gameId: 'g1' });   // no local skip write
+  });
+
+  it('setAutoMana stores the ack-confirmed value (no state echo exists)', async () => {
+    expect(stores.game.getState().autoMana).toBe(true);
+    await actions.setAutoMana(false);
+    expect(sent[0]).toMatchObject({ action: { kind: 'autoMana', enabled: false } });
+    expect(stores.game.getState().autoMana).toBe(false);
+  });
+
+  it('setAutoMana keeps the old value when the bridge rejects it', async () => {
+    scripted = cmd => ({ t: 'error', re: cmd.id, code: 'UPSTREAM_ERROR', message: 'nope' });
+    await expect(actions.setAutoMana(false)).rejects.toThrow('nope');
+    expect(stores.game.getState().autoMana).toBe(true);
+  });
+
+  it('requestRollback and resetTriggerOrder send their §9 shapes', async () => {
+    await actions.requestRollback(1);
+    await actions.resetTriggerOrder();
+    expect(sent[0]).toMatchObject({ action: { kind: 'requestRollback', turns: 1 } });
+    expect(sent[1]).toMatchObject({ action: { kind: 'triggerOrder', mode: 'reset' } });
+  });
+
+  it('all §9 senders no-op outside a game', async () => {
+    stores.game.setState({ state: undefined });
+    await actions.setSkip('stack');
+    await actions.concede();
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('persistence', () => {
   it('display name and deck text persist under cn.*', () => {
     actions.setDisplayName('Ricardo');
@@ -116,10 +157,10 @@ describe('persistence', () => {
     expect(kv.get(KEYS.deck)).toBe('1 [C21:263] Command Tower');
   });
 
-  it('keyframes toggle flips and persists', () => {
-    expect(stores.settings.getState().keyframesMode).toBe(true);
-    actions.toggleKeyframesMode();
+  it('keyframes toggle flips and persists (patch mode is the C3 default)', () => {
     expect(stores.settings.getState().keyframesMode).toBe(false);
-    expect(JSON.parse(kv.get(KEYS.settings)!)).toEqual({ keyframesMode: false });
+    actions.toggleKeyframesMode();
+    expect(stores.settings.getState().keyframesMode).toBe(true);
+    expect(JSON.parse(kv.get(KEYS.settings)!)).toEqual({ v: 3, keyframesMode: true });
   });
 });

@@ -19,7 +19,7 @@ it('completes hello → welcome against the live bridge, dev-strict', async () =
   const stores = createStores(kv);
   const recorder = new Recorder();
   const manager = createSocketManager({
-    stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true,
+    stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true, devVerify: true,
   });
 
   try {

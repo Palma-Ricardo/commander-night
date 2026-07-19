@@ -24,7 +24,7 @@ function makeClient() {
   const kv = memoryKV();
   const stores = createStores(kv);
   const recorder = new Recorder();
-  const manager = createSocketManager({ stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true });
+  const manager = createSocketManager({ stores, kv, recorder, url: URL_UNDER_TEST, strictDecode: true, devVerify: true });
   const actions = createActions(stores, manager, kv);
   return { kv, stores, recorder, manager, actions };
 }

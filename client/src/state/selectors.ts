@@ -118,9 +118,10 @@ export type Affordance =
   | { kind: 'target'; selected: boolean }
   // payMana source; cantPay ⇔ a click provably didn't progress payment (§7)
   | { kind: 'source'; cantPay: boolean }
-  // combat declaration toggles (priority + combat)
-  | { kind: 'combatCandidate' }
-  | { kind: 'combatDeclared' };
+  // combat declaration toggles (priority + combat); role drives the badge
+  // (swords for attackers, shield for blockers, §7)
+  | { kind: 'combatCandidate'; role: 'attackers' | 'blockers' }
+  | { kind: 'combatDeclared'; role: 'attackers' | 'blockers' };
 
 export function affordanceFor(prompt: PromptStoreState, objectId: Id): Affordance | undefined {
   const p = prompt.pending;
@@ -128,8 +129,8 @@ export function affordanceFor(prompt: PromptStoreState, objectId: Id): Affordanc
   switch (p.kind) {
     case 'priority': {
       if (p.combat !== undefined) {
-        if (p.combat.declared.includes(objectId)) return { kind: 'combatDeclared' };
-        if (p.combat.candidates.includes(objectId)) return { kind: 'combatCandidate' };
+        if (p.combat.declared.includes(objectId)) return { kind: 'combatDeclared', role: p.combat.role };
+        if (p.combat.candidates.includes(objectId)) return { kind: 'combatCandidate', role: p.combat.role };
         return undefined;
       }
       const actions = p.playable[objectId];

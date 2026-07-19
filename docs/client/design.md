@@ -77,6 +77,10 @@ owning store, and only the protocol layer writes it.** React components read via
 call command functions; they never mutate stores. Command functions never mutate game state
 either — the server echo is the only writer (e.g. chat renders only the `game.log` echo,
 protocol §10). The single optimistic bit anywhere is the prompt store's `inflight` flag.
+One carve-out (added at C3): `autoMana` has no state echo at all (protocol §9), so the game
+store holds the **ack-confirmed** last value the `setAutoMana` action sent — written only
+after the bridge acks, defaulting to the server's ON. Known limit: a reload + resume renders
+the default again while the server keeps the older setting; revisit if it bites at a table.
 
 | Store | Owns | Written by |
 |---|---|---|

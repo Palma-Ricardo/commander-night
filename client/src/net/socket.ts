@@ -29,6 +29,8 @@ export interface SocketManagerOpts {
   recorder: Recorder;
   url: string;
   strictDecode: boolean;
+  /** Dev keyframe-verify probe (design §6); import.meta.env.DEV in the app. */
+  devVerify: boolean;
   wsFactory?: (url: string) => WebSocket;
   backoffMs?: readonly number[];
   jitter?: () => number;            // [0,1); default Math.random
@@ -63,6 +65,7 @@ export function createSocketManager(opts: SocketManagerOpts): SocketManager {
     session: sessionWriter,
     requestResync: () => resyncNow(),
     rehello: () => { if (ws?.readyState === WebSocket.OPEN) sendHello(); },
+    devVerify: opts.devVerify,
   };
 
   let ws: WebSocket | null = null;

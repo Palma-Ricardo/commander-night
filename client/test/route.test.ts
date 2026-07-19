@@ -42,6 +42,7 @@ beforeEach(() => {
     session: new SessionWriter(stores, kv, () => clock),
     requestResync: () => resyncs++,
     rehello: () => rehellos++,
+    devVerify: true,
   };
 });
 
@@ -95,7 +96,19 @@ describe('route', () => {
     expect(seqs[0]).toBe(20);   // oldest evicted
   });
 
-  it('patch before C3 gates and resyncs exactly once until the keyframe restores live', () => {
+  it('patches apply through route and advance the resume anchor', () => {
+    route(keyframe, ctx);
+    route({
+      t: 'game.patch', seq: keyframe.seq + 1, gameId: 'g1', base: keyframe.seq,
+      ops: [{ op: 'replace', path: '/turn/n', value: 4 }],
+    }, ctx);
+    expect(stores.game.getState().state?.turn.n).toBe(4);
+    expect(stores.game.getState().lastAppliedSeq).toBe(keyframe.seq + 1);
+    expect(stores.session.getState().resume?.lastSeq).toBe(keyframe.seq + 1);
+  });
+
+  it('a base-mismatched patch gates and resyncs exactly once until the keyframe restores live', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const patch = {
       t: 'game.patch' as const, seq: 10, gameId: 'g1', base: 9,
       ops: [{ op: 'replace' as const, path: '/turn/n', value: 4 }],
@@ -106,8 +119,9 @@ describe('route', () => {
     expect(stores.game.getState().syncMode).toBe('awaitingKeyframe');
     route({ ...patch, seq: 11, base: 10 }, ctx);
     expect(resyncs).toBe(1);   // gated — no resync storm
-    route(keyframe, ctx);
+    route({ ...keyframe, seq: 12 }, ctx);
     expect(stores.game.getState().syncMode).toBe('live');
+    warn.mockRestore();
   });
 
   it('fatal error parks the connection; non-fatal unmatched errors only warn', () => {

@@ -117,9 +117,9 @@ describe('affordanceFor (§7)', () => {
     const scratch = scratchWith({ pending: combat });
     if (combat.kind !== 'priority' || combat.combat === undefined) throw new Error('bad sample');
     const cand = combat.combat.candidates[0]!;
-    expect(affordanceFor(scratch, cand)).toEqual({ kind: 'combatCandidate' });
+    expect(affordanceFor(scratch, cand)).toEqual({ kind: 'combatCandidate', role: combat.combat.role });
     for (const d of combat.combat.declared) {
-      expect(affordanceFor(scratch, d)).toEqual({ kind: 'combatDeclared' });
+      expect(affordanceFor(scratch, d)).toEqual({ kind: 'combatDeclared', role: combat.combat.role });
     }
   });
 

@@ -13,7 +13,6 @@ import night.bridge.proto.state.Step;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,20 +30,25 @@ class StateStoreTest {
                 List.of(), null, null, null, null);
     }
 
+    private static ServerMsg one(List<ServerMsg> msgs) {
+        assertEquals(1, msgs.size(), "expected exactly one message, got " + msgs);
+        return msgs.get(0);
+    }
+
     @Test
     void firstStateIsAKeyframeAtSeqZero() {
         StateStore store = new StateStore(100);
-        ServerMsg msg = store.update("g1", state(40), false).orElseThrow();
+        ServerMsg msg = one(store.update("g1", state(40), false));
         assertEquals(0, assertInstanceOf(StateKeyframe.class, msg).seq());
     }
 
     @Test
     void unchangedStateEmitsNothing() {
         StateStore store = new StateStore(100);
-        assertTrue(store.update("g1", state(40), false).isPresent());
+        assertEquals(1, store.update("g1", state(40), false).size());
         assertTrue(store.update("g1", state(40), false).isEmpty());
         assertEquals(0, store.lastSeq(), "suppressed states must not burn seq numbers");
-        assertTrue(store.update("g1", state(39), false).isPresent());
+        assertEquals(1, store.update("g1", state(39), false).size());
     }
 
     @Test
@@ -53,7 +57,7 @@ class StateStoreTest {
         store.update("g1", state(40), false);
         JsonNode before = Json.tree(state(40));
         StatePatch patch = assertInstanceOf(StatePatch.class,
-                store.update("g1", state(37), false).orElseThrow());
+                one(store.update("g1", state(37), false)));
         assertEquals(0, patch.base(), "patch must anchor to the keyframe's seq");
         assertEquals(1, patch.seq());
         assertEquals(Json.tree(state(37)), JsonPatch.apply(patch.ops(), before),
@@ -71,29 +75,37 @@ class StateStoreTest {
         store.nextSeq();                                 // seq 1: e.g. a prompt
         store.nextSeq();                                 // seq 2: e.g. a log line
         StatePatch patch = assertInstanceOf(StatePatch.class,
-                store.update("g1", state(39), false).orElseThrow());
+                one(store.update("g1", state(39), false)));
         assertEquals(3, patch.seq());
         assertEquals(0, patch.base(), "base is the last state event, not seq-1");
     }
 
     @Test
-    void keyframeEveryNPatchesRollsOver() {
+    void backstopKeyframeFollowsTheNthPatchWithTheSameTree() {
         StateStore store = new StateStore(2);
         int life = 40;
-        assertInstanceOf(StateKeyframe.class, store.update("g1", state(life--), false).orElseThrow());
-        assertInstanceOf(StatePatch.class, store.update("g1", state(life--), false).orElseThrow());
-        assertInstanceOf(StatePatch.class, store.update("g1", state(life--), false).orElseThrow());
-        assertInstanceOf(StateKeyframe.class, store.update("g1", state(life--), false).orElseThrow(),
-                "the keyframeEvery+1th change must be a keyframe");
-        assertInstanceOf(StatePatch.class, store.update("g1", state(life--), false).orElseThrow(),
-                "the patch counter must reset after the backstop keyframe");
+        assertInstanceOf(StateKeyframe.class, one(store.update("g1", state(life--), false)));
+        assertInstanceOf(StatePatch.class, one(store.update("g1", state(life--), false)));
+
+        // the keyframeEvery-th patch arrives with its backstop keyframe in tow
+        List<ServerMsg> pair = store.update("g1", state(life), false);
+        assertEquals(2, pair.size(), "backstop must follow the patch, not replace it");
+        StatePatch patch = assertInstanceOf(StatePatch.class, pair.get(0));
+        StateKeyframe backstop = assertInstanceOf(StateKeyframe.class, pair.get(1));
+        assertEquals(patch.seq() + 1, backstop.seq(), "backstop rides at the next seq");
+        assertEquals(Json.tree(state(life--)), backstop.state(),
+                "backstop carries exactly the tree the patch stream produces (client §6 verify)");
+
+        // the counter reset — patching resumes, anchored to the backstop
+        StatePatch next = assertInstanceOf(StatePatch.class, one(store.update("g1", state(life--), false)));
+        assertEquals(backstop.seq(), next.base(), "patches must anchor to the backstop keyframe");
     }
 
     @Test
     void keyframesOnlyModeNeverPatches() {
         StateStore store = new StateStore(100);
-        assertInstanceOf(StateKeyframe.class, store.update("g1", state(40), true).orElseThrow());
-        assertInstanceOf(StateKeyframe.class, store.update("g1", state(39), true).orElseThrow());
+        assertInstanceOf(StateKeyframe.class, one(store.update("g1", state(40), true)));
+        assertInstanceOf(StateKeyframe.class, one(store.update("g1", state(39), true)));
     }
 
     @Test
@@ -105,7 +117,7 @@ class StateStoreTest {
         assertEquals(1, kf.seq());
         assertEquals(Json.tree(state(40)), kf.state());
         StatePatch patch = assertInstanceOf(StatePatch.class,
-                store.update("g1", state(39), false).orElseThrow());
+                one(store.update("g1", state(39), false)));
         assertEquals(1, patch.base(), "patches must anchor to the forced keyframe");
     }
 
@@ -113,10 +125,10 @@ class StateStoreTest {
     void patchBaseChainsAcrossConsecutivePatches() {
         StateStore store = new StateStore(100);
         store.update("g1", state(40), false);
-        Optional<ServerMsg> p1 = store.update("g1", state(39), false);
-        Optional<ServerMsg> p2 = store.update("g1", state(38), false);
-        assertEquals(1, ((StatePatch) p1.orElseThrow()).seq());
-        assertEquals(1, ((StatePatch) p2.orElseThrow()).base());
-        assertEquals(2, ((StatePatch) p2.orElseThrow()).seq());
+        StatePatch p1 = assertInstanceOf(StatePatch.class, one(store.update("g1", state(39), false)));
+        StatePatch p2 = assertInstanceOf(StatePatch.class, one(store.update("g1", state(38), false)));
+        assertEquals(1, p1.seq());
+        assertEquals(1, p2.base());
+        assertEquals(2, p2.seq());
     }
 }

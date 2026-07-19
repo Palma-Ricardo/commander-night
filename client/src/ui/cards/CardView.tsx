@@ -117,7 +117,11 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
         <span className="badge badge-pt">{card.power}/{card.toughness}</span>
       )}
       {selected && <span className="badge badge-check">✓</span>}
-      {aff?.kind === 'combatDeclared' && <span className="badge badge-swords">⚔</span>}
+      {aff?.kind === 'combatDeclared' && (
+        aff.role === 'attackers'
+          ? <span className="badge badge-swords">⚔</span>
+          : <span className="badge badge-shield">🛡</span>
+      )}
       {aff?.kind === 'source' && aff.cantPay && <span className="badge badge-cantpay">can’t pay this</span>}
       {spinner && <span className="badge badge-spinner" aria-label="waiting for server" />}
       {badge}

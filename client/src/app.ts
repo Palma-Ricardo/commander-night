@@ -23,10 +23,50 @@ export const appManager = createSocketManager({
   recorder,
   url: bridgeUrl(),
   strictDecode: import.meta.env.DEV,
+  devVerify: import.meta.env.DEV,
 });
 export const appActions = createActions(appStores, appManager, appKV);
 export const appScryfall = createScryfallResolver({ kv: appKV });
 
 export function bootApp(): void {
   appManager.connect();
+}
+
+// Dev-only introspection handle for the Playwright auto-player (design §13):
+// reads only — the auto-player drives the game through visible UI, but asserts
+// sync health (counters, §6) through here.
+export interface NightSnapshot {
+  over: boolean;
+  syncMode: 'live' | 'awaitingKeyframe';
+  lastAppliedSeq: number;
+  counters: { patches: number; keyframes: number; resyncs: number; verifies: number; divergences: number };
+  promptId: number | null;
+  promptKind: string | null;
+  combatRole: 'attackers' | 'blockers' | null;
+  inflight: boolean;
+  turn: number | null;
+}
+
+declare global {
+  interface Window { __night?: { snapshot(): NightSnapshot } }
+}
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.__night = {
+    snapshot: () => {
+      const g = appStores.game.getState();
+      const p = appStores.prompt.getState();
+      return {
+        over: g.over !== undefined,
+        syncMode: g.syncMode,
+        lastAppliedSeq: g.lastAppliedSeq,
+        counters: { ...g.counters },
+        promptId: p.pending?.promptId ?? null,
+        promptKind: p.pending?.kind ?? null,
+        combatRole: p.pending?.kind === 'priority' ? p.pending.combat?.role ?? null : null,
+        inflight: p.inflight,
+        turn: g.state?.turn.n ?? null,
+      };
+    },
+  };
 }

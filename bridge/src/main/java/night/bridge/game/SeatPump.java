@@ -583,7 +583,7 @@ public final class SeatPump implements AutoCloseable {
             return;
         }
         lastState = ViewTranslator.translate(view, gameIdStr, playerId, this::displayName);
-        store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean()).ifPresent(sink::send);
+        store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean()).forEach(sink::send);
     }
 
     /** Every positional dialog flows through the FSM's replay interception (§8). */
@@ -765,8 +765,13 @@ public final class SeatPump implements AutoCloseable {
         if (lastState != null) {
             lastState = lastState.over();
             // protocol §11: a final keyframe precedes game.over — never a patch
-            store.update(gameIdStr, lastState, true).ifPresentOrElse(sink::send,
-                    () -> store.forceKeyframe(gameIdStr).ifPresent(sink::send));
+            // (keyframesOnly=true, so update() emits at most one keyframe)
+            List<ServerMsg> finals = store.update(gameIdStr, lastState, true);
+            if (finals.isEmpty()) {
+                store.forceKeyframe(gameIdStr).ifPresent(sink::send);
+            } else {
+                finals.forEach(sink::send);
+            }
         }
         if (fsm != null && fsm.pending() != null) {
             promptDone(fsm.pending().promptId(), PromptDone.Reason.GAME_OVER);

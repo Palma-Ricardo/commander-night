@@ -15,7 +15,7 @@ import { createSettingsStore } from './settings';
 import type { KV } from './storage';
 
 export type { ConnectionState, SocketStatus } from './connection';
-export type { GameStoreState } from './game';
+export type { GameStoreState, SyncCounters } from './game';
 export type { LobbyStoreState } from './lobby';
 export type { LogStoreState } from './log';
 export type { PromptStoreState } from './prompt';

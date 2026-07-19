@@ -7,6 +7,7 @@ import night.bridge.proto.StateKeyframe;
 import night.bridge.proto.StatePatch;
 import night.bridge.proto.state.GameState;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -15,11 +16,13 @@ import java.util.Optional;
  * lives here and everything the pump emits stamps through it).
  *
  * <p>Keyframe policy (protocol §7): keyframe on the first state, on demand
- * ({@link #forceKeyframe} — resync/reconnect), and instead of every
- * {@code keyframeEvery}+1th consecutive patch as a self-healing backstop;
- * a patch otherwise. Snapshots whose trimmed tree is unchanged emit nothing
- * (§7 empty-diff suppression). {@code keyframesOnly} is the hello
- * {@code stateMode:'keyframes'} debug escape hatch.
+ * ({@link #forceKeyframe} — resync/reconnect), and after every
+ * {@code keyframeEvery}th consecutive patch as a self-healing backstop — the
+ * backstop keyframe follows that patch at the next seq with the same tree, so
+ * a dev-mode client can deep-verify its patched tree against ground truth
+ * (client design §6) as an exact match. Snapshots whose trimmed tree is
+ * unchanged emit nothing (§7 empty-diff suppression). {@code keyframesOnly}
+ * is the hello {@code stateMode:'keyframes'} debug escape hatch.
  *
  * <p>{@code base} on a patch is the seq of the previous state-carrying event
  * (keyframe or patch) — other event kinds interleave on the same counter, so
@@ -48,21 +51,26 @@ public final class StateStore {
         return seq;
     }
 
-    /** Empty when the trimmed tree is unchanged from the last emitted one. */
-    public Optional<ServerMsg> update(String gameId, GameState state, boolean keyframesOnly) {
+    /** Empty when the trimmed tree is unchanged from the last emitted one;
+     *  the patch plus the same-tree backstop keyframe when the backstop fires. */
+    public List<ServerMsg> update(String gameId, GameState state, boolean keyframesOnly) {
         JsonNode tree = Json.tree(state);
         if (tree.equals(lastTree)) {
-            return Optional.empty();
+            return List.of();
         }
-        if (lastTree == null || keyframesOnly || patchesSinceKeyframe >= keyframeEvery) {
-            return Optional.of(keyframe(gameId, tree));
+        if (lastTree == null || keyframesOnly) {
+            return List.of(keyframe(gameId, tree));
         }
         JsonNode ops = Differ.diff(lastTree, tree);
         lastTree = tree;
         patchesSinceKeyframe++;
         long base = lastStateSeq;
         lastStateSeq = nextSeq();
-        return Optional.of(new StatePatch(lastStateSeq, gameId, base, ops));
+        StatePatch patch = new StatePatch(lastStateSeq, gameId, base, ops);
+        if (patchesSinceKeyframe >= keyframeEvery) {
+            return List.of(patch, keyframe(gameId, tree));
+        }
+        return List.of(patch);
     }
 
     /** Fresh keyframe of the current tree (resync/reconnect); empty before the first state. */

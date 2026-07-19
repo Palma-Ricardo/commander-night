@@ -459,3 +459,39 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   padding: 0.4rem 0.6rem; font-size: 0.75rem; max-height: 10rem; overflow-y: auto;
 }
 .hover-oracle p { margin: 0 0 0.3rem; }
+
+/* ── C3: turn controls, menus, combat badges, ability popover ─────────────── */
+
+.turn-controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.turn-controls kbd {
+  margin-left: 0.5rem; padding: 0 0.25rem; font-size: 0.65rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+.prompt-dock kbd {
+  margin-left: 0.3rem; padding: 0 0.25rem; font-size: 0.65rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+.skip-active { border-color: var(--accent); color: var(--accent); }
+.auto-mana { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+
+.menu-root { position: relative; display: inline-block; }
+.menu-pop {
+  position: absolute; z-index: 40; bottom: calc(100% + 0.3rem); left: 0;
+  min-width: 13rem; display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem;
+  box-shadow: 0 8px 30px #000b;
+}
+.menu-pop button { text-align: left; font-size: 0.85rem; padding: 0.35rem 0.5rem; display: flex; justify-content: space-between; }
+.menu-pop .menu-on { color: var(--accent); }
+
+.badge-shield { top: -0.5rem; left: 50%; transform: translateX(-50%); background: var(--in); }
+
+.ability-popover {
+  position: fixed; z-index: 60; transform: translate(-50%, calc(-100% - 0.4rem));
+  min-width: 12rem; max-width: 22rem; display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; padding: 0.3rem;
+  box-shadow: 0 8px 30px #000b;
+}
+.ability-popover button { text-align: left; font-size: 0.8rem; padding: 0.3rem 0.5rem; }
+
+.debug-diverged { color: var(--error); }
