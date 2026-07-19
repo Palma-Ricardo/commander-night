@@ -104,4 +104,35 @@ describe('startNudge', () => {
     vi.advanceTimersByTime(5000);
     expect(doc.title).toBe('Commander Night');
   });
+
+  it('is idempotent when store updates while flashing', () => {
+    doc.hidden = true;
+    stop = startNudge({ doc, prompt });
+    prompt.setState({ pending: priority(1) });
+
+    // First flash cycle: advance 1200ms
+    vi.advanceTimersByTime(1200);
+    expect(doc.title).toBe(NUDGE_TITLE);
+    expect(vi.getTimerCount()).toBe(1);
+
+    // Update with a different priority prompt while flashing
+    prompt.setState({ pending: priority(2) });
+
+    // Assert: still only one interval (start() guard prevents re-registration)
+    expect(vi.getTimerCount()).toBe(1);
+
+    // Second flash cycle: advance 1200ms
+    // If the guard worked, this flips to baseTitle on the original interval
+    // If guard failed, duplicate intervals would shift the cadence
+    vi.advanceTimersByTime(1200);
+    expect(doc.title).toBe('Commander Night');
+
+    // Third cycle: advance 1200ms more, should flip back to NUDGE_TITLE
+    vi.advanceTimersByTime(1200);
+    expect(doc.title).toBe(NUDGE_TITLE);
+
+    // Dispose and verify title is restored (baseTitle was never re-captured)
+    stop();
+    expect(doc.title).toBe('Commander Night');
+  });
 });
