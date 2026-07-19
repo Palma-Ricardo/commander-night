@@ -7,3 +7,6 @@ bridge/logs/
 bridge/out/
 logs/
 .harness-session.json
+
+# subagent-driven-development scratch (progress ledger, briefs, review packages)
+.superpowers/
