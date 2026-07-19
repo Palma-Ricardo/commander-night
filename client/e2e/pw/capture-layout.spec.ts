@@ -13,8 +13,9 @@ const DECK = fs.readFileSync(
   fileURLToPath(new URL('../../../upgrades_unleashed.dck', import.meta.url)), 'utf8');
 
 const OUT = fileURLToPath(new URL('../artifacts/layout-keyframe.json', import.meta.url));
-const TARGET_TURN = 12;             // dense enough for a layout pass; reachable
-                                    // well inside an AI-pace game
+const TARGET_TURN = 25;             // turn 12 captured only 15 permanents and
+                                    // empty graveyards (2026-07-19) — early AI
+                                    // turns pass almost instantly, so aim later
 
 test('capture a dense mid-game keyframe for the layout harness', async ({ page }) => {
   test.setTimeout(30 * 60_000);
