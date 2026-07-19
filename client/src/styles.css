@@ -440,6 +440,11 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .modal-close { background: none; color: var(--muted); font-size: 1rem; padding: 0.1rem 0.4rem; }
 .modal-msg { color: var(--text); }
 .modal-actions { display: flex; gap: 0.6rem; margin-top: 0.8rem; }
+.pile-filter {
+  width: 100%; margin: 0 0 0.6rem; padding: 0.35rem 0.5rem;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;
+}
 .card-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .piles { display: flex; gap: 1.2rem; }
 .pile-col { display: flex; flex-direction: column; gap: 0.6rem; flex: 1; }

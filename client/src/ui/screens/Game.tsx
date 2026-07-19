@@ -116,7 +116,7 @@ export function Game() {
 
       {browse !== null && (
         <Modal title={browse.title} onClose={() => setBrowse(null)}>
-          <CardGrid cards={browse.cards} />
+          <CardGrid cards={browse.cards} browsable />
         </Modal>
       )}
       <HoverPreview />
