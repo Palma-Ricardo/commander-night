@@ -304,6 +304,17 @@ describe('submitDeck image warm-up (C5)', () => {
     await warmActions.submitDeck();
     expect(warmed).toHaveLength(0);
   });
+
+  it('swallows a thrown resolver — a warm failure never rejects submitDeck()', async () => {
+    const warmActions = createActions(stores, fakeManager, kv, {
+      scryfall: { resolve: () => { throw new Error('cache oops'); } },
+    });
+    warmActions.setDeckText('1 [MKC:145] Agitator Ant\n');
+    // Must not throw, despite the resolver throwing
+    await expect(warmActions.submitDeck()).resolves.toBeUndefined();
+    // But the deck was still sent
+    expect(sent[0]).toMatchObject({ t: 'lobby.deck', format: 'dck' });
+  });
 });
 
 describe('persistence', () => {

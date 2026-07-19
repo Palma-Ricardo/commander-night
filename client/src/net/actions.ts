@@ -131,7 +131,13 @@ export function createActions(
     const content = stores.session.getState().deckText;
     unwrap(await manager.send(lobbyDeck(ctx, { format: 'dck', content })));
     if (opts.scryfall !== undefined && content.trim() !== '') {
-      for (const card of parseDeckIdentities(content)) opts.scryfall.resolve(card, 2);
+      // Warm-up is strictly optional (design §9): the server already acked the deck,
+      // so a throw from resolve() must never look like a submit failure (it's cosmetic).
+      try {
+        for (const card of parseDeckIdentities(content)) opts.scryfall.resolve(card, 2);
+      } catch {
+        // swallow — cache warm is a best-effort optimization, never a contract
+      }
     }
   }
 
