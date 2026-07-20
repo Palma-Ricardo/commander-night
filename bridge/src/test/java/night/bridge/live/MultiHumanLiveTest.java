@@ -6,6 +6,7 @@ import io.javalin.Javalin;
 import night.bridge.config.Config;
 import night.bridge.game.Games;
 import night.bridge.lobby.LobbyService;
+import night.bridge.lobby.deck.Fixtures;
 import night.bridge.live.LiveHarness.Client;
 import night.bridge.net.Codec;
 import night.bridge.net.SessionRegistry;
@@ -15,7 +16,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -105,14 +105,43 @@ class MultiHumanLiveTest {
                 n -> "lobby.state".equals(n.path("t").asText()) && n.hasNonNull("code"))
                 .get("code").asText();
         alice.awaitAck("join", alice.send("lobby.join", Map.of("code", code, "displayName", "Alice")));
-        String deck = Files.readString(LiveHarness.SAMPLE_DECK);
-        alice.awaitAck("deck", alice.send("lobby.deck", Map.of("format", "dck", "content", deck)));
+        // Deck import acceptance (Task 15): the two NEW formats play a real game,
+        // auto-detected. Alice pastes a Moxfield export whose two commanders are a
+        // partner pair only the card database can identify (XMage's own
+        // DoctorsCompanionValidator); Bob pastes an MTGO plain list whose single
+        // commander rides a trailing blank-line-delimited stanza. Both go through
+        // sniff → parse → assemble → the same lobby/joinTable/game/rematch path.
+        String moxfield = Fixtures.read("timey_wimey.moxfield");
+        String mtgo = Fixtures.read("counter_intelligence.mtgo");
+        alice.awaitAck("deck", alice.send("lobby.deck", Map.of("format", "auto", "content", moxfield)));
         alice.awaitAck("ready", alice.send("lobby.ready", Map.of("ready", true)));
 
         Client bob = Client.connect(port, "bob");
         bob.hello(Map.of());
         bob.awaitAck("join", bob.send("lobby.join", Map.of("code", code, "displayName", "Bob")));
-        bob.awaitAck("deck", bob.send("lobby.deck", Map.of("format", "dck", "content", deck)));
+        bob.awaitAck("deck", bob.send("lobby.deck", Map.of("format", "auto", "content", mtgo)));
+
+        // The lobby must show auto-detection worked and both parsers ran end to end,
+        // otherwise the game below would still start and silently prove nothing about
+        // import. Wait for the lobby.state that carries BOTH decks (seat 1 present),
+        // then check each seat's echoed format, count and inferred commander(s).
+        JsonNode decked = alice.await("lobby.state with both decks", 10,
+                n -> "lobby.state".equals(n.path("t").asText())
+                        && "mtgo".equals(n.at("/seats/1/deck/format").asText()));
+        assertEquals("moxfield", decked.at("/seats/0/deck/format").asText(),
+                "Alice's Moxfield export must be auto-detected");
+        assertTrue(decked.at("/seats/0/deck/valid").asBoolean(false), "Alice's Moxfield deck must validate");
+        assertEquals(100, decked.at("/seats/0/deck/cards").asInt(), "Alice's deck is a 100-card Commander deck");
+        assertEquals(2, decked.at("/seats/0/deck/commander").size(),
+                "Rose Tyler + The Tenth Doctor should be detected as a partner pair");
+        assertEquals("Rose Tyler", decked.at("/seats/0/deck/commander/0").asText());
+        assertEquals("The Tenth Doctor", decked.at("/seats/0/deck/commander/1").asText());
+        assertTrue(decked.at("/seats/1/deck/valid").asBoolean(false), "Bob's MTGO deck must validate");
+        assertEquals(100, decked.at("/seats/1/deck/cards").asInt(), "Bob's deck is a 100-card Commander deck");
+        assertEquals(1, decked.at("/seats/1/deck/commander").size(),
+                "counter_intelligence's single trailing-stanza commander must be detected");
+        assertEquals("Inspirit, Flagship Vessel", decked.at("/seats/1/deck/commander/0").asText());
+
         bob.awaitAck("ready", bob.send("lobby.ready", Map.of("ready", true)));
 
         alice.awaitAck("start", alice.send("lobby.start", Map.of("fillAI", true)));
