@@ -31,6 +31,7 @@ import night.bridge.proto.state.StackItem;
 import night.bridge.proto.state.Step;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -263,6 +264,9 @@ public final class ViewTranslator {
                         ids(cv.getTargets())));
             }
         }
+        // XMage's SpellStack is an ArrayDeque pushed at the head, so GameView
+        // iterates top→bottom; protocol §6 declares state.stack bottom→top.
+        Collections.reverse(items);
         return items;
     }
 
@@ -318,7 +322,7 @@ public final class ViewTranslator {
                 for (SimpleCardView v : l.getCards().values()) {
                     cs.add(new Card(v.getId().toString(), "", v.getExpansionSetCode(), v.getCardNumber(),
                             null, 0, List.of(), List.of(), List.of(), List.of(), List.of(),
-                            null, null, null, null, null, null, null));
+                            null, null, null, null, null, null, null, null));
                 }
             }
             windows.add(new NamedCards(l.getName(), cs));
@@ -456,6 +460,8 @@ public final class ViewTranslator {
                 blankToNull(v.getDefense()),
                 counters(v.getCounters()),
                 v.isToken() ? true : null,
+                // Only tokens need it, and only they lack a collector number.
+                v.isToken() ? v.getImageNumber() : null,
                 v.isFaceDown() ? true : null);
     }
 

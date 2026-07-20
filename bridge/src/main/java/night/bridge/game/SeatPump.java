@@ -26,6 +26,7 @@ import night.bridge.proto.state.GameState;
 import night.bridge.proto.state.Player;
 import night.bridge.sync.StateStore;
 import night.bridge.translate.LogTranslator;
+import night.bridge.translate.PromptNames;
 import night.bridge.translate.PromptTranslator;
 import night.bridge.translate.ViewTranslator;
 import night.bridge.xmage.SeatSession;
@@ -587,7 +588,10 @@ public final class SeatPump implements AutoCloseable {
     }
 
     /** Every positional dialog flows through the FSM's replay interception (§8). */
-    private void dialog(GamePrompt prompt) {
+    private void dialog(GamePrompt rawPrompt) {
+        // Rename here, before the FSM stores it: a prompt replayed on resume
+        // must read the same as the one it replaces (protocol §5).
+        GamePrompt prompt = PromptNames.rewrite(rawPrompt, this::rewriteNames);
         askCount++;
         nudges = 0;
         PromptFsm.Flow flow = fsm.onDialog(prompt);
@@ -727,9 +731,9 @@ public final class SeatPump implements AutoCloseable {
     }
 
     // XMage username → lobby display name. Seats are fixed before startMatch,
-    // so the map is cached on first use (pump-thread only). TODO(C3): prompt
-    // messages (playerRequest, rollback dialogs) still embed cn_* usernames —
-    // rewrite them when the prompt UI for those lands.
+    // so the map is cached on first use (pump-thread only). Applied to state
+    // (ViewTranslator), log lines, the game-over reason, and every prompt's
+    // player-facing text (PromptNames, at the dialog() choke point).
     private Map<String, String> displayNames;
 
     private String displayName(String username) {

@@ -10,9 +10,12 @@
 //   - Real cards: cards/{set}/{number} (lowercased set), then
 //     cards/named?exact=<name> (XMage set codes drift).
 //   - Tokens (XMage ships them with no collector number and a " Token" name
-//     suffix): Scryfall keeps token printings in t-prefixed sets under the
-//     bare name ("Goblin Token" in WAR → twar "Goblin") — so named?exact in
-//     t{set}, then {set}, then any printing.
+//     suffix): a name is not unique among tokens — one set has several Spirits
+//     — so these go through cards/search with include_extras, narrowed by
+//     colour and stats, degrading set → stats → colour, then the old
+//     named?exact rungs (Scryfall files token printings in t-prefixed sets:
+//     "Goblin Token" in WAR → twar "Goblin"). Identity is set+name+imageNumber,
+//     never the stats: those are current values and anthems move them.
 //   - Ladder exhausted → recorded as a miss (debug-panel list, §12); the card
 //     renders as a text frame.
 //
@@ -29,7 +32,22 @@ import { KEYS, type KV } from '../stores/storage';
 /** 0 = hand/commanders, 1 = battlefield, 2 = piles/log refs. */
 export type ImagePriority = 0 | 1 | 2;
 
-export interface CardIdentity { set: string; number: string; name: string; token?: boolean }
+/** The token-only fields that separate two arts sharing a set and a name. */
+export interface TokenFields {
+  /** XMage's art index within set+name (protocol §6). Identity only, never a URL part. */
+  imageNumber?: number;
+  /** Narrows the Scryfall search. P/T are *current* — anthems move them, so the ladder degrades. */
+  colors?: string[];
+  power?: string;
+  toughness?: string;
+}
+
+export interface CardIdentity extends TokenFields {
+  set: string;
+  number: string;
+  name: string;
+  token?: boolean;
+}
 
 export interface ImageEntry {
   status: 'loading' | 'ok' | 'miss';
@@ -44,7 +62,7 @@ export interface ScryfallResolver {
   /** Queue a lookup (dedupes; a higher priority re-request jumps the queue). */
   resolve(card: CardIdentity, priority: ImagePriority): void;
   /** Cache key for a card — the store's images index. */
-  keyOf(card: { set: string; number: string; name?: string }): string;
+  keyOf(card: { set: string; number: string; name?: string } & TokenFields): string;
   misses(): { key: string; name: string }[];
   dispose(): void;
 }
@@ -88,10 +106,22 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
   }
 
   // Tokens all arrive with an empty number — key those by name instead, or
-  // every token from one set would share a single "{set}/" entry.
-  const keyOf = (card: { set: string; number: string; name?: string }) =>
+  // every token from one set would share a single "{set}/" entry. Name alone
+  // is still not enough: a Chishiro deck makes a 1/1 white Spirit and a 2/2 red
+  // Spirit, which collided onto one key and one art (live, 2026-07-20). XMage's
+  // imageNumber is the art's real identity and is stable under anthems; the
+  // colour/stat suffix is the fallback for older bridges that omit it.
+  const tokenSuffix = (card: TokenFields): string => {
+    if (card.imageNumber !== undefined) return `#${card.imageNumber}`;
+    const colors = [...(card.colors ?? [])].sort().join('').toLowerCase() || 'c';
+    const pt = card.power !== undefined && card.toughness !== undefined
+      ? `${card.power}-${card.toughness}` : '';
+    return `#${colors}${pt === '' ? '' : `/${pt}`}`;
+  };
+
+  const keyOf = (card: { set: string; number: string; name?: string } & TokenFields) =>
     card.number === ''
-      ? `${card.set.toLowerCase()}/${(card.name ?? '').toLowerCase()}`
+      ? `${card.set.toLowerCase()}/${(card.name ?? '').toLowerCase()}${tokenSuffix(card)}`
       : `${card.set.toLowerCase()}/${card.number}`;
 
   function lookupLadder(card: CardIdentity): string[] {
@@ -106,7 +136,31 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
       ];
     }
     const bare = card.name.replace(/ [Tt]oken$/, '');
+
+    // named?exact assumes the name is unique, which for tokens it is not —
+    // "Spirit" matches every Spirit ever printed and the endpoint picks one.
+    // /cards/search can filter on colour and stats, but it hides token
+    // printings unless include_extras is set.
+    const search = (...filters: string[]) =>
+      `${apiBase}/cards/search?include_extras=true&unique=cards&order=released`
+      + `&q=${encodeURIComponent([`!"${bare}"`, 't:token', ...filters].join(' '))}`;
+
+    const colors = [...(card.colors ?? [])].sort().join('').toLowerCase();
+    const colorFilter = colors === '' ? 'c=c' : `c=${colors}`;
+    const stats = card.power !== undefined && card.toughness !== undefined
+      ? [`pow=${card.power}`, `tou=${card.toughness}`] : [];
+    const inSet = set === '' ? [] : [`set:t${set}`];
+
     const urls: string[] = [];
+    if (stats.length > 0) {
+      // Most specific first; then drop the set, then the stats — a token under
+      // an anthem reports buffed P/T that no printing will match.
+      if (inSet.length > 0) urls.push(search(...stats, colorFilter, ...inSet));
+      urls.push(search(...stats, colorFilter));
+    }
+    if (inSet.length > 0) urls.push(search(colorFilter, ...inSet));
+    urls.push(search(colorFilter));
+    // Last resort: the old name-only ladder, for tokens Scryfall files oddly.
     if (set !== '') urls.push(byName(bare, `t${set}`), byName(bare, set));
     urls.push(byName(bare));
     return urls;
@@ -208,6 +262,9 @@ export function createScryfallResolver(opts: ScryfallOpts): ScryfallResolver {
 
 function imageUrlFrom(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
+  // /cards/search returns a list; /cards/named and /cards/{set}/{n} a bare card.
+  const list = (body as { data?: unknown[] }).data;
+  if (Array.isArray(list)) return list.length === 0 ? undefined : imageUrlFrom(list[0]);
   const b = body as { image_uris?: Record<string, string>; card_faces?: { image_uris?: Record<string, string> }[] };
   const uris = b.image_uris ?? b.card_faces?.[0]?.image_uris;
   return uris?.['normal'] ?? uris?.['large'] ?? uris?.['small'];

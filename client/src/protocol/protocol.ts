@@ -78,6 +78,7 @@ export interface Card {
   loyalty?: string; defense?: string;
   counters?: { name: string; count: number }[];
   token?: boolean;
+  imageNumber?: number;        // tokens only: art discriminator within set+name
   faceDown?: boolean;          // face-down anywhere (exile, library plays, …)
 }
 

@@ -214,7 +214,7 @@ class ProtocolSamplesTest {
     private static Card spell(String id, String name, String set, String number, String manaCost,
                               int manaValue, String type, String text) {
         return new Card(id, name, set, number, manaCost, manaValue, List.of(type), List.of(),
-                List.of(), List.of(Color.U), List.of(text), null, null, null, null, null, null, null);
+                List.of(), List.of(Color.U), List.of(text), null, null, null, null, null, null, null, null);
     }
 
     @Test
@@ -343,7 +343,7 @@ class ProtocolSamplesTest {
                                 List.of(new Card("gy-1", "Arcane Signet", "C21", "251", "{2}", 2,
                                         List.of("ARTIFACT"), List.of(), List.of(), List.of(),
                                         List.of("{T}: Add one mana of any color in your commander's color identity."),
-                                        null, null, null, null, null, null, null)),
+                                        null, null, null, null, null, null, null, null)),
                                 List.of(),
                                 List.of(new CommandObject("cmd-1", "Lathril, Blade of the Elves",
                                         "KHM", "222", "{2}{B}{G}", 4,
@@ -363,14 +363,14 @@ class ProtocolSamplesTest {
                         new Card("stack-1", "Reality Shift", "CMR", "88", "{1}{U}", 2,
                                 List.of("INSTANT"), List.of(), List.of(), List.of(Color.U),
                                 List.of("Exile target creature."),
-                                null, null, null, null, null, null, null),
+                                null, null, null, null, null, null, null, null),
                         List.of("Exile target creature."),
                         List.of("perm-1"))),
                 null, null, null,
                 new GameState.Me("p1", List.of(new Card("hand-1", "Elvish Mystic", "C21", "155",
                         "{G}", 1, List.of("CREATURE"), List.of("Elf", "Druid"), List.of(),
                         List.of(Color.G), List.of("{T}: Add {G}."),
-                        "1", "1", null, null, null, null, null)),
+                        "1", "1", null, null, null, null, null, null)),
                         GameState.Me.Skip.STACK));
         assertProduces("game.state.json", new StateKeyframe(2, "g1", Json.tree(state)));
     }
@@ -409,7 +409,7 @@ class ProtocolSamplesTest {
                 new GameState.Me("p1", List.of(new Card("hand-1", "Elvish Mystic", "C21", "155",
                         "{G}", 1, List.of("CREATURE"), List.of("Elf", "Druid"), List.of(),
                         List.of(Color.G), List.of("{T}: Add {G}."),
-                        "1", "1", null, null, null, null, null)),
+                        "1", "1", null, null, null, null, null, null)),
                         null));
         assertProduces("game.state.mulligan.json", new StateKeyframe(0, "g1", Json.tree(state)));
     }
