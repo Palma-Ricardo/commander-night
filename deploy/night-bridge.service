@@ -21,7 +21,7 @@ ExecStart=/usr/bin/java \
     --add-opens=java.base/java.io=ALL-UNNAMED \
     --add-opens=java.base/java.lang=ALL-UNNAMED \
     -Djava.awt.headless=true \
-    -Xmx512m \
+    -Xmx1536m \
     -cp "/opt/commander-night/bridge/night-bridge.jar:/opt/commander-night/bridge/lib/*" \
     night.bridge.Main /etc/commander-night/bridge.yaml
 Restart=on-failure
@@ -33,7 +33,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/commander-night
+# Deck import opens XMage's card database through a `db` symlink under the cwd
+# (deploy/README.md, "Card database access"); the real files live under
+# /opt/commander-night. H2's AUTO_SERVER=TRUE mode writes a lock file there on
+# every open, even for read-only lookups, so that real path — not just the
+# symlink's parent — must be writable under ProtectSystem=strict.
+ReadWritePaths=/var/lib/commander-night /opt/commander-night/xmage-dist/xmage/mage-server/db
 
 [Install]
 WantedBy=multi-user.target

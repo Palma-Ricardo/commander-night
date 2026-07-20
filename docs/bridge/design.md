@@ -59,8 +59,8 @@ bridge/
     net/       WsEndpoint.java     # Javalin WS handler: framing, hello gate, per-conn send queue
                Codec.java          # Jackson (de)serialization + BAD_MESSAGE mapping
     lobby/     LobbyService.java   # codes → lobbies, seat binding, ready/start state machine
-               DeckParser.java     # .dck + plain-list formats; diagnostics per line
-               CardIndex.java      # name → (set, collectorNumber), generated resource
+               deck/               # DeckImporter facade: sniffer, 3 line parsers,
+                                   # CardResolver (the only card-db consumer), assembler
     xmage/     SeatSession.java    # implements MageClient; one per human seat
                XmageAnswers.java   # typed wrappers over session.sendPlayer* (+ tap logging)
                TableRecipe.java    # createTable/joinTable/startMatch per spike recipe
@@ -74,7 +74,6 @@ bridge/
     sync/      StateStore.java     # canonical trimmed JsonNode per seat + seq counter
                Differ.java         # zjsonpatch wrapper, empty-diff suppression
                KeyframePolicy.java # start / resync / reconnect / every-100-patches
-  src/main/resources/cards-index.tsv   # generated: card name → set/number (§9)
   src/test/java/…                  # §13
   src/test/resources/fixtures/     # Java-serialized callbacks + golden JSON outputs
   src/spike/java/night/spike/      # SpikeMain moves here unchanged (kept runnable; build
@@ -262,13 +261,18 @@ at most one pending prompt; bridge-monotonic `promptId`; answers fenced by `prom
   (pre-game reconnect). After the game has started, a join whose `displayName` matches a seated
   player (case-insensitive) re-binds that seat to the caller's token — the lost-token recovery
   path (§10). Host = creator (`hostUserId`).
-- **Decks** (`lobby.deck`): two formats per protocol §5. `.dck` parses as in the spike
-  (`[SET:NUM] Name`, `SB:` = commander). Plain list ("1 Card Name") resolves names through
-  `cards-index.tsv` — generated offline by a script that scrapes `vendor/mage` `Mage.Sets`
-  sources for `(name, set, collectorNumber)` (the technique that built the coverage deck),
-  preferring the newest printing. Unresolvable lines → per-line diagnostics in the ack. Bridge
-  pre-validates main+SB = 100 and commander-in-sideboard for friendlier errors than XMage's
-  joinTable rejection.
+- **Decks** (`lobby.deck`): three formats per protocol §5, auto-detected. `.dck` parses as in the
+  spike (`[SET:NUM] Name`, `SB:` = commander). Moxfield exports (`N Name (SET) NUM`) lead with
+  their commanders and may carry `SIDEBOARD:`/`PLANES:` sections, which are discarded with a
+  warning. MTGO lists (`N Name`) carry no printing at all and keep the commander in a trailing
+  stanza; names resolve through the pinned server's card database via
+  `CardRepository.findPreferredCoreExpansionCard` — XMage's own choice of printing, so ours match
+  its client's by construction. A missed set or collector number downgrades to a different
+  printing of the same card plus a warning; only a missed name is fatal. Partner pairs are
+  detected with XMage's own `mage.util.validation.CommanderValidator`s. Bridge pre-validates
+  main+SB = 100 and commander-in-sideboard for friendlier errors than XMage's joinTable rejection.
+  Implementation: `night.bridge.lobby.deck`, spec
+  `docs/superpowers/specs/2026-07-20-deck-import-formats-design.md`.
 - **AI fill**: host may fill empty seats with `COMPUTER_MAD` + a sample deck (dev/testing and
   odd-numbered nights; the spike recipe unchanged).
 - `lobby.start`: runs `TableRecipe` — `getMainRoomId` → `createTable(MatchOptions)` (game type
@@ -371,8 +375,6 @@ what the spike was, promoted to CI.
 - **Compound-target replay edge cases** — the one place the FSM interprets XMage's positional
   channel. Mitigations: progress-parse continuation matching, abort-to-fresh-prompt on any
   surprise, FSM unit tier with hostile scripted sequences.
-- **Card-name index drift** (plain-list decks) — index is generated from the *pinned* XMage
-  version's sets; regenerate on upgrade. `.dck` path has no such dependency.
 - **Commander-damage scrape brittleness** — fixture-pinned; failure degrades to a missing field,
   and protocol §16.3 lists fallbacks (combat-log derivation; server patch as last resort).
 - **Unobserved-live prompt kinds** (`distribute`, `PLAY_XMANA`) — implemented from source,

@@ -80,10 +80,11 @@ declaration (§8 `priority.combat`). Milestone table in design.md §14.
 ```sh
 ./bridge/install-xmage-jars.sh    # one-time (and after a dist upgrade): installs XMage jars
                                   # into the local Maven repo — they are not on Central
+ln -sfn vendor/xmage-dist/xmage/mage-server/db db   # one-time: deck import reads XMage's
+                                                    # card db through a hardcoded ./db path
 cd bridge && mvn test             # build + unit tests (live tier excluded)
 
-# local XMage server — startServer.sh may lack +x; equivalent. 2048m matches prod:
-# 1024m OOM'd in AI simulations on a turn-28 4-player board (2026-07-18), dropping seats.
+# local XMage server — startServer.sh may lack +x; equivalent. 2048m matches prod (8 GiB host):
 (cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.60.jar)
 
 cd bridge && mvn -Plive test                   # live tier: full game vs 3 AIs through the bridge

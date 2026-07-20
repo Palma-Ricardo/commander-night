@@ -47,6 +47,11 @@ rsync -a vendor/xmage-dist/ vps:/opt/commander-night/xmage-dist/
 cd bridge && mvn -Pdist -DskipTests package
 rsync -a target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
 rsync -a target/lib/ vps:/opt/commander-night/bridge/lib/
+# target/lib/ is ~90 MB (measured 2026-07-20). mage-sets-1.4.60.jar alone is ~60 MB of
+# that — deck import's CardResolver needs per-card implementation classes, which
+# CardInfo#createCard() loads reflectively at runtime, not just the metadata jars the
+# bridge compiles against. Trivial next to the ~150 MB card database it sits beside and
+# the VPS's 8 GiB RAM / tens of GB disk; not worth trimming.
 
 # 5. build + ship the web client (on the dev machine)
 cd client && npm ci && npm run build
@@ -62,6 +67,34 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now xmage-server night-bridge
 sudo systemctl reload caddy
 ```
+
+### Card database access (deck import)
+
+The bridge resolves deck card names through XMage's own card database. `CardRepository`
+hardcodes the relative path `./db/cards.h2`, so the bridge's working directory needs a symlink —
+create it before step 7, or the bridge will refuse to start (see the guard below) until you do:
+
+```sh
+sudo ln -sfn /opt/commander-night/xmage-dist/xmage/mage-server/db /var/lib/commander-night/db
+sudo chown -h commander:commander /var/lib/commander-night/db
+```
+
+The database is opened in H2 mixed mode (`AUTO_SERVER=TRUE`), so the bridge and the game server
+may hold it at the same time; start order does not matter — `night-bridge.service`'s
+`Restart=on-failure` retries every 3 s, so a bridge that starts before the database exists just
+comes up on the next attempt. `AUTO_SERVER=TRUE` does write a lock file on every open, though,
+even for the bridge's read-only lookups, and that file lands in the *real* directory the symlink
+points at, under `/opt`. `night-bridge.service` already lists that path (not just
+`/var/lib/commander-night`) in `ReadWritePaths=` for exactly this reason — `ProtectSystem=strict`
+follows the symlink to its target's actual mount, so only paths named there are writable. If you
+relocate the XMage dist, update both the symlink target above and the unit's `ReadWritePaths=`
+together.
+
+The bridge refuses to start if the table is missing or implausibly small. That guard is
+deliberate: `CardRepository`'s constructor drops and rebuilds the card table when it thinks the
+jar is newer than the database, and only the game server's set scanner can repopulate it. If you
+hit the guard, start the XMage server once and let it rebuild, then start (or let systemd retry)
+the bridge.
 
 ## TLS via DNS-01 (Route 53)
 
