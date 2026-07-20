@@ -1,12 +1,15 @@
 package night.bridge.lobby.deck;
 
+import mage.cards.decks.DeckCardInfo;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Tag("live")
@@ -42,13 +45,25 @@ class DeckAssemblerLiveTest {
         assertEquals(99, d.deck().getCards().size());
     }
 
+    /** The only end-to-end .dck coverage: 99 maindeck + a single commander in the sideboard slot. */
+    @Test
+    void importsADckFile() {
+        DeckImport d = importOf("upgrades_unleashed.dck");
+        assertTrue(d.valid(), () -> String.valueOf(d.problems()));
+        assertEquals(List.of("Chishiro, the Shattered Blade"), d.commander());
+        assertEquals(99, d.deck().getCards().size());
+        assertEquals(1, d.deck().getSideboard().size());
+    }
+
     @Test
     void discardedSectionBecomesAWarningNotAProblem() {
         DeckImport d = importOf("counter_intelligence.moxfield");
         assertTrue(d.valid(), () -> String.valueOf(d.problems()));
         assertEquals(1, d.warnings().stream().filter(w -> w.contains("SIDEBOARD:")).count(),
                 () -> String.valueOf(d.warnings()));
-        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("25")),
+        // Substantive text, not just "25": that digit alone could also be satisfied by an
+        // unrelated printing-fallback warning (counter_intelligence emits some of those too).
+        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("ignored 25 cards")),
                 () -> String.valueOf(d.warnings()));
     }
 
@@ -68,11 +83,32 @@ class DeckAssemblerLiveTest {
             assertEquals(100, mox.cards(), deck + ".moxfield card count");
             assertEquals(mtgo.commander(), mox.commander(), deck + ": commanders disagree");
             assertEquals(names(mtgo), names(mox), deck + ": deck contents disagree");
+            assertEveryEntryResolvesBySetAndNumber(mtgo, deck + ".mtgo");
+            assertEveryEntryResolvesBySetAndNumber(mox, deck + ".moxfield");
         }
     }
 
     private static List<String> names(DeckImport d) {
         return d.deck().getCards().stream().map(c -> c.getCardName()).sorted().toList();
+    }
+
+    /**
+     * Pins the {@link DeckCardInfo} constructor's argument order: {@code (cardName,
+     * cardNumber, setCode)} — number before set. Nothing else in this suite would notice a
+     * transposition, since every other assertion here reads only {@code getCardName()} and
+     * list sizes, both unaffected by which slot holds the set code and which holds the
+     * number. But {@code Deck.load} → {@code createCard} looks up printings by
+     * {@code CardRepository.findCard(setCode, cardNumber)} and ignores {@code cardName}
+     * entirely, so a transposed constructor call would build a deck that resolves zero
+     * cards at table-join time while looking completely fine here.
+     */
+    private static void assertEveryEntryResolvesBySetAndNumber(DeckImport d, String label) {
+        Stream.concat(d.deck().getCards().stream(), d.deck().getSideboard().stream())
+                .forEach(info -> assertNotNull(
+                        CardDb.cards().findCard(info.getSetCode(), info.getCardNumber()),
+                        () -> label + ": " + info.getCardName() + " (set=" + info.getSetCode()
+                                + ", number=" + info.getCardNumber() + ") does not resolve — "
+                                + "check DeckCardInfo's (name, number, set) argument order"));
     }
 
     @Test
@@ -96,7 +132,10 @@ class DeckAssemblerLiveTest {
     void rejectsADeckWithNoCommander() {
         DeckImport d = DeckAssembler.assemble(DeckFormat.MTGO, MtgoLines.parse("100 Forest\n"));
         assertFalse(d.valid());
-        assertTrue(d.problems().stream().anyMatch(p -> p.contains("1") && p.contains("commander")),
+        // The assembler's own "expected 1-2 commanders, found <n>" text, not MtgoLines' separate
+        // "no commander" problem — asserting the literal the production code emits for this
+        // branch, rather than a loose contains("1") that happens to also match it today.
+        assertTrue(d.problems().stream().anyMatch(p -> p.contains("found 0")),
                 () -> String.valueOf(d.problems()));
     }
 }

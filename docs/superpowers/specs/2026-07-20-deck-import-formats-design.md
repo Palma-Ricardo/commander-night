@@ -303,6 +303,12 @@ the card database:
 | `counter_intelligence` (EOC) | `.mtgo`, `.moxfield` | 99 / `SIDEBOARD:` 25 / 1 | mid-file section discard |
 | `timey_wimey` (WHO) | `.mtgo`, `.moxfield` | 98 / `PLANES:` 10 / 2 | partner pair; split-card names |
 
+`timey_wimey.moxfield`/`.mtgo` are not verbatim exports: four cards XMage 1.4.60 implements
+neither the printing nor the class of (Psychic Paper, The Moment, The Pandorica, The War Doctor)
+were swapped for real WHO cards (Ace's Baseball Bat, Confession Dial, Bessie the Doctor's
+Roadster, Commander's Sphere) — which is also why the `.moxfield` list is not in the strict
+alphabetical order a genuine Moxfield export would have.
+
 Having each deck in **both** formats is the highest-value property in the suite, and Timey-Wimey
 makes it sharper than mere redundancy: its `.mtgo` form states two commanders *structurally*,
 while its `.moxfield` form requires the partner validators to *infer* them. Asserting the two
