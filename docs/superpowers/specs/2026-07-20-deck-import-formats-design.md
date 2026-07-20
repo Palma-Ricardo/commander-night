@@ -83,8 +83,10 @@ that everything except one class is pure string work with no database dependency
 
 **`DeckLine`** — `record DeckLine(int qty, String name, String setCode, String number,
 Section section, int lineNo)`, where `setCode`/`number` are nullable and `Section` is
-`MAIN | COMMANDER | MAYBE_COMMANDER | DISCARD`. This is the common currency; the three line
-parsers differ only in how they populate it.
+`MAIN | COMMANDER | MAYBE_COMMANDER`. This is the common currency; the three line parsers
+differ only in how they populate it. Discards are not a `Section` value: a discarded stanza
+never becomes `DeckLine`s at all — it is filtered out at the `Stanzas` level and summarised
+in `ParsedLines.Discarded` (see below and §8), one entry per section name and card count.
 
 `MAYBE_COMMANDER` exists because of partners. `.dck` and `.mtgo` mark commanders unambiguously
 from text alone (`SB:` prefix; the last stanza), but `.moxfield` needs the card database to

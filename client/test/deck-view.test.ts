@@ -100,6 +100,27 @@ describe('deckView', () => {
     });
   });
 
+  // Problems quote card names and raw deck lines just as specifically as
+  // warnings do, so they get the same off-seat redaction — an opponent sees
+  // only that the deck is invalid, never why.
+  it("redacts problem detail on other players' seats but keeps it on the own seat", () => {
+    const deck: Deck = {
+      valid: false, cards: 101, format: 'moxfield',
+      commander: ['Rose Tyler', 'The Tenth Doctor'],
+      problems: ["line 12: no such card: Thassa's Oracle"],
+    };
+    expect(deckView(deck, { own: false })).toEqual({
+      kind: 'invalid', cards: 101, format: 'moxfield',
+      commanders: ['Rose Tyler', 'The Tenth Doctor'],
+      problems: ['deck invalid'], warnings: [],
+    });
+    expect(deckView(deck, { own: true })).toEqual({
+      kind: 'invalid', cards: 101, format: 'moxfield',
+      commanders: ['Rose Tyler', 'The Tenth Doctor'],
+      problems: ["line 12: no such card: Thassa's Oracle"], warnings: [],
+    });
+  });
+
   it('reports a seat with no deck yet', () => {
     expect(deckView(undefined, { own: true })).toEqual({
       kind: 'none', cards: 0, commanders: [], problems: [], warnings: [],

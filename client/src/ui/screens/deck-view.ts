@@ -43,11 +43,16 @@ export function deckView(deck: SeatDeck | undefined, opts: { own: boolean }): De
     cards: deck.cards,
     ...(deck.format !== undefined ? { format: deck.format } : {}),
     commanders: deck.commander ?? [],
-    // A deck can only be un-startable for a reason; if the bridge names none we
-    // still have to say something, or the row reads as merely quiet.
-    problems: deck.valid ? [] : (deck.problems?.length ? deck.problems : ['deck invalid']),
-    // An opponent's list is hidden information (design §9) and warnings quote it
-    // card by card. Commanders above are public — they start in the command zone.
+    // An opponent's list is hidden information (design §9): problems and warnings
+    // both quote it card by card, so both are redacted off-seat. A deck can only
+    // be un-startable for a reason, so on the own seat, if the bridge names none
+    // we still have to say something, or the row reads as merely quiet; off-seat,
+    // `kind:'invalid'` already says everything an opponent is owed.
+    problems: deck.valid
+      ? []
+      : opts.own
+        ? (deck.problems?.length ? deck.problems : ['deck invalid'])
+        : ['deck invalid'],
     warnings: opts.own ? deck.warnings ?? [] : [],
   };
 }

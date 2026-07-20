@@ -13,8 +13,4 @@ public record DeckLine(int qty, String name, String setCode, String number,
         /** .moxfield line 2: a commander only if it partners with line 1 (needs the card db). */
         MAYBE_COMMANDER
     }
-
-    public DeckLine withSection(Section s) {
-        return new DeckLine(qty, name, setCode, number, s, lineNo);
-    }
 }
