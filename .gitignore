@@ -10,3 +10,11 @@ logs/
 
 # subagent-driven-development scratch (progress ledger, briefs, review packages)
 .superpowers/
+
+# symlinks to the XMage dist's card database (see docs/.../deck-import-formats).
+# Two: CardDb's relative JDBC URL (./db/cards.h2) must resolve both when the
+# bridge runs from the repo root (mvn -Prun/-Pspike/-Pharness, which set
+# workingDirectory explicitly) and when surefire runs the live test tier,
+# whose default forked-JVM cwd is the bridge/ module dir, not the repo root.
+/db
+/bridge/db

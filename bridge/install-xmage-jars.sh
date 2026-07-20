@@ -35,4 +35,9 @@ install trove-1.0.2.jar               trove              trove             1.0.2
 # Plugin framework referenced by mage-common
 install jspf-core-0.9.1.jar           com.googlecode.jspf jspf-core        0.9.1
 
+# Card database stack (CardRepository — deck import resolves names through it)
+install h2-1.4.197.jar                com.h2database     h2                1.4.197
+install ormlite-core-5.7.jar          com.j256.ormlite   ormlite-core      5.7
+install ormlite-jdbc-5.7.jar          com.j256.ormlite   ormlite-jdbc      5.7
+
 echo "done — bridge/pom.xml can now resolve the XMage stack"
