@@ -1,0 +1,252 @@
+# Multi-format deck import — design
+
+**Date:** 2026-07-20
+**Status:** approved, pending implementation plan
+**Touches:** `docs/protocol/v1.md` §5, `docs/bridge/design.md` §9 + §15, `bridge/` lobby package,
+`client/src/net`, `deploy/`
+
+## 1. Problem
+
+`lobby.deck` accepts exactly one syntax: XMage's `.dck` (`N [SET:NUM] Name`, `SB:` marks the
+commander). Nothing else parses — `format:'list'` is declared in the protocol but rejected at
+`LobbyService.java:220`.
+
+Commander Night exists to replace a scripted Tabletop Simulator table. That table's importer
+accepts MTGO syntax, and the group builds decks on Moxfield. Requiring a hand-built `.dck`
+per player per night is the friction that keeps people on TTS.
+
+Three syntaxes must work:
+
+| Format | Shape | Commander | Notes |
+|---|---|---|---|
+| `.dck` | `1 [MKC:145] Agitator Ant` | `SB:` lines | XMage-native, already supported |
+| `.moxfield` | `1 Agitator Ant (MKC) 145 *F*` | **first line** | optional `SIDEBOARD:` section |
+| `.mtgo` | `1 Agitator Ant` | after a **blank line** | no set/number — must be derived |
+
+## 2. Findings that shape the design
+
+Established by reading `vendor/mage` at 1.4.60:
+
+- **XMage never sees our text.** `DeckParser` builds a `DeckCardLists` and `TableRecipe.java:85`
+  passes that object to `joinTable`. XMage's own `.dck` file parser is never invoked, so our
+  parsers are the *only* syntax gate. There is no fallback validation behind us.
+- **Cards are looked up by set + number only.** `Deck.java:150` → `CardRepository.findCard(setCode,
+  cardNumber)`. The card name in a `DeckCardInfo` is decorative — a wrong name imports silently,
+  a wrong set/number throws `GameException` at `joinTable`, surfacing as an opaque
+  `"table setup failed at step: joinTable <user>"` well after the lobby said the deck was valid.
+- **Matching is case-insensitive.** `DatabaseUtils.java:33` sets `IGNORECASE=TRUE` on the
+  connection. Only the *format* of a set code or number has to be right, not its case.
+- **XMage already solves `.mtgo`.** `TxtDeckImporter` resolves bare names with
+  `findPreferredCoreExpansionCard` (`CardRepository.java:431` — newest standard-legal printing,
+  else newest release) and routes everything after the first blank line to the sideboard
+  (`switchSideboardByEmptyLine`, `TxtDeckImporter.java:26`). Since XMage's sideboard *is* the
+  commander zone, the MTGO convention lands correctly by accident of design.
+- **XMage cannot do `.moxfield`.** `TxtDeckImporter` never parses `(SET) NUM`; it would treat
+  `Inspirit, Flagship Vessel (EOC) 2 *F*` as a literal card name and miss. Its only sideboard
+  header is `//sideboard`, not `SIDEBOARD:`. This matches the observed behavior.
+- **The card DB is concurrently openable.** `DatabaseUtils.java:32` sets `AUTO_SERVER=TRUE` (H2
+  mixed mode), so a second JVM may open `db/cards.h2` while the game server holds it.
+
+## 3. Decision: live `CardRepository`, not a generated index
+
+`docs/bridge/design.md:267` planned a `cards-index.tsv` scraped offline from `Mage.Sets` sources.
+**Superseded.** The bridge queries the pinned server's own card database at runtime.
+
+Rationale: the index approach requires reimplementing preferred-printing selection, split/DFC name
+handling, and accent normalization — precisely where import bugs hide — and carries a standing
+drift risk (`design.md:374`) plus a regeneration step on every version bump. Live lookup is the
+same code XMage itself runs, so our printing choices match its client's by construction, and
+`design.md:374`'s risk entry is deleted rather than mitigated.
+
+Cost accepted: H2 reserves a 150 MB query cache (`DatabaseUtils.java:43`). Against the host's
+8 GiB this is noise.
+
+## 4. Architecture
+
+`DeckParser` (one class) becomes a package under `night.bridge.lobby.deck`. The seam is drawn so
+that everything except one class is pure string work with no database dependency:
+
+```
+                    text + format:'auto'
+                             |
+                     DeckFormat.sniff()          -> dck | moxfield | mtgo
+                             |
+        DckLines / MoxfieldLines / MtgoLines     -> List<DeckLine>   (pure, unit-testable)
+                             |
+                       CardResolver              -> List<Resolved>   (the only DB consumer)
+                             |
+                      DeckAssembler              -> DeckCardLists + DeckInfo
+```
+
+**`DeckLine`** — `record DeckLine(int qty, String name, String setCode, String number,
+Section section, int lineNo)`, where `setCode`/`number` are nullable and `Section` is
+`MAIN | COMMANDER | DISCARD`. This is the common currency; the three line parsers differ only in
+how they populate it.
+
+**`DeckFormat.sniff(String)`** — classifies on line shape, which is mutually exclusive across the
+three formats:
+
+- a line matching `^(SB:)?\s*\d+\s+\[[^:\]]+:[^\]]+]` or starting `LAYOUT` → `dck`
+- a line matching `\(\w+\)\s+\S+\s*(\*F\*)?$` → `moxfield`
+- otherwise, if any line matches `^\d+\s+\S` → `mtgo`
+- no card-shaped line at all → error, `"cannot tell what format this is"`
+
+Classification is a majority vote over card-shaped lines, not first-match, so one malformed line
+does not flip the verdict.
+
+**Commander and section assignment**, per format:
+
+| Format | `COMMANDER` | `DISCARD` |
+|---|---|---|
+| `dck` | `SB:` lines | — |
+| `mtgo` | every line after the first blank line | — |
+| `moxfield` | the first card line | everything after a `SIDEBOARD:` header |
+
+Moxfield's `SIDEBOARD:` is a maybeboard — XMage has no Commander sideboard, it uses that zone for
+the commander. Including it would make a 125-card deck and fail. It is dropped and **reported**:
+`"ignored 25 sideboard cards (Moxfield maybeboard)"`. Silent dropping is rejected; a partner
+commander parked there would vanish without a trace.
+
+Moxfield lines also carry a trailing foil marker (`*F*`) which is stripped and ignored. It is not
+a commander marker — the second sample carries it on both `Inspirit, Flagship Vessel` (the
+commander, line 1) and `Kilo, Apogee Mind` (a regular card, mid-list).
+
+**`CardResolver`** — the sole `CardRepository` consumer. Names are normalized through
+`CardNameUtil.normalizeCardName` first (XMage's own, so split-card and accent handling match).
+
+For a line with **no** set/number (`.mtgo`): `findPreferredCoreExpansionCard(name)`. Miss → hard
+per-line error.
+
+For a line **with** set/number (`.moxfield`, `.dck`), a three-step fallback:
+
+1. name + set + collector number → exact printing. Clean hit, no diagnostic.
+2. name + set → right set, any number. Emits a **warning**.
+3. `findPreferredCoreExpansionCard(name)` → right card, any printing. Emits a **warning**.
+4. miss → hard per-line error.
+
+Steps 2 and 3 produce a playable deck with correct card faces and a visible list of where the
+printing differs from the source. This matters because Moxfield emits **Scryfall** set codes and
+XMage maintains its own; the provided samples already contain three that cannot resolve strictly
+— `(PLST) C15-60`, `(PLST) EMA-26`, `(PVOW) 17p`. Treating those as fatal would reject a
+perfectly legal deck over cosmetics. Warning text names the substitution:
+`"Aura of Silence — no PLST printing, used C15"`.
+
+**`DeckAssembler`** — applies the existing validation unchanged (main + commander = 100;
+1–2 commanders) and collects `problems` (fatal) and `warnings` (non-fatal) separately.
+
+## 5. Protocol changes
+
+Per `CLAUDE.md` conventions, `docs/protocol/v1.md` §5 changes first, then code.
+
+```ts
+{ t:'lobby.deck'; id; format:'auto'|'dck'|'moxfield'|'mtgo'; content: string }
+```
+
+`'list'` is removed — it was never implemented, and `'mtgo'` is what it was going to become.
+`'auto'` is what the client sends; the explicit values exist for tests and for a future override.
+
+`LobbyState.DeckInfo` gains two fields:
+
+```ts
+deck?: { valid: boolean; commander?: string[]; cards: number;
+         format?: 'dck'|'moxfield'|'mtgo';   // what auto-detect concluded
+         problems?: string[]; warnings?: string[] }
+```
+
+`format` is echoed so a misdetect is visible in the lobby before anyone hits start. `warnings`
+renders distinctly from `problems`: a deck with warnings is `valid` and startable.
+
+Corresponding Java: `LobbyDeck.FORMAT_LIST` is replaced by `FORMAT_AUTO`, `FORMAT_MOXFIELD`,
+`FORMAT_MTGO`; `LobbyState.DeckInfo` gains `format` and `warnings`.
+
+## 6. Client changes
+
+Minimal by design — the client sends text and renders a verdict.
+
+- `commands.ts:52` — `lobbyDeck` format type widens; `actions.ts:132` sends `'auto'`.
+- `Lobby.tsx` — the deck panel renders the detected format and any warnings. Warnings are styled
+  as advisory, not errors; the ready control stays enabled.
+- The heading at `Lobby.tsx:80` ("Your deck (.dck — commander on SB: lines)") becomes format-
+  agnostic: paste a `.dck`, Moxfield, or MTGO list.
+- `images/deck.ts` `parseDeckIdentities` — the C5 Scryfall warm-up currently understands only
+  `.dck` lines. It must handle all three shapes or it silently warms nothing for the new formats.
+  This is cosmetic (warm-up is explicitly optional per `actions.ts:134`) but it is the difference
+  between a snappy first turn and a cold one.
+
+## 7. Deployment
+
+- **Heap:** `deploy/night-bridge.service:24` — `-Xmx512m` → `-Xmx1536m`, covering H2's 150 MB
+  cache with room to spare.
+- **Working directory:** `DatabaseUtils.java:29` hardcodes the relative path `./db/cards.h2`. The
+  bridge unit's `WorkingDirectory` is `/var/lib/commander-night`, so deploy adds a symlink
+  `db → /opt/commander-night/xmage-dist/xmage/mage-server/db`. Documented in `deploy/README.md`.
+  Locally the bridge already runs with repo-root cwd, so the same symlink is added there
+  (gitignored) pointing at `vendor/xmage-dist/xmage/mage-server/db`.
+- **New jars** from `mage-server/lib`, at dist-identical versions per the shadowing constraint in
+  `CLAUDE.md`: `h2-1.4.197`, `ormlite-core-5.7`, `ormlite-jdbc-5.7`. Added to
+  `install-xmage-jars.sh` and `bridge/pom.xml`.
+
+### The drop-table guard
+
+`CardRepository`'s constructor (`CardRepository.java:57-78`) calls `isNewBuildRun`, which compares
+the `Build-Time` in the manifest of the jar holding `CardRepository.class` against a value stored
+in the database. On mismatch it runs **`TableUtils.dropTable(CardInfo.class, true)`** — wiping the
+145 MB card table that only the server's set scanner can rebuild.
+
+It should never fire: the bridge loads the same `mage-1.4.60.jar`, so the manifest timestamp
+matches. But a bridge deploy that silently destroys the game server's card database is an
+unacceptable failure mode for a Friday night.
+
+Mitigation: before any `CardRepository` access, bridge startup opens a **plain JDBC read-only
+connection** and runs `SELECT count(*) FROM card`. If the table is missing, or the count is
+implausibly low (< 20 000), the bridge **refuses to start** with a clear message pointing at the
+server's DB rather than letting `CardRepository` "repair" anything. Fail-fast on a config problem
+beats a wiped database discovered mid-game.
+
+## 8. Testing
+
+Follows the existing tiers (`docs/bridge/design.md` §13).
+
+**Unit (no DB)** — the line parsers and the sniffer carry the bulk of the risk and none of the
+infrastructure:
+- sniffer: each of the three formats classified correctly, including a `.moxfield` file whose
+  first card is *not* alphabetically first (guards the commander rule), and a mixed/garbage input
+  that errors rather than guessing.
+- `MtgoLines`: commander stanza after the blank line; trailing blank lines ignored; repeated
+  names (`4 Forest` twice) preserved as separate lines rather than merged.
+- `MoxfieldLines`: `*F*` stripped; `SIDEBOARD:` section marked `DISCARD`; collector numbers that
+  are not integers (`C15-60`, `17p`) survive parsing intact.
+- `DeckAssembler`: the 100-card and 1–2-commander rules, warnings vs. problems.
+
+**Live tier (`-Plive`, real DB)** — `CardResolver` only:
+- all three fallback steps fire, each producing the expected warning text
+- both sample decks resolve to exactly 100 cards
+- a deliberately misspelled name produces a hard error, not a silent substitution
+
+**Fixtures** — the two provided decks (`enduring_enchantments` in `.mtgo` and `.moxfield`, plus
+the `EOC` deck with the 25-card `SIDEBOARD:`) are checked in as import fixtures. The `.mtgo` and
+`.moxfield` forms of `enduring_enchantments` are the *same deck*, which gives a free cross-check:
+both must yield the same 100 card names.
+
+**Conformance corpus** — `docs/protocol/samples/` gains a `lobby.state` sample carrying the new
+`format` and `warnings` fields, keeping `ProtocolSamplesTest` complete.
+
+**Acceptance** — a real Moxfield export, pasted in the browser, plays a full game.
+
+## 9. Out of scope
+
+- Fetching decks from a Moxfield URL. Paste-only; no network dependency at deck-submit time.
+- Format override in the client UI. Auto-detect echoes its verdict, which makes a misdetect
+  visible; an override lands only if detection proves unreliable in practice.
+- Partner commanders. The first-line rule yields one commander; a partner pair imports with the
+  second partner among the 99 and the 100-card check still passes, so the deck is subtly wrong.
+  The echoed commander name in the lobby makes this visible. Deferred until someone actually
+  wants to play partners.
+- Other importer formats XMage ships (`.dec`, `.cod`, `.o8d`, `.mtga`).
+
+## 10. Incidental docs fix
+
+`CLAUDE.md` justifies the dev server's `-Xmx2048m` with "1024m OOM'd in AI simulations on a
+turn-28 4-player board (2026-07-18)". That OOM was on the decommissioned 2 GiB host and is not a
+sizing signal for the current 8 GiB one. The parenthetical is corrected while touching deployment
+docs.
