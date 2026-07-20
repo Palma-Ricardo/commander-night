@@ -7,7 +7,6 @@ import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appManager, appStores } from '../app';
 import type { Notice, SocketStatus } from '../stores';
-import { LayoutHarness } from '../dev/LayoutHarness';
 import { DebugPanel } from './DebugPanel';
 import { Game } from './screens/Game';
 import { Home } from './screens/Home';
@@ -51,12 +50,6 @@ export function App() {
     if (typeof document === 'undefined') return;
     return startNudge({ doc: document, prompt: appStores.prompt });
   }, []);
-
-  // C5 layout harness (temporary — Task 11 removes it): bypasses connection
-  // state entirely so a fixture can be inspected with no server running.
-  if (import.meta.env.DEV && location.hash.startsWith('#/layout')) {
-    return <LayoutHarness variant={location.hash === '#/layout-fat' ? 'fat' : 'real'} />;
-  }
 
   // §10: the takeover screen replaces everything — reconnect only on explicit
   // user action (two tabs auto-bumping each other is a fork bomb).

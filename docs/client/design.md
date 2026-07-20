@@ -318,7 +318,23 @@ is demonstrable end-to-end, per the bridge tradition.
 | C2 | **First playable game**: board/hand/stack/log rendering, status line, prompt dock with `confirm`/`priority`/`chooseTargets`/`payMana` (the set a real game actually needs — bridge M2 learned cleanup discards force targets), Scryfall images + text-frame fallback | A human plays a full game against 3 AIs **in the browser** to `game.over` — the client-side mirror of bridge M2's criterion |
 | C3 | Full vocabulary + patches: all 11 prompt kinds incl. combat declaration UI, patch mode + resync gate, turn controls (`game.action` set), keyboard shortcuts, Playwright auto-player | Auto-player finishes a patch-mode game through the DOM with ≥1 combat declared; no-dead-end-prompt invariant and dev keyframe-verify green over the whole game |
 | C4 ✅ | Multi-human resilience: resume UX, chat panel, retry/idempotent flush, recovery join, bumped screen, rematch flow, post-game screen | **Met 2026-07-19** (`e2e/pw/resilience.spec.ts`, 10.2 min): two-browser game, mid-game reload on both sides with the same `promptId` re-rendered, chat both ways + unread badge, bumped round-trip, recovery-join takeover from a cleared-storage context onto the exact pending prompt, rematch into a second completed game. Found and fixed en route: dead-end `chooseTargets` on pile-zone candidates (§7), silent seat-identity loss after a recovery join (§10), and the upstream post-game chat gap (§10) |
-| C5 | Friends'-night readiness: image cache warm-up, layout pass at common laptop sizes, hover previews and pile browsers polished, notification nudge when priority arrives in a background tab (title flash + optional chime), prod build wired into `deploy/` (caddy static site + runbook update) | **The real 4-human night on the deployed host** — the same event as bridge M5's outstanding exit; both docs close together |
+| C5 ✅ | Friends'-night readiness: deck-text image warm-up, large-screen layout pass, hover-preview anchoring, pile filter/sort, background-tab title-flash nudge, prod build served by caddy | **The real 4-human night on the deployed host** — the same event as bridge M5's outstanding exit; both docs close together |
+
+**C5 scope revisions (2026-07-19).** Two items shifted against the real table.
+The layout pass targets **1080p and 1440p+**, not laptops: every screen at the
+table is an external monitor, so the failure mode designed against was an
+under-scaled board adrift in whitespace, not cramming — fixed cards sizes were
+replaced by a viewport-tracking `--card-unit`. And the nudge is **title flash
+only**; the chime was cut, taking the audio asset, the autoplay unlock, and a
+settings toggle with it. The layout pass was tuned against a captured turn-25
+keyframe and a hand-fattened density ceiling through a temporary `#/layout`
+harness, removed at the end of the milestone.
+
+**New at C5: the built bundle is tested.** Every tier through C4 ran against the
+Vite dev server, and `window.__night` is `DEV`-gated — so the production bundle,
+the thing that actually ships, had never been driven. `npm run test:preview`
+runs the auto-player against a `--mode harness` build (`playwright.preview.config.ts`);
+`npm run build`, the deploy path, still emits no harness.
 
 ## 15. Risks
 

@@ -55,8 +55,6 @@ declare global {
   interface Window {
     __night?: {
       snapshot(): NightSnapshot;
-      /** C5 layout harness (temporary): the full keyframe, for fixture capture. */
-      dumpState(): unknown;
     };
   }
 }
@@ -68,7 +66,6 @@ const HARNESS = import.meta.env.DEV || import.meta.env.VITE_NIGHT_HARNESS === '1
 
 if (HARNESS && typeof window !== 'undefined') {
   window.__night = {
-    dumpState: () => appStores.game.getState().state ?? null,
     snapshot: () => {
       const g = appStores.game.getState();
       const p = appStores.prompt.getState();

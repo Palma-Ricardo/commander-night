@@ -12,7 +12,16 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** Client C4 done 2026-07-19 — multi-human resilience, **live-verified** end to end
+**Status:** Client C5 engineering done 2026-07-19 — deck-text image warm-up (own deck only:
+opponents' lists are hidden info), large-screen layout pass (`--card-unit` scales cards and the
+sidebar with the viewport; the table is 1080p/1440p+, so the enemy was whitespace, not cramming),
+anchored hover previews, pile filter/sort/Escape, and a background-tab title-flash nudge (the
+chime was cut). The production bundle is now exercised for the first time: `npm run test:preview`
+drives the auto-player against a `--mode harness` build, and caddy serves `dist/` at `/` with
+`/ws` proxied to the bridge (immutable assets, `no-cache` index.html). **Remaining for both
+C5 and bridge M5: the real 4-human night on the deployed host.**
+
+C4 detail, still relevant — multi-human resilience, **live-verified** end to end
 (`e2e/pw/resilience.spec.ts`, 10.2 min): two browsers, mid-game reload on *both* seats with the
 same `promptId` re-rendered after resume, chat both ways with the unread badge, a bumped
 round-trip (second tab steals the seat → takeover screen → *Use here* steals it back), a
@@ -41,7 +50,7 @@ answer the "mana will be lost. Pass anyway?" confirm with Yes, and never re-clic
 colour/source that failed to shrink `remaining` — payMana re-asks mint a **fresh promptId** each
 time, so progress is fingerprinted on the remaining cost, not the prompt id. E2E phases are
 sequenced on *events*, never wall-clock: AI-pace games have ended in as little as 3 min.
-Next: C5 (friends'-night readiness). Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
+Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
 (`translate/CommanderDamage`, pinned to the 1.4.60 watcher strings, canary WARN on drift,
 fields land per protocol §6; watcher lines no longer leak into card text), callback tap
 productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,
