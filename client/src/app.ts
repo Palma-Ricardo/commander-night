@@ -61,7 +61,12 @@ declare global {
   }
 }
 
-if (import.meta.env.DEV && typeof window !== 'undefined') {
+// The auto-player handle ships in dev, and in an explicitly-flagged build so
+// the C5 smoke tier can drive the real production bundle. `npm run build` —
+// the deploy path — never sets VITE_NIGHT_HARNESS, so prod has no handle.
+const HARNESS = import.meta.env.DEV || import.meta.env.VITE_NIGHT_HARNESS === '1';
+
+if (HARNESS && typeof window !== 'undefined') {
   window.__night = {
     dumpState: () => appStores.game.getState().state ?? null,
     snapshot: () => {
