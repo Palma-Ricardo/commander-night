@@ -331,7 +331,10 @@ const seatC = obj({
   opt: {
     deck: obj({
       req: { valid: bool, cards: num },
-      opt: { commander: arr(str), problems: arr(str) },
+      opt: {
+        commander: arr(str), format: strEnum('dck', 'moxfield', 'mtgo'),
+        problems: arr(str), warnings: arr(str),
+      },
     }),
   },
 });

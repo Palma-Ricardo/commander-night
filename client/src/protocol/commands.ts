@@ -49,7 +49,7 @@ export function lobbyJoin(ctx: CommandContext, opts: { code: string; displayName
   return { t: 'lobby.join', id: ctx.mintId(), code: opts.code, displayName: opts.displayName };
 }
 
-export function lobbyDeck(ctx: CommandContext, opts: { format: 'dck' | 'list'; content: string }): LobbyDeck {
+export function lobbyDeck(ctx: CommandContext, opts: { format: LobbyDeck['format']; content: string }): LobbyDeck {
   return { t: 'lobby.deck', id: ctx.mintId(), format: opts.format, content: opts.content };
 }
 

@@ -152,8 +152,30 @@ class ProtocolSamplesTest {
                 List.of(new LobbyState.Seat(
                         "7d4c1b2a-9e8f-4a3b-b6c5-0d1e2f3a4b5c",
                         "Ricardo",
-                        new LobbyState.DeckInfo(true, List.of("Lathril, Blade of the Elves"), 100, null),
+                        new LobbyState.DeckInfo(true, List.of("Lathril, Blade of the Elves"), 100,
+                                "dck", List.of(), List.of()),
                         true))));
+    }
+
+    /**
+     * The deck info's optional arrays are omitted when empty, never sent as {@code []}
+     * (protocol §5) — asserted here on the warnings sample, whose {@code problems} is
+     * empty and whose {@code warnings} is not.
+     */
+    @Test
+    void lobbyStateDeckWarningsSampleIsReproducible() throws Exception {
+        assertProduces("lobby.state.deck-warnings.json", new LobbyState(
+                "K7M2QX",
+                "9c1d3e5f-2a4b-4c6d-8e0f-1a2b3c4d5e6f",
+                List.of(new LobbyState.Seat(
+                        "9c1d3e5f-2a4b-4c6d-8e0f-1a2b3c4d5e6f",
+                        "Ricardo",
+                        new LobbyState.DeckInfo(true,
+                                List.of("Rose Tyler", "The Tenth Doctor"), 100, "moxfield",
+                                List.of(),
+                                List.of("ignored 10 cards in section PLANES:",
+                                        "Aura of Silence — no PLST:C15-60 printing, used C15:60")),
+                        false))));
     }
 
     // ---- M2: answers ----

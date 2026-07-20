@@ -1,1 +1,1 @@
-{"t":"lobby.state","code":"XKCD42","hostUserId":"7d4c1b2a-9e8f-4a3b-b6c5-0d1e2f3a4b5c","seats":[{"userId":"7d4c1b2a-9e8f-4a3b-b6c5-0d1e2f3a4b5c","name":"Ricardo","deck":{"valid":true,"commander":["Lathril, Blade of the Elves"],"cards":100},"ready":true}]}
+{"t":"lobby.state","code":"XKCD42","hostUserId":"7d4c1b2a-9e8f-4a3b-b6c5-0d1e2f3a4b5c","seats":[{"userId":"7d4c1b2a-9e8f-4a3b-b6c5-0d1e2f3a4b5c","name":"Ricardo","deck":{"valid":true,"commander":["Lathril, Blade of the Elves"],"cards":100,"format":"dck"},"ready":true}]}

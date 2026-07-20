@@ -2,6 +2,7 @@ package night.bridge.lobby;
 
 import mage.cards.decks.DeckCardInfo;
 import mage.cards.decks.DeckCardLists;
+import night.bridge.proto.LobbyDeck;
 import night.bridge.proto.LobbyState;
 
 import java.util.ArrayList;
@@ -72,11 +73,14 @@ public final class DeckParser {
         if (side < 1 || side > 2) {
             problems.add("the commander belongs in the sideboard (SB: lines): expected 1–2 cards there, found " + side);
         }
+        // Empty → absent is DeckInfo's own job now (protocol §5), so these ride as lists.
         return new Parsed(deck, new LobbyState.DeckInfo(
                 problems.isEmpty(),
-                commanders.isEmpty() ? null : List.copyOf(commanders),
+                List.copyOf(commanders),
                 main + side,
-                problems.isEmpty() ? null : List.copyOf(problems)));
+                LobbyDeck.FORMAT_DCK,
+                problems,
+                List.of()));
     }
 
     private static String abbreviate(String line) {

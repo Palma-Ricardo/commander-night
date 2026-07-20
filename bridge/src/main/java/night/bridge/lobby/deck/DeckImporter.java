@@ -3,7 +3,6 @@ package night.bridge.lobby.deck;
 import mage.cards.decks.DeckCardLists;
 
 import java.util.List;
-import java.util.Locale;
 
 /**
  * The deck-import entry point (deck-import spec §4). Callers hand over text and a
@@ -21,9 +20,7 @@ public final class DeckImporter {
         }
         DeckFormat format;
         try {
-            format = "auto".equalsIgnoreCase(requestedFormat)
-                    ? DeckFormat.sniff(text)
-                    : DeckFormat.valueOf(requireFormat(requestedFormat));
+            format = resolve(requestedFormat, text);
         } catch (IllegalArgumentException e) {
             return failed(e.getMessage());
         }
@@ -36,16 +33,34 @@ public final class DeckImporter {
     }
 
     /**
-     * Upper-cases a non-{@code "auto"} format request, rejecting {@code null} the same
-     * way an unrecognised format string is rejected — as an {@link IllegalArgumentException}
-     * the caller converts to a problem, never as an uncaught {@link NullPointerException}.
+     * Resolves a requested format to the syntax to parse with, matching the protocol §5
+     * wire names case- and whitespace-insensitively. Every rejection is an
+     * {@link IllegalArgumentException} the caller turns into a problem — never an uncaught
+     * {@link NullPointerException}, and never {@code Enum.valueOf}'s "No enum constant
+     * night.bridge.lobby.deck.DeckFormat.CSV": problem strings are rendered verbatim to a
+     * browser, so they are written for the human reading them.
      */
-    private static String requireFormat(String requestedFormat) {
-        if (requestedFormat == null) {
+    private static DeckFormat resolve(String requestedFormat, String text) {
+        String wanted = requestedFormat == null ? "" : requestedFormat.strip();
+        if (wanted.isEmpty()) {
             throw new IllegalArgumentException(
                     "no deck format was specified — expected auto, dck, moxfield or mtgo");
         }
-        return requestedFormat.toUpperCase(Locale.ROOT);
+        if (wanted.equalsIgnoreCase("auto")) {
+            return DeckFormat.sniff(text);
+        }
+        for (DeckFormat format : DeckFormat.values()) {
+            if (format.wire().equalsIgnoreCase(wanted)) {
+                return format;
+            }
+        }
+        throw new IllegalArgumentException("unrecognised deck format \"" + abbreviate(wanted)
+                + "\" — expected auto, dck, moxfield or mtgo");
+    }
+
+    /** Keeps an echoed-back format request short: it is client-supplied and unbounded. */
+    private static String abbreviate(String wanted) {
+        return wanted.length() <= 20 ? wanted : wanted.substring(0, 20) + "…";
     }
 
     private static DeckImport failed(String problem) {

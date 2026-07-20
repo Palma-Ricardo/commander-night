@@ -41,7 +41,7 @@ export interface Welcome {
 
 export interface LobbyCreate extends Command { t: 'lobby.create'; format: 'commander-ffa'; name?: string }
 export interface LobbyJoin   extends Command { t: 'lobby.join';   code: string; displayName: string }
-export interface LobbyDeck   extends Command { t: 'lobby.deck';   format: 'dck' | 'list'; content: string }
+export interface LobbyDeck   extends Command { t: 'lobby.deck';   format: 'auto' | 'dck' | 'moxfield' | 'mtgo'; content: string }
 export interface LobbyReady  extends Command { t: 'lobby.ready';  ready: boolean }
 export interface LobbyStart  extends Command { t: 'lobby.start';  fillAI?: boolean }
 
@@ -50,8 +50,15 @@ export interface LobbyState {
   t: 'lobby.state';
   code: string;
   hostUserId: Id;
-  seats: { userId: Id; name: string; deck?: { valid: boolean; commander?: string[];
-           cards: number; problems?: string[] }; ready: boolean }[];
+  // Optional arrays below are empty-means-absent (§5): the bridge never sends [],
+  // so read them as `?? []`. `commander` holds one entry per detected commander and
+  // is rendered per name — the Moxfield commander inference can false-positive and
+  // these names are the only place a human can catch it before readying.
+  seats: { userId: Id; name: string;
+           deck?: { valid: boolean; commander?: string[]; cards: number;
+                    format?: 'dck' | 'moxfield' | 'mtgo';
+                    problems?: string[]; warnings?: string[] };
+           ready: boolean }[];
 }
 
 // ── §6 Game state model ──────────────────────────────────────────────────────

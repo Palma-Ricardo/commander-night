@@ -24,6 +24,14 @@ class DeckImporterLiveTest {
         assertTrue(d.valid(), () -> String.valueOf(d.problems()));
     }
 
+    /** Format requests are matched case- and whitespace-insensitively, like {@code auto} is. */
+    @Test
+    void formatRequestsToleratePaddingAndCase() {
+        DeckImport d = DeckImporter.parse(" MoXfIeLd ", Fixtures.read("timey_wimey.moxfield"));
+        assertEquals(DeckFormat.MOXFIELD, d.format());
+        assertTrue(d.valid(), () -> String.valueOf(d.problems()));
+    }
+
     @Test
     void unrecognisableTextIsAProblemNotAnException() {
         DeckImport d = DeckImporter.parse("auto", "hello\nworld\n");

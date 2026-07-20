@@ -217,9 +217,14 @@ public final class LobbyService implements AutoCloseable {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "join a lobby seat first"));
             return;
         }
-        if (LobbyDeck.FORMAT_LIST.equals(cmd.format())) {
+        // Protocol §5 has already grown auto/moxfield/mtgo; the importer behind them
+        // lands with the DeckImporter wiring, so until then only .dck is served.
+        if (LobbyDeck.FORMAT_AUTO.equals(cmd.format())
+                || LobbyDeck.FORMAT_MOXFIELD.equals(cmd.format())
+                || LobbyDeck.FORMAT_MTGO.equals(cmd.format())) {
             reply.accept(Err.re(cmd.id(), ErrorCode.DECK_INVALID,
-                    "plain-list decks are not supported yet — submit .dck lines: N [SET:NUM] Name, SB: for the commander"));
+                    "'" + cmd.format() + "' decks are not supported yet — submit .dck lines: "
+                            + "N [SET:NUM] Name, SB: for the commander"));
             return;
         }
         if (!LobbyDeck.FORMAT_DCK.equals(cmd.format())) {
