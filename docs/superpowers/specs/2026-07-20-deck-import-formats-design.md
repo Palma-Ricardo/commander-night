@@ -21,7 +21,7 @@ Three syntaxes must work:
 |---|---|---|---|
 | `.dck` | `1 [MKC:145] Agitator Ant` | `SB:` lines | XMage-native, already supported |
 | `.moxfield` | `1 Agitator Ant (MKC) 145 *F*` | **first one or two lines** | optional trailing sections |
-| `.mtgo` | `1 Agitator Ant` | after a **blank line** | no set/number — must be derived |
+| `.mtgo` | `1 Agitator Ant` | **last stanza** | no set/number — must be derived |
 
 ## 2. Findings that shape the design
 
@@ -36,11 +36,14 @@ Established by reading `vendor/mage` at 1.4.60:
   `"table setup failed at step: joinTable <user>"` well after the lobby said the deck was valid.
 - **Matching is case-insensitive.** `DatabaseUtils.java:33` sets `IGNORECASE=TRUE` on the
   connection. Only the *format* of a set code or number has to be right, not its case.
-- **XMage already solves `.mtgo`.** `TxtDeckImporter` resolves bare names with
-  `findPreferredCoreExpansionCard` (`CardRepository.java:431` — newest standard-legal printing,
-  else newest release) and routes everything after the first blank line to the sideboard
-  (`switchSideboardByEmptyLine`, `TxtDeckImporter.java:26`). Since XMage's sideboard *is* the
-  commander zone, the MTGO convention lands correctly by accident of design.
+- **XMage resolves `.mtgo` names but mis-structures real files.** `TxtDeckImporter` resolves bare
+  names with `findPreferredCoreExpansionCard` (`CardRepository.java:431` — newest standard-legal
+  printing, else newest release), which we reuse. But its structural rule is
+  `switchSideboardByEmptyLine` (`TxtDeckImporter.java:26`): *everything* after the **first** blank
+  line becomes sideboard, and a **second** blank line is an error
+  (`"but sideboard already used"`, line 69). Two of the three sample decks have two blank lines,
+  so XMage's own importer would put a `PLANES:` or `SIDEBOARD:` section into the commander zone
+  and warn. We therefore cannot delegate structure to it — only name resolution.
 - **XMage cannot do `.moxfield`.** `TxtDeckImporter` never parses `(SET) NUM`; it would treat
   `Inspirit, Flagship Vessel (EOC) 2 *F*` as a literal card name and miss. Its only sideboard
   header is `//sideboard`, not `SIDEBOARD:`. This matches the observed behavior.
@@ -84,7 +87,7 @@ Section section, int lineNo)`, where `setCode`/`number` are nullable and `Sectio
 parsers differ only in how they populate it.
 
 `MAYBE_COMMANDER` exists because of partners. `.dck` and `.mtgo` mark commanders unambiguously
-from text alone (`SB:` prefix; after the blank line), but `.moxfield` needs the card database to
+from text alone (`SB:` prefix; the last stanza), but `.moxfield` needs the card database to
 tell a partner pair from a commander followed by an ordinary card — and the line parsers are
 deliberately database-free. So `MoxfieldLines` marks line 1 `COMMANDER` and line 2
 `MAYBE_COMMANDER`, and `DeckAssembler` promotes or demotes line 2 *after* `CardResolver` has run.
@@ -103,34 +106,44 @@ does not flip the verdict.
 
 **Commander and section assignment**, per format:
 
+Both Moxfield-produced formats share one grammar: blank-line-delimited **stanzas**, where a stanza
+whose first line is a bare `HEADER:` (`SIDEBOARD:`, `PLANES:`) is a named extra section. They
+differ only in where the commanders sit — and in whether card lines carry `(SET) NUM`.
+
+Verified across all six sample files:
+
 | Format | `COMMANDER` | `DISCARD` |
 |---|---|---|
 | `dck` | `SB:` lines | — |
-| `mtgo` | every line after the first blank line | — |
-| `moxfield` | the first **one or two** card lines (see below) | any `HEADER:` section |
+| `mtgo` | the **last stanza** — structural, 1 or 2 lines | any `HEADER:` stanza |
+| `moxfield` | the first **one or two** lines of stanza 1 (see below) | any `HEADER:` stanza |
 
 Moxfield lines carry a trailing foil marker (`*F*`) which is stripped and ignored. It is **not** a
 commander marker — the samples carry it on `Inspirit, Flagship Vessel` (a commander, line 1),
 `Kilo, Apogee Mind` (a regular card, mid-list), and on *both* lines of the Timey-Wimey partner
 pair. Nothing in the file distinguishes a commander except position.
 
-### Trailing sections are discarded
+### Headered sections are discarded
 
-Moxfield emits named sections after the main list, introduced by an all-caps `HEADER:` line. The
-samples contain `SIDEBOARD:` (25 cards) and `PLANES:` (10 cards). Neither belongs in an XMage
+The samples contain `SIDEBOARD:` (25 cards) and `PLANES:` (10 cards). Neither belongs in an XMage
 Commander deck: XMage has no Commander sideboard — it uses that zone for the commander — and
 `Commander Free For All` is not Planechase. Including either would blow the 100-card count.
 
-Rather than enumerate section names, **any `HEADER:` line after the main list opens a discarded
-section**. Unknown future sections then degrade to "ignored" instead of "unparseable". Each is
-**reported**, named and counted: `"ignored 10 cards in section PLANES:"`. Silent dropping is
-rejected — a card that vanishes without a trace is how a deck goes subtly wrong.
+Note these are **not** always trailing: in `.mtgo` the section sits *between* the main list and the
+commander stanza. The rule is therefore positional-free — **any stanza opening with a bare
+`HEADER:` line is discarded**, wherever it appears. Rather than enumerate names, unknown future
+sections degrade to "ignored" instead of "unparseable". Each is **reported**, named and counted:
+`"ignored 10 cards in section PLANES:"`. Silent dropping is rejected — a card that vanishes
+without a trace is how a deck goes subtly wrong.
 
 ### Partner commanders
 
-Moxfield puts **both** commanders of a partner pair on the first two lines, unmarked — the
-Timey-Wimey precon leads with `Rose Tyler` then `The Tenth Doctor`. Card count cannot disambiguate:
-one commander plus 99 and two commanders plus 98 both total 100.
+This affects **`.moxfield` only**. In `.mtgo` the commander stanza is explicit — Timey-Wimey's is
+two lines, the other two decks' are one — so the count is read, not inferred.
+
+`.moxfield` folds the commanders into stanza 1, unmarked: Timey-Wimey leads with `Rose Tyler` then
+`The Tenth Doctor`, and stanza 1 totals 100 cards *including* them. Card count cannot
+disambiguate — one commander plus 99 and two commanders plus 98 both total 100.
 
 XMage answers this authoritatively. `mage.util.validation.CommanderValidator` — **in the `mage`
 jar the bridge already depends on** — has five implementations covering every pairing mechanic:
@@ -265,7 +278,8 @@ infrastructure:
 - sniffer: each of the three formats classified correctly, including a `.moxfield` file whose
   first card is *not* alphabetically first (guards the commander rule), and a mixed/garbage input
   that errors rather than guessing.
-- `MtgoLines`: commander stanza after the blank line; trailing blank lines ignored; repeated
+- `MtgoLines`: commander = last stanza (1 line, and 2 for a partner pair); a `HEADER:` stanza
+  *between* main and commander discarded; trailing blank lines ignored; repeated
   names (`4 Forest` twice) preserved as separate lines rather than merged.
 - `MoxfieldLines`: `*F*` stripped; `SIDEBOARD:` and `PLANES:` sections marked `DISCARD`; an
   unknown `MAYBEBOARD:` header discarded too, proving the rule is generic; collector numbers that
@@ -283,21 +297,25 @@ the card database:
 
 **Fixtures** — checked in under `bridge/src/test/resources/decks/`:
 
-| Deck | Formats | Pins |
-|---|---|---|
-| `enduring-enchantments` | `.mtgo`, `.moxfield` | cross-format equivalence; PLST/PVOW fallbacks |
-| `inspirit` (EOC) | `.mtgo`, `.moxfield` | 25-card `SIDEBOARD:` discard |
-| `timey-wimey` (WHO) | `.mtgo`, `.moxfield` | partner pair; `PLANES:` discard; split-card names |
+| Deck | Formats | Stanzas (`.mtgo`) | Pins |
+|---|---|---|---|
+| `enduring_enchantments` | `.mtgo`, `.moxfield` | 99 / 1 | simplest shape; PLST + PVOW fallbacks |
+| `counter_intelligence` (EOC) | `.mtgo`, `.moxfield` | 99 / `SIDEBOARD:` 25 / 1 | mid-file section discard |
+| `timey_wimey` (WHO) | `.mtgo`, `.moxfield` | 98 / `PLANES:` 10 / 2 | partner pair; split-card names |
 
-Having each deck in **both** formats is the highest-value property in the suite: the same deck
-travels two entirely different code paths — one deriving set and number from nothing, one parsing
-them from the file — and both must land on the same 100 card names. That single assertion catches
-a bad preferred-printing assumption, a broken fallback chain, and an off-by-one in commander
-extraction, all at once.
+Having each deck in **both** formats is the highest-value property in the suite, and Timey-Wimey
+makes it sharper than mere redundancy: its `.mtgo` form states two commanders *structurally*,
+while its `.moxfield` form requires the partner validators to *infer* them. Asserting the two
+forms agree therefore checks the riskiest inference in the design against independent ground
+truth — not just against itself.
 
-Note the existing `upgrades_unleashed.dck` at the repo root and the sample `.mtgo`/`.moxfield`
-files move into that fixtures directory. The `.mtgo` file's name is currently misspelled
-(`enduring_enchatments` — missing the second `n`) and is corrected on the way in.
+More generally, each deck travels two entirely different code paths — one deriving set and number
+from nothing, one parsing them from the file — and both must land on the same 100 card names.
+That single assertion catches a bad preferred-printing pick, a broken fallback chain, and an
+off-by-one in commander extraction at once.
+
+The six sample files currently sit at the repo root, along with `upgrades_unleashed.dck`; all
+seven move into the fixtures directory.
 
 **Conformance corpus** — `docs/protocol/samples/` gains a `lobby.state` sample carrying the new
 `format` and `warnings` fields, keeping `ProtocolSamplesTest` complete.
