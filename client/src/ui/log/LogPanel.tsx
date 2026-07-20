@@ -4,7 +4,7 @@
 // copy), carries the unread badge, and owns the chat input; chat stays live
 // through post-game teardown grace (§10).
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
 import type { GameState, LogEntry } from '../../protocol/protocol';
@@ -115,7 +115,10 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
       <span
         key={`${m.objectId}-${m.start}`}
         className="log-ref"
-        onMouseEnter={card !== undefined ? () => hoverCard(card) : undefined}
+        onMouseEnter={card !== undefined ? (e: ReactMouseEvent<HTMLSpanElement>) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          hoverCard(card, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        } : undefined}
         onMouseLeave={card !== undefined ? () => hoverCard(undefined) : undefined}
       >
         {m.name}

@@ -537,11 +537,18 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .error { color: var(--error); }
 
 .hover-preview {
+  /* left/top are supplied inline once the hover anchor's element has been
+     measured (C5, HoverPreview.tsx); these are the no-anchor fallback.
+     pointer-events:none so the preview never eats a click meant for the card
+     under it. */
   position: fixed; left: 0.8rem; bottom: 0.8rem; z-index: 200;
   width: clamp(16rem, calc(var(--card-unit) * 2.6), 26rem);
   pointer-events: none; display: flex; flex-direction: column; gap: 0.4rem;
 }
-.hover-preview img { width: 100%; border-radius: 10px; box-shadow: 0 8px 30px #000d; }
+/* aspect-ratio matches the text-frame fallback below so the box has a stable
+   height before the image finishes loading — otherwise the anchor-relative
+   vertical centering would jump once the real image swaps in. */
+.hover-preview img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 10px; box-shadow: 0 8px 30px #000d; }
 .hover-preview .text-frame { aspect-ratio: 63 / 88; font-size: 0.8rem; }
 .hover-oracle {
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
