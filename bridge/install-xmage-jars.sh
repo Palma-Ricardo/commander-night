@@ -24,6 +24,11 @@ install() {
 install mage-1.4.60.jar               org.mage           mage              1.4.60
 install mage-common-1.4.60.jar        org.mage           mage-common       1.4.60
 
+# Per-card implementation classes (CardInfo#createCard looks these up by name via
+# Class.forName — needed wherever a resolved card must answer ability questions,
+# e.g. the commander-pairing validators in deck import).
+install mage-sets-1.4.60.jar          org.mage           mage-sets         1.4.60
+
 # JBoss Remoting transport stack (runtime deps of mage.remote)
 install jboss-remoting-2.5.4.SP5.jar  org.jboss.remoting jboss-remoting    2.5.4.SP5
 install jboss-common-core-2.5.0.Final.jar org.jboss      jboss-common-core 2.5.0.Final

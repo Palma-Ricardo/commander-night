@@ -43,6 +43,17 @@
       <artifactId>mage</artifactId>
       <version>${xmage.version}</version>
     </dependency>
+    <!-- Per-card implementation classes. CardInfo#createCard() looks these up by
+         class name via reflection at runtime (CardImpl#createCard); nothing
+         compiles against them directly, so runtime scope. Needed wherever a
+         resolved card must answer ability questions instead of just metadata
+         ones — e.g. DeckAssembler's commander-pairing validators. -->
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-sets</artifactId>
+      <version>${xmage.version}</version>
+      <scope>runtime</scope>
+    </dependency>
     <!-- JBoss Remoting transport used by mage.remote — runtime only. -->
     <dependency>
       <groupId>org.jboss.remoting</groupId>
