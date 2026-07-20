@@ -70,5 +70,15 @@ class DckLinesTest {
         assertTrue(pExtraSpace.problems().isEmpty(), () -> String.valueOf(pExtraSpace.problems()));
         assertEquals(1, pExtraSpace.lines().size());
         assertEquals(DeckLine.Section.COMMANDER, pExtraSpace.lines().get(0).section());
+
+        // The SB: group shifts nothing: name/set/number must still land in their own
+        // slots, not be pulled one group over by the optional prefix having matched.
+        for (ParsedLines p : List.of(pNoSpace, pExtraSpace)) {
+            DeckLine only = p.lines().get(0);
+            assertEquals(1, only.qty());
+            assertEquals("Lathril, Blade of the Elves", only.name());
+            assertEquals("KHM", only.setCode());
+            assertEquals("222", only.number());
+        }
     }
 }
