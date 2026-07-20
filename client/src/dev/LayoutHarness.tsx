@@ -29,5 +29,12 @@ export function LayoutHarness({ variant }: { variant: 'real' | 'fat' }) {
     appStores.game.setState({ state });
   }, [variant]);
 
-  return <Game />;
+  // Match App.tsx's game-screen wrapper exactly (`<main className="app app-game">`)
+  // so the harness renders inside the same container production uses — including
+  // the 2400px ultrawide cap and viewport-height sizing `.app-game` provides.
+  return (
+    <main className="app app-game">
+      <Game />
+    </main>
+  );
 }

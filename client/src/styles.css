@@ -195,12 +195,6 @@ button.reconnect { background: var(--accent); color: #14161a; }
 
 .game {
   flex: 1; min-height: 0;
-  /* Inside .app-game this is a flex item with basis 0, so flex sizing wins and
-     these are inert. Standalone (the dev layout harness mounts <Game/> with no
-     .app-game wrapper) they are what gives the board a viewport to divide up —
-     without them the harness sizes to content and misrepresents every vertical
-     decision made below. */
-  height: 100vh; max-height: 100vh;
   display: grid;
   /* C5: the log and chat are what benefit from a wide screen; the board does
      not need all of it. The sidebar grows with the viewport between bounds. */
