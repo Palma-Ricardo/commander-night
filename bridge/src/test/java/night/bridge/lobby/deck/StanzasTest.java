@@ -30,6 +30,12 @@ class StanzasTest {
         assertEquals(4, s.get(1).lines().get(0).lineNo());
     }
 
+    /**
+     * Windows-pasted deck text. This pins the observable behaviour — CRLF in, no stray
+     * {@code \r} out, line numbers unshifted — not the split regex itself: {@code strip()}
+     * makes {@code "\r?\n"} and a bare {@code "\n"} indistinguishable for any deck line,
+     * so no test can force the {@code \r?} to be kept. It stays as documentation of intent.
+     */
     @Test
     void splitsOnBlankLinesAndKeepsLineNumbersWithCrlf() {
         List<Stanzas.Stanza> s = Stanzas.split("1 A\r\n1 B\r\n\r\n1 C\r\n");
