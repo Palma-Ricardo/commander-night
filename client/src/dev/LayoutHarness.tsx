@@ -2,35 +2,32 @@
 // screen against a captured keyframe so the CSS pass can iterate in
 // milliseconds instead of playing a game per tweak.
 //
-// #/layout      → the captured turn-12 board
+// #/layout      → the captured turn-25 board
 // #/layout-fat  → the hand-fattened density ceiling
 //
-// Fixtures are fetched from client/public/ rather than through a Vite `/@fs`
-// path: `import.meta.url` inside a dev-served module resolves to an
-// `http://…` URL (not `file://`), so `new URL('.', import.meta.url).pathname`
-// yields a web path like `/src/dev/`, not a real filesystem path — `/@fs`
-// needs the latter. Serving the two JSONs as static assets sidesteps that.
+// Fixtures are statically imported from client/e2e/artifacts/ (the capture
+// spec's canonical output) rather than fetched from client/public/: Vite
+// copies publicDir into the production build verbatim regardless of DEV/PROD,
+// so anything served from `public/` ships to `dist/` even when the code that
+// reads it is dev-gated. A static import inside this module is stripped from
+// the bundle along with the module itself (Rollup dead-code-eliminates the
+// `#/layout` route behind `import.meta.env.DEV` in ui/App.tsx), so the data
+// never reaches `dist/` at all.
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { appStores } from '../app';
 import type { GameState } from '../protocol/protocol';
 import { Game } from '../ui/screens/Game';
+// Fixture is captured external data, not authored/validated app state — cast
+// through unknown at this one boundary, same as app.ts's `dumpState(): unknown`.
+import realKeyframe from '../../e2e/artifacts/layout-keyframe.json';
+import fatKeyframe from '../../e2e/artifacts/layout-keyframe-fat.json';
 
 export function LayoutHarness({ variant }: { variant: 'real' | 'fat' }) {
-  const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
-    const file = variant === 'fat' ? 'layout-keyframe-fat.json' : 'layout-keyframe.json';
-    let cancelled = false;
-    void fetch(`/${file}`)
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((state: GameState) => { if (!cancelled) appStores.game.setState({ state }); })
-      .catch((e: Error) => { if (!cancelled) setError(e.message); });
-    return () => { cancelled = true; };
+    const state = (variant === 'fat' ? fatKeyframe : realKeyframe) as unknown as GameState;
+    appStores.game.setState({ state });
   }, [variant]);
 
-  if (error !== null) {
-    return <main className="app"><p>layout fixture failed to load: {error}</p></main>;
-  }
   return <Game />;
 }

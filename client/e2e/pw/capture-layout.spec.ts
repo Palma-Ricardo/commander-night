@@ -43,7 +43,7 @@ test('capture a dense mid-game keyframe for the layout harness', async ({ page }
 
   // A finished game is still a usable capture; an empty one is not.
   const state = await page.evaluate(() => window.__night?.dumpState() ?? null);
-  expect(state, 'no game state to dump — did the game end before turn 12?').not.toBeNull();
+  expect(state, 'no game state to dump — did the game end before turn 25?').not.toBeNull();
 
   fs.mkdirSync(fileURLToPath(new URL('../artifacts', import.meta.url)), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(state, null, 2));
