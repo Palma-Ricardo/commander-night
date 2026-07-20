@@ -1655,7 +1655,7 @@ One entry point, so `LobbyService` never learns which parser exists.
 
 **Interfaces:**
 - Consumes: everything from Tasks 3–9.
-- Produces: `DeckImporter.imp0rt(String requestedFormat, String text)` → `DeckImport`, where `requestedFormat` is `"auto"`, `"dck"`, `"moxfield"`, or `"mtgo"`.
+- Produces: `DeckImporter.parse(String requestedFormat, String text)` → `DeckImport`, where `requestedFormat` is `"auto"`, `"dck"`, `"moxfield"`, or `"mtgo"`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1676,21 +1676,21 @@ class DeckImporterLiveTest {
 
     @Test
     void autoDetectsAndEchoesTheFormat() {
-        DeckImport d = DeckImporter.imp0rt("auto", Fixtures.read("timey_wimey.mtgo"));
+        DeckImport d = DeckImporter.parse("auto", Fixtures.read("timey_wimey.mtgo"));
         assertTrue(d.valid(), () -> String.valueOf(d.problems()));
         assertEquals(DeckFormat.MTGO, d.format());
     }
 
     @Test
     void honoursAnExplicitFormat() {
-        DeckImport d = DeckImporter.imp0rt("moxfield", Fixtures.read("timey_wimey.moxfield"));
+        DeckImport d = DeckImporter.parse("moxfield", Fixtures.read("timey_wimey.moxfield"));
         assertEquals(DeckFormat.MOXFIELD, d.format());
         assertTrue(d.valid(), () -> String.valueOf(d.problems()));
     }
 
     @Test
     void unrecognisableTextIsAProblemNotAnException() {
-        DeckImport d = DeckImporter.imp0rt("auto", "hello\nworld\n");
+        DeckImport d = DeckImporter.parse("auto", "hello\nworld\n");
         assertFalse(d.valid());
         assertEquals(1, d.problems().size());
     }
@@ -1724,7 +1724,7 @@ public final class DeckImporter {
      * @param requestedFormat {@code "auto"}, {@code "dck"}, {@code "moxfield"} or {@code "mtgo"}
      * @return never null — an unusable deck comes back with {@code problems}, not an exception
      */
-    public static DeckImport imp0rt(String requestedFormat, String text) {
+    public static DeckImport parse(String requestedFormat, String text) {
         DeckFormat format;
         try {
             format = "auto".equalsIgnoreCase(requestedFormat)
@@ -1750,8 +1750,11 @@ public final class DeckImporter {
 }
 ```
 
-> Note on the name: `import` is a Java keyword, so the method is `imp0rt`. Do not rename it in
-> later tasks — `LobbyService` calls it by this name.
+> Note on the name: `import` is a Java keyword, so the facade method is `parse`. It shares that
+> name with the package-private line parsers (`DckLines.parse`, `MtgoLines.parse`,
+> `MoxfieldLines.parse`), which is intended — they are the same operation at different levels, and
+> only `DeckImporter` is public. Do not rename it in later tasks; `LobbyService` calls it by this
+> name.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1938,7 +1941,7 @@ git commit -m "Deck import: wire types for auto-detection and warnings"
 - Modify: `bridge/src/main/java/night/bridge/Main.java` (startup guard)
 
 **Interfaces:**
-- Consumes: `DeckImporter.imp0rt` (Task 10), `DeckImport` (Task 9), `CardDb.require` (Task 1).
+- Consumes: `DeckImporter.parse` (Task 10), `DeckImport` (Task 9), `CardDb.require` (Task 1).
 - Produces: `SeatEntry.deck` is now a `DeckImport` rather than a `DeckParser.Parsed`.
 
 - [ ] **Step 1: Replace the deck command handler**
@@ -1962,7 +1965,7 @@ In `LobbyService.java`, replace the whole `deck` method (lines 214-243) with:
             return;
         }
         lobby.lastTouch = System.currentTimeMillis();
-        seat.deck = DeckImporter.imp0rt(cmd.format(), cmd.content());
+        seat.deck = DeckImporter.parse(cmd.format(), cmd.content());
         seat.ready = false; // a new deck resets readiness
         reply.accept(new Ack(cmd.id()));
         broadcast(lobby);
@@ -1996,7 +1999,7 @@ Replace the `DeckInfo` construction (around line 407) with:
 In `sampleDecks`, replace the parse call:
 
 ```java
-                DeckImport parsed = DeckImporter.imp0rt(LobbyDeck.FORMAT_DCK, Files.readString(file));
+                DeckImport parsed = DeckImporter.parse(LobbyDeck.FORMAT_DCK, Files.readString(file));
                 if (parsed.valid()) {
                     pool.add(parsed.deck());
                 } else {
