@@ -3,6 +3,8 @@ package night.bridge.lobby.deck;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -26,6 +28,7 @@ class MtgoLinesTest {
         assertEquals(List.of("Anikthea, Hand of Erebos"),
                 commanders(p).stream().map(DeckLine::name).toList());
         assertNull(p.lines().get(0).setCode(), ".mtgo carries no set code");
+        assertTrue(p.discarded().isEmpty(), () -> String.valueOf(p.discarded()));
     }
 
     /** The partner pair is structural here: the commander stanza simply has two lines. */
@@ -63,6 +66,10 @@ class MtgoLinesTest {
         ParsedLines p = MtgoLines.parse("1 Sol Ring\n1 Command Tower\n");
         assertEquals(1, p.problems().size());
         assertTrue(p.problems().get(0).contains("commander"), p.problems().get(0));
+        // Guards against dropping the "body.size() > 1 &&" clause from the commander
+        // check, which would mislabel the last card of this single stanza COMMANDER.
+        assertTrue(p.lines().stream().noneMatch(l -> l.section() == DeckLine.Section.COMMANDER),
+                () -> String.valueOf(p.lines()));
     }
 
     @Test
@@ -70,5 +77,70 @@ class MtgoLinesTest {
         ParsedLines p = MtgoLines.parse("1 Sol Ring\nnot a card line\n\n1 Anikthea, Hand of Erebos\n");
         assertEquals(1, p.problems().size());
         assertTrue(p.problems().get(0).contains("line 2"), p.problems().get(0));
+    }
+
+    /**
+     * Three unnamed stanzas: deck, a stray middle stanza, then the commander. The
+     * middle stanza is neither a named section (no header) nor the last stanza, so
+     * it trips the {@code body.size() > 2 && i > 0 && i < last} guard. Its cards
+     * still count as {@link DeckLine.Section#MAIN} — only the last stanza is the
+     * commander.
+     *
+     * <p>Line numbers, counting every physical line including blanks:
+     * <pre>
+     * 1: 1 Sol Ring
+     * 2: 1 Command Tower
+     * 3: (blank)
+     * 4: 1 Llanowar Elves
+     * 5: 1 Birds of Paradise
+     * 6: (blank)
+     * 7: 1 Anikthea, Hand of Erebos
+     * </pre>
+     */
+    @Test
+    void reportsAnUnexpectedExtraSection() {
+        ParsedLines p = MtgoLines.parse("1 Sol Ring\n1 Command Tower\n\n"
+                + "1 Llanowar Elves\n1 Birds of Paradise\n\n"
+                + "1 Anikthea, Hand of Erebos\n");
+
+        assertEquals(1, p.problems().size());
+        assertEquals("unexpected extra section at line 4 — an MTGO list should be deck, "
+                + "then optional named sections, then the commander", p.problems().get(0));
+
+        Map<String, DeckLine.Section> sectionByName = p.lines().stream()
+                .collect(Collectors.toMap(DeckLine::name, DeckLine::section));
+        assertEquals(DeckLine.Section.MAIN, sectionByName.get("Sol Ring"));
+        assertEquals(DeckLine.Section.MAIN, sectionByName.get("Command Tower"));
+        assertEquals(DeckLine.Section.MAIN, sectionByName.get("Llanowar Elves"));
+        assertEquals(DeckLine.Section.MAIN, sectionByName.get("Birds of Paradise"));
+        assertEquals(DeckLine.Section.COMMANDER, sectionByName.get("Anikthea, Hand of Erebos"));
+        assertEquals(List.of("Anikthea, Hand of Erebos"),
+                commanders(p).stream().map(DeckLine::name).toList());
+    }
+
+    /**
+     * A malformed line inside a discarded named section is reported and excluded
+     * from that section's card count.
+     *
+     * <p>Line numbers:
+     * <pre>
+     * 1: 1 Sol Ring
+     * 2: (blank)
+     * 3: SIDEBOARD:
+     * 4: 2 Brainstorm
+     * 5: not a card
+     * 6: 3 Ponder
+     * 7: (blank)
+     * 8: 1 Atraxa, Praetors' Voice
+     * </pre>
+     */
+    @Test
+    void reportsAMalformedLineInsideADiscardedSection() {
+        ParsedLines p = MtgoLines.parse("1 Sol Ring\n\nSIDEBOARD:\n2 Brainstorm\nnot a card\n3 Ponder\n\n"
+                + "1 Atraxa, Praetors' Voice\n");
+
+        assertEquals(1, p.problems().size());
+        assertEquals("line 5: cannot parse: not a card", p.problems().get(0));
+        assertEquals(List.of(new ParsedLines.Discarded("SIDEBOARD:", 5)), p.discarded());
     }
 }
