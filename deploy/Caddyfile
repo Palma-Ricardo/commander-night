@@ -38,7 +38,16 @@ night.example.com {
 		# leaves every browser on the previous bundle with no way to know.
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"
-		header /index.html Cache-Control "no-cache"
+		# Everything that is not a content-hashed asset must be no-cache.
+		# Matching the literal /index.html path is NOT enough: try_files
+		# rewrites to it only AFTER header runs, so `/` — the URL every
+		# player actually loads — went out with no cache directive at all
+		# (live-caught 2026-07-19), leaving browsers to cache the entry
+		# point heuristically. That is exactly the mid-night-stale-bundle
+		# failure this block exists to prevent. cardback.svg is not
+		# hash-named either, so it belongs on this side too.
+		@nothashed not path /assets/*
+		header @nothashed Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
 	}
