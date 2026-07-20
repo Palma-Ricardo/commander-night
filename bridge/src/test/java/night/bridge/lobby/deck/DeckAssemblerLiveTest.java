@@ -15,15 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("live")
 class DeckAssemblerLiveTest {
 
+    /**
+     * The sniff-then-switch-then-assemble sequence this once duplicated is now
+     * {@link DeckImporter#parse}'s job; delegating keeps the two from drifting apart.
+     */
     private static DeckImport importOf(String fixture) {
-        String text = Fixtures.read(fixture);
-        DeckFormat format = DeckFormat.sniff(text);
-        ParsedLines lines = switch (format) {
-            case DCK -> DckLines.parse(text);
-            case MTGO -> MtgoLines.parse(text);
-            case MOXFIELD -> MoxfieldLines.parse(text);
-        };
-        return DeckAssembler.assemble(format, lines);
+        return DeckImporter.parse("auto", Fixtures.read(fixture));
     }
 
     /** Moxfield hides the partner pair; only the validators can find it. */
