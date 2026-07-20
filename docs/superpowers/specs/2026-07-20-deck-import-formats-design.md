@@ -20,7 +20,7 @@ Three syntaxes must work:
 | Format | Shape | Commander | Notes |
 |---|---|---|---|
 | `.dck` | `1 [MKC:145] Agitator Ant` | `SB:` lines | XMage-native, already supported |
-| `.moxfield` | `1 Agitator Ant (MKC) 145 *F*` | **first line** | optional `SIDEBOARD:` section |
+| `.moxfield` | `1 Agitator Ant (MKC) 145 *F*` | **first one or two lines** | optional trailing sections |
 | `.mtgo` | `1 Agitator Ant` | after a **blank line** | no set/number — must be derived |
 
 ## 2. Findings that shape the design
@@ -80,8 +80,15 @@ that everything except one class is pure string work with no database dependency
 
 **`DeckLine`** — `record DeckLine(int qty, String name, String setCode, String number,
 Section section, int lineNo)`, where `setCode`/`number` are nullable and `Section` is
-`MAIN | COMMANDER | DISCARD`. This is the common currency; the three line parsers differ only in
-how they populate it.
+`MAIN | COMMANDER | MAYBE_COMMANDER | DISCARD`. This is the common currency; the three line
+parsers differ only in how they populate it.
+
+`MAYBE_COMMANDER` exists because of partners. `.dck` and `.mtgo` mark commanders unambiguously
+from text alone (`SB:` prefix; after the blank line), but `.moxfield` needs the card database to
+tell a partner pair from a commander followed by an ordinary card — and the line parsers are
+deliberately database-free. So `MoxfieldLines` marks line 1 `COMMANDER` and line 2
+`MAYBE_COMMANDER`, and `DeckAssembler` promotes or demotes line 2 *after* `CardResolver` has run.
+That keeps the one impure step in one class.
 
 **`DeckFormat.sniff(String)`** — classifies on line shape, which is mutually exclusive across the
 three formats:
@@ -100,19 +107,64 @@ does not flip the verdict.
 |---|---|---|
 | `dck` | `SB:` lines | — |
 | `mtgo` | every line after the first blank line | — |
-| `moxfield` | the first card line | everything after a `SIDEBOARD:` header |
+| `moxfield` | the first **one or two** card lines (see below) | any `HEADER:` section |
 
-Moxfield's `SIDEBOARD:` is a maybeboard — XMage has no Commander sideboard, it uses that zone for
-the commander. Including it would make a 125-card deck and fail. It is dropped and **reported**:
-`"ignored 25 sideboard cards (Moxfield maybeboard)"`. Silent dropping is rejected; a partner
-commander parked there would vanish without a trace.
+Moxfield lines carry a trailing foil marker (`*F*`) which is stripped and ignored. It is **not** a
+commander marker — the samples carry it on `Inspirit, Flagship Vessel` (a commander, line 1),
+`Kilo, Apogee Mind` (a regular card, mid-list), and on *both* lines of the Timey-Wimey partner
+pair. Nothing in the file distinguishes a commander except position.
 
-Moxfield lines also carry a trailing foil marker (`*F*`) which is stripped and ignored. It is not
-a commander marker — the second sample carries it on both `Inspirit, Flagship Vessel` (the
-commander, line 1) and `Kilo, Apogee Mind` (a regular card, mid-list).
+### Trailing sections are discarded
 
-**`CardResolver`** — the sole `CardRepository` consumer. Names are normalized through
-`CardNameUtil.normalizeCardName` first (XMage's own, so split-card and accent handling match).
+Moxfield emits named sections after the main list, introduced by an all-caps `HEADER:` line. The
+samples contain `SIDEBOARD:` (25 cards) and `PLANES:` (10 cards). Neither belongs in an XMage
+Commander deck: XMage has no Commander sideboard — it uses that zone for the commander — and
+`Commander Free For All` is not Planechase. Including either would blow the 100-card count.
+
+Rather than enumerate section names, **any `HEADER:` line after the main list opens a discarded
+section**. Unknown future sections then degrade to "ignored" instead of "unparseable". Each is
+**reported**, named and counted: `"ignored 10 cards in section PLANES:"`. Silent dropping is
+rejected — a card that vanishes without a trace is how a deck goes subtly wrong.
+
+### Partner commanders
+
+Moxfield puts **both** commanders of a partner pair on the first two lines, unmarked — the
+Timey-Wimey precon leads with `Rose Tyler` then `The Tenth Doctor`. Card count cannot disambiguate:
+one commander plus 99 and two commanders plus 98 both total 100.
+
+XMage answers this authoritatively. `mage.util.validation.CommanderValidator` — **in the `mage`
+jar the bridge already depends on** — has five implementations covering every pairing mechanic:
+`PartnerValidator`, `PartnerVariantValidator`, `PartnerWithValidator`, `ChooseABackgroundValidator`,
+`DoctorsCompanionValidator`. `AbstractCommander.java:86` uses them exactly as we need to.
+
+So: resolve the first two lines, materialize both via `CardInfo.createCard()`, and ask
+
+```java
+validators.stream().anyMatch(v -> v.checkBothPartners(card1, card2))
+```
+
+True → two commanders, 98 in the deck. False → one commander, line 2 rejoins the 99. Rose Tyler
+holds `DoctorsCompanionAbility` and the Tenth Doctor is a Time Lord Doctor, so
+`DoctorsCompanionValidator.checkPartner` returns true and the pair is detected without a line of
+mechanic-specific logic of our own. New pairing mechanics arrive with the pinned jar, not with a
+patch to us.
+
+The detected commander name(s) are echoed in `lobby.state`, so a wrong call is visible before
+anyone hits start.
+
+**`CardResolver`** — the sole `CardRepository` consumer.
+
+Names are normalized first, reproducing `TxtDeckImporter.java:118-123` so our results match what
+XMage's own importer would produce:
+
+1. `CardNameUtil.normalizeCardName` (XMage's own — accent and punctuation folding)
+2. `//` → ` // ` when unspaced
+3. single-slash split-card names → ` // ` via
+   `replaceFirst("(?<=[^/])\\s*/\\s*(?=[^/])", " // ")`
+
+Step 3 is not hypothetical: the Timey-Wimey deck contains `Coward / Killer` and
+`Gallifrey Falls / No More`, which fail lookup without it. Both samples also contain em-dashes
+(`Human—Time Lord Meta-Crisis`), which step 1 handles.
 
 For a line with **no** set/number (`.mtgo`): `findPreferredCoreExpansionCard(name)`. Miss → hard
 per-line error.
@@ -131,8 +183,9 @@ XMage maintains its own; the provided samples already contain three that cannot 
 perfectly legal deck over cosmetics. Warning text names the substitution:
 `"Aura of Silence — no PLST printing, used C15"`.
 
-**`DeckAssembler`** — applies the existing validation unchanged (main + commander = 100;
-1–2 commanders) and collects `problems` (fatal) and `warnings` (non-fatal) separately.
+**`DeckAssembler`** — resolves `MAYBE_COMMANDER` via the partner validators above, applies the
+existing validation (main + commander = 100; 1–2 commanders), and collects `problems` (fatal) and
+`warnings` (non-fatal) separately.
 
 ## 5. Protocol changes
 
@@ -214,19 +267,37 @@ infrastructure:
   that errors rather than guessing.
 - `MtgoLines`: commander stanza after the blank line; trailing blank lines ignored; repeated
   names (`4 Forest` twice) preserved as separate lines rather than merged.
-- `MoxfieldLines`: `*F*` stripped; `SIDEBOARD:` section marked `DISCARD`; collector numbers that
+- `MoxfieldLines`: `*F*` stripped; `SIDEBOARD:` and `PLANES:` sections marked `DISCARD`; an
+  unknown `MAYBEBOARD:` header discarded too, proving the rule is generic; collector numbers that
   are not integers (`C15-60`, `17p`) survive parsing intact.
 - `DeckAssembler`: the 100-card and 1–2-commander rules, warnings vs. problems.
+- name normalization: `Coward / Killer` → `Coward // Killer`.
 
-**Live tier (`-Plive`, real DB)** — `CardResolver` only:
+**Live tier (`-Plive`, real DB)** — `CardResolver` and partner detection, the two parts that need
+the card database:
 - all three fallback steps fire, each producing the expected warning text
-- both sample decks resolve to exactly 100 cards
+- every sample deck resolves to exactly 100 cards
+- **partner detection**: Timey-Wimey yields two commanders; the single-commander decks yield one.
+  This is the assertion that guards the riskiest inference in the design.
 - a deliberately misspelled name produces a hard error, not a silent substitution
 
-**Fixtures** — the two provided decks (`enduring_enchantments` in `.mtgo` and `.moxfield`, plus
-the `EOC` deck with the 25-card `SIDEBOARD:`) are checked in as import fixtures. The `.mtgo` and
-`.moxfield` forms of `enduring_enchantments` are the *same deck*, which gives a free cross-check:
-both must yield the same 100 card names.
+**Fixtures** — checked in under `bridge/src/test/resources/decks/`:
+
+| Deck | Formats | Pins |
+|---|---|---|
+| `enduring-enchantments` | `.mtgo`, `.moxfield` | cross-format equivalence; PLST/PVOW fallbacks |
+| `inspirit` (EOC) | `.mtgo`, `.moxfield` | 25-card `SIDEBOARD:` discard |
+| `timey-wimey` (WHO) | `.mtgo`, `.moxfield` | partner pair; `PLANES:` discard; split-card names |
+
+Having each deck in **both** formats is the highest-value property in the suite: the same deck
+travels two entirely different code paths — one deriving set and number from nothing, one parsing
+them from the file — and both must land on the same 100 card names. That single assertion catches
+a bad preferred-printing assumption, a broken fallback chain, and an off-by-one in commander
+extraction, all at once.
+
+Note the existing `upgrades_unleashed.dck` at the repo root and the sample `.mtgo`/`.moxfield`
+files move into that fixtures directory. The `.mtgo` file's name is currently misspelled
+(`enduring_enchatments` — missing the second `n`) and is corrected on the way in.
 
 **Conformance corpus** — `docs/protocol/samples/` gains a `lobby.state` sample carrying the new
 `format` and `warnings` fields, keeping `ProtocolSamplesTest` complete.
@@ -235,13 +306,16 @@ both must yield the same 100 card names.
 
 ## 9. Out of scope
 
-- Fetching decks from a Moxfield URL. Paste-only; no network dependency at deck-submit time.
+- **Fetching decks from a Moxfield URL.** Verified unavailable 2026-07-20: `api.moxfield.com/v2`
+  and `api2.moxfield.com/v3` both return **403** to an unapproved client, before deck lookup —
+  Moxfield gates its API behind Cloudflare and an approved `User-Agent`, granted on request.
+  Scraping their HTML instead is fragile and against their terms, so it is not an option.
+  Paste-only. Moxfield's export button copies the list in one click, so the cost is two keystrokes.
+  Revisit only if an approved User-Agent is obtained.
 - Format override in the client UI. Auto-detect echoes its verdict, which makes a misdetect
   visible; an override lands only if detection proves unreliable in practice.
-- Partner commanders. The first-line rule yields one commander; a partner pair imports with the
-  second partner among the 99 and the 100-card check still passes, so the deck is subtly wrong.
-  The echoed commander name in the lobby makes this visible. Deferred until someone actually
-  wants to play partners.
+- Planechase. `PLANES:` sections are discarded, not played — the game type is
+  `Commander Free For All`.
 - Other importer formats XMage ships (`.dec`, `.cod`, `.o8d`, `.mtga`).
 
 ## 10. Incidental docs fix
