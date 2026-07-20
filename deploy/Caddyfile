@@ -16,10 +16,18 @@ night.example.com {
 		dns route53
 	}
 
-	# The bridge owns exactly one path; everything else is the static client.
-	# The browser derives this URL from its own origin (client src/app.ts), so
+	# The bridge owns two paths; everything else is the static client. The
+	# browser derives the /ws URL from its own origin (client src/app.ts), so
 	# there is no build-time host configuration anywhere.
 	handle /ws* {
+		reverse_proxy 127.0.0.1:8484
+	}
+
+	# /healthz is the bridge's, not the SPA's. Before the static split a
+	# blanket reverse_proxy carried it; without this it would fall through to
+	# try_files and answer 200 with index.html — a health check that passes
+	# while the bridge is down.
+	handle /healthz {
 		reverse_proxy 127.0.0.1:8484
 	}
 
