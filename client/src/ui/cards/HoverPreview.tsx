@@ -21,11 +21,9 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from 'zustand';
 import { appScryfall } from '../../app';
-import { hoverStore } from '../hover';
+import { hoverCard, hoverStore } from '../hover';
+import { previewPosition } from './preview-position';
 import { TextFrame } from './CardView';
-
-const GAP = 16;     // px between the hovered card and the preview
-const MARGIN = 12;  // px kept clear of every viewport edge
 
 export function HoverPreview() {
   const card = useStore(hoverStore, s => s.card);
@@ -38,50 +36,30 @@ export function HoverPreview() {
     if (anchor === undefined || ref.current === null) { setStyle({}); return; }
     const el = ref.current;
 
-    // Offsets off the card's *edges*, not its centre — every card on screen
-    // is far wider than GAP, so a centre-relative offset used to land the
-    // preview's near edge inside the card's own box.
-    const reposition = () => {
-      const { width: w, height: h } = el.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+    // The placement rules themselves live in preview-position.ts as pure
+    // geometry, so they can be asserted without a browser (test/
+    // preview-position.test.ts) — the flip-to-left branch is not reachable by
+    // screenshotting a real board.
+    const { left, top } = previewPosition(
+      anchor,
+      el.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    setStyle({ left: `${left}px`, top: `${top}px`, bottom: 'auto' });
 
-      const rightPos = anchor.left + anchor.width + GAP;
-      const leftPos = anchor.left - GAP - w;
-      const fitsRight = rightPos + w <= viewportWidth - MARGIN;
-      const fitsLeft = leftPos >= MARGIN;
-
-      let left: number;
-      if (fitsRight) {
-        left = rightPos;
-      } else if (fitsLeft) {
-        left = leftPos;
-      } else {
-        // Neither side clears the card fully (very wide preview, narrow
-        // viewport) — clamp to the viewport and accept overlap, but pick
-        // whichever side overlaps the card's box the least.
-        const maxLeft = Math.max(MARGIN, viewportWidth - w - MARGIN);
-        const rightClamped = Math.min(rightPos, maxLeft);
-        const leftClamped = Math.max(leftPos, MARGIN);
-        const overlap = (pos: number) =>
-          Math.max(0, Math.min(pos + w, anchor.left + anchor.width) - Math.max(pos, anchor.left));
-        left = overlap(rightClamped) <= overlap(leftClamped) ? rightClamped : leftClamped;
-      }
-
-      const maxTop = Math.max(MARGIN, viewportHeight - h - MARGIN);
-      const top = anchor.top + anchor.height / 2 - h / 2;
-      setStyle({
-        left: `${left}px`,
-        top: `${Math.min(Math.max(top, MARGIN), maxTop)}px`,
-        bottom: 'auto',
-      });
-    };
-
-    reposition();
-    // A window resize mid-hover would otherwise leave the preview positioned
-    // against stale bounds until the next hover fires the effect again.
-    window.addEventListener('resize', reposition);
-    return () => window.removeEventListener('resize', reposition);
+    // On resize, dismiss rather than reposition. `anchor` is a plain
+    // snapshot taken at mouseenter — it is never re-measured, and card
+    // geometry is viewport-derived (--card-unit, the log column width), so
+    // any reflow (window resize, DevTools toggle, browser zoom, OS
+    // display-scale change) invalidates it instantly, none of which require
+    // the mouse to leave the card. Repositioning against that stale anchor
+    // would silently reintroduce the overlap-on-the-hovered-card bug this
+    // component exists to avoid. A resize mid-hover is transient and rare;
+    // dismissing (the same path mouseleave takes) can't be wrong, and the
+    // next mouse movement re-hovers with fresh geometry.
+    const dismiss = () => hoverCard(undefined);
+    window.addEventListener('resize', dismiss);
+    return () => window.removeEventListener('resize', dismiss);
     // image?.status is a dependency too: swapping the text-frame body for the
     // resolved <img> (or vice versa) changes the box's height.
   }, [anchor, card, image?.status]);
