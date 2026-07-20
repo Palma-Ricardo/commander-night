@@ -5,6 +5,8 @@ import night.bridge.config.Config;
 import night.bridge.game.GameCoordinator;
 import night.bridge.game.Games;
 import night.bridge.game.SeatPump;
+import night.bridge.lobby.deck.DeckImport;
+import night.bridge.lobby.deck.DeckImporter;
 import night.bridge.net.SessionRegistry;
 import night.bridge.proto.Ack;
 import night.bridge.proto.ClientMsg;
@@ -69,7 +71,7 @@ public final class LobbyService implements AutoCloseable {
     private static final class SeatEntry {
         final String userId;
         final String name;
-        DeckParser.Parsed deck;
+        DeckImport deck;
         boolean ready;
 
         SeatEntry(String userId, String name) {
@@ -217,20 +219,6 @@ public final class LobbyService implements AutoCloseable {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, "join a lobby seat first"));
             return;
         }
-        // Protocol §5 has already grown auto/moxfield/mtgo; the importer behind them
-        // lands with the DeckImporter wiring, so until then only .dck is served.
-        if (LobbyDeck.FORMAT_AUTO.equals(cmd.format())
-                || LobbyDeck.FORMAT_MOXFIELD.equals(cmd.format())
-                || LobbyDeck.FORMAT_MTGO.equals(cmd.format())) {
-            reply.accept(Err.re(cmd.id(), ErrorCode.DECK_INVALID,
-                    "'" + cmd.format() + "' decks are not supported yet — submit .dck lines: "
-                            + "N [SET:NUM] Name, SB: for the commander"));
-            return;
-        }
-        if (!LobbyDeck.FORMAT_DCK.equals(cmd.format())) {
-            reply.accept(Err.re(cmd.id(), ErrorCode.DECK_INVALID, "unknown deck format '" + cmd.format() + "'"));
-            return;
-        }
         if (cmd.content() == null || cmd.content().isBlank()) {
             reply.accept(Err.re(cmd.id(), ErrorCode.DECK_INVALID, "deck content is empty"));
             return;
@@ -241,7 +229,10 @@ public final class LobbyService implements AutoCloseable {
             return;
         }
         lobby.lastTouch = System.currentTimeMillis();
-        seat.deck = DeckParser.parseDck(cmd.content());
+        // Synchronous, on the lobby executor (design §4). An unrecognised format and
+        // unsniffable text both come back as deck problems rather than command errors
+        // (protocol §5), so the lobby renders them inline like every other diagnostic.
+        seat.deck = DeckImporter.parse(cmd.format(), cmd.content());
         seat.ready = false; // a new deck resets readiness
         reply.accept(new Ack(cmd.id()));
         broadcast(lobby);
@@ -366,11 +357,11 @@ public final class LobbyService implements AutoCloseable {
         Path dir = Path.of(config.sampleDecksDir());
         try (Stream<Path> files = Files.list(dir)) {
             for (Path file : files.filter(f -> f.toString().endsWith(".dck")).toList()) {
-                DeckParser.Parsed parsed = DeckParser.parseDck(Files.readString(file));
+                DeckImport parsed = DeckImporter.parse(LobbyDeck.FORMAT_DCK, Files.readString(file));
                 if (parsed.valid()) {
                     pool.add(parsed.deck());
                 } else {
-                    log.warn("sample deck {} skipped: {}", file.getFileName(), parsed.info().problems());
+                    log.warn("sample deck {} skipped: {}", file.getFileName(), parsed.problems());
                 }
             }
         } catch (IOException e) {
@@ -405,11 +396,35 @@ public final class LobbyService implements AutoCloseable {
         }
     }
 
+    /**
+     * Import result → wire deck info (protocol §5). {@code DeckInfo.format} is a bare
+     * {@code String} — {@code proto} cannot depend on this package — so the only thing
+     * keeping it to §5's three literals is that it always comes from
+     * {@link night.bridge.lobby.deck.DeckFormat#wire()}; never {@code name()},
+     * {@code toString()}, or an echo of the client's request. {@code format} is null on
+     * {@link DeckImporter}'s early-failure paths (unreadable format request, unsniffable
+     * text), which is exactly §5's "absent when no syntax could be established" — so it
+     * is null-checked rather than dereferenced. Empty-means-absent normalization is
+     * {@code DeckInfo}'s own job and is deliberately not repeated here.
+     *
+     * <p>Package-private and static for {@code LobbyDeckInfoTest}: a wrong spelling here
+     * is caught by the strict codec only in dev/test, and would ship silently in prod.
+     */
+    static LobbyState.DeckInfo deckInfo(DeckImport imp) {
+        return new LobbyState.DeckInfo(
+                imp.valid(),
+                imp.commander(),
+                imp.cards(),
+                imp.format() == null ? null : imp.format().wire(),
+                imp.problems(),
+                imp.warnings());
+    }
+
     private void broadcast(Lobby lobby) {
         List<LobbyState.Seat> seats = new ArrayList<>();
         for (SeatEntry s : lobby.seats.values()) {
             seats.add(new LobbyState.Seat(s.userId, s.name,
-                    s.deck == null ? null : s.deck.info(), s.ready));
+                    s.deck == null ? null : deckInfo(s.deck), s.ready));
         }
         LobbyState state = new LobbyState(lobby.code, lobby.hostUserId, seats);
         registry.sinkFor(lobby.hostUserId).send(state);

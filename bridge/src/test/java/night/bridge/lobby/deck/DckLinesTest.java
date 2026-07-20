@@ -59,6 +59,32 @@ class DckLinesTest {
         assertEquals("Lathril, Blade of the Elves", p.lines().get(2).name());
     }
 
+    /**
+     * Two {@code SB:} lines are two commanders, in order. .dck states its commander count
+     * structurally, so unlike Moxfield there is no partner <em>inference</em> to test — but
+     * nothing else pins that the second SB: line lands in COMMANDER too rather than being
+     * dropped or overwriting the first. This is the surviving half of the old
+     * {@code DeckParserTest.partnerCommandersAreBothReported}, whose Moxfield counterpart is
+     * {@code DeckAssemblerLiveTest.detectsAPartnerPairInMoxfield}; that one exercises a
+     * different code path (MAYBE_COMMANDER + the validators) and would not catch a
+     * regression here.
+     */
+    @Test
+    void twoSideboardLinesAreTwoCommandersInOrder() {
+        ParsedLines p = DckLines.parse("98 [KHM:250] Forest\n"
+                + "SB: 1 [CMR:273] Anara, Wolvid Familiar\n"
+                + "SB: 1 [CMR:283] Kodama of the East Tree\n");
+        assertTrue(p.problems().isEmpty(), () -> String.valueOf(p.problems()));
+        assertEquals(List.of("Anara, Wolvid Familiar", "Kodama of the East Tree"),
+                p.lines().stream()
+                        .filter(l -> l.section() == DeckLine.Section.COMMANDER)
+                        .map(DeckLine::name).toList());
+        assertEquals(List.of("Forest"),
+                p.lines().stream()
+                        .filter(l -> l.section() == DeckLine.Section.MAIN)
+                        .map(DeckLine::name).toList());
+    }
+
     @Test
     void sideboardMarkerWithIrregularSpacing() {
         ParsedLines pNoSpace = DckLines.parse("SB:1 [KHM:222] Lathril, Blade of the Elves\n");

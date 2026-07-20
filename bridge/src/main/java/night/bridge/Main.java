@@ -4,6 +4,7 @@ import io.javalin.Javalin;
 import night.bridge.config.Config;
 import night.bridge.game.Games;
 import night.bridge.lobby.LobbyService;
+import night.bridge.lobby.deck.CardDb;
 import night.bridge.net.Codec;
 import night.bridge.net.SessionRegistry;
 import night.bridge.net.WsEndpoint;
@@ -35,6 +36,18 @@ public final class Main {
         log.info("night-bridge starting: bind={} xmage={}:{} keyframeEvery={} callbackTap={}",
                 config.bind(), config.xmage().host(), config.xmage().port(),
                 config.keyframeEvery(), config.callbackTap());
+
+        // Deck import resolves card names through XMage's card database; fail fast with an
+        // operator-actionable message rather than at first deck submission. CardDb is the
+        // only permitted gate to it — CardRepository's constructor drops the card table on
+        // a Build-Time mismatch, and only the game server's set scanner can rebuild it.
+        try {
+            CardDb.require();
+        } catch (IllegalStateException e) {
+            log.error("card database unusable: {}", e.getMessage());
+            System.exit(1);
+            return;
+        }
 
         Games games = new Games();
         SessionRegistry registry = new SessionRegistry(games);
