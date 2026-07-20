@@ -28,7 +28,7 @@ final class MtgoLines {
         List<Stanzas.Stanza> body = new ArrayList<>();
         for (Stanzas.Stanza s : stanzas) {
             if (s.header() != null) {
-                discarded.add(new ParsedLines.Discarded(s.header(), countCards(s, problems)));
+                discarded.add(new ParsedLines.Discarded(s.header(), DeckText.countCards(s, LINE, problems)));
             } else {
                 body.add(s);
             }
@@ -64,19 +64,6 @@ final class MtgoLines {
             }
         }
         return new ParsedLines(List.copyOf(lines), List.copyOf(problems), List.copyOf(discarded));
-    }
-
-    private static int countCards(Stanzas.Stanza s, List<String> problems) {
-        int n = 0;
-        for (Stanzas.Raw raw : s.lines()) {
-            Matcher m = LINE.matcher(raw.text());
-            if (m.matches()) {
-                n += Integer.parseInt(m.group(1));
-            } else {
-                problems.add("line " + raw.lineNo() + ": cannot parse: " + DeckText.abbreviate(raw.text()));
-            }
-        }
-        return n;
     }
 
     private MtgoLines() {
