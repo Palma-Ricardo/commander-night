@@ -21,7 +21,13 @@ public enum DeckFormat {
     MTGO("mtgo");
 
     static final Pattern DCK_LINE = Pattern.compile("^(?:SB:\\s*)?\\d+\\s+\\[[^:\\]]+:[^\\]]+]");
-    static final Pattern MOX_LINE = Pattern.compile("\\([^)]+\\)\\s+\\S+(?:\\s+\\*\\w+\\*)*$");
+    // The parenthesised group is deliberately narrow (\w+, "looks like a set code" —
+    // spec §4) rather than [^)]+ ("anything but a closing paren"). A wider group plus
+    // .find() + $ means a hand-typed .mtgo aside like "1 Sol Ring (need one more) x2"
+    // gets misread as Moxfield; \w+ rejects multi-word parenthetical asides while still
+    // matching every real set code in the fixtures. The awkward collector numbers
+    // (C15-60, EMA-26, 17p, ...) live in the trailing \S+ slot, not this group.
+    static final Pattern MOX_LINE = Pattern.compile("\\(\\w+\\)\\s+\\S+(?:\\s+\\*\\w+\\*)*$");
     static final Pattern MTGO_LINE = Pattern.compile("^\\d+\\s+\\S");
 
     private final String wire;
@@ -35,6 +41,10 @@ public enum DeckFormat {
     }
 
     public static DeckFormat sniff(String text) {
+        if (text == null) {
+            throw new IllegalArgumentException(
+                    "cannot tell what deck format this is — text is null");
+        }
         Map<DeckFormat, Integer> votes = new EnumMap<>(DeckFormat.class);
         for (String raw : text.split("\\r?\\n")) {
             String line = raw.strip();
@@ -49,12 +59,25 @@ public enum DeckFormat {
                 votes.merge(MTGO, 1, Integer::sum);
             }
         }
-        return votes.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "cannot tell what deck format this is — expected .dck "
-                                + "(1 [SET:NUM] Name), Moxfield (1 Name (SET) NUM) "
-                                + "or MTGO (1 Name) lines"));
+        // Precedence (dck -> moxfield -> mtgo, per the class javadoc) is delivered
+        // explicitly here by iterating the declared enum order and keeping strictly
+        // greater counts, rather than relying on EnumMap/Stream.max incidentally
+        // preserving ordinal order on a tie.
+        DeckFormat winner = null;
+        int max = 0;
+        for (DeckFormat format : values()) {
+            int count = votes.getOrDefault(format, 0);
+            if (count > max) {
+                max = count;
+                winner = format;
+            }
+        }
+        if (winner == null) {
+            throw new IllegalArgumentException(
+                    "cannot tell what deck format this is — expected .dck "
+                            + "(1 [SET:NUM] Name), Moxfield (1 Name (SET) NUM) "
+                            + "or MTGO (1 Name) lines");
+        }
+        return winner;
     }
 }
