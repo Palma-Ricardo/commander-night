@@ -26,12 +26,20 @@ class CardResolverLiveTest {
         assertNull(r.warning());
     }
 
-    /** Step 2: right set, wrong number — warn and use another printing from that set. */
+    /**
+     * Step 2: right set, wrong number — warn and use another printing from that
+     * set, deterministically. CMM carries two real Sol Ring printings, 410 and
+     * 703 (confirmed against the live database — see task-8-report.md, "Fix
+     * round 1"); the tiebreak in {@code CardResolver} picks the lowest collector
+     * number, so this must resolve to 410 every time, not whichever printing
+     * {@code CardRepository#findCards} happens to return first.
+     */
     @Test
     void wrongNumberFallsBackWithinTheSet() {
         CardResolver.Resolved r = CardResolver.resolve(line("Sol Ring", "CMM", "99999"));
         assertNotNull(r.card());
         assertEquals("CMM", r.card().getSetCode());
+        assertEquals("410", r.card().getCardNumber());
         assertNotNull(r.warning());
         assertTrue(r.warning().contains("Sol Ring"), r.warning());
     }
