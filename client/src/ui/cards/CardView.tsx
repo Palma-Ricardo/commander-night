@@ -95,7 +95,7 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
       onMouseEnter={e => {
         if (redacted) return;
         const r = e.currentTarget.getBoundingClientRect();
-        hoverCard(card, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
       }}
       onMouseLeave={() => { hoverCard(undefined); setMenuOpen(false); }}
       role={aff !== undefined || onClickOverride !== undefined ? 'button' : undefined}

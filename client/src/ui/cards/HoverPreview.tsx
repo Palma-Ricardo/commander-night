@@ -3,9 +3,12 @@
 //
 // C5: anchored beside the hovered card rather than pinned to a fixed corner —
 // on a 1440p board the corner was half a screen away and could sit on top of
-// the prompt dock. Flips side and clamps vertically/horizontally to stay
-// on-screen; falls back to the old lower-left position when no anchor is
-// supplied (see the CSS default in styles.css).
+// the prompt dock. Offsets off the hovered element's *edges* (left/top/
+// width/height), not its centre point: cards are far wider than the gap, so
+// a centre-relative offset put the preview's near edge inside the card it
+// was supposed to sit beside. Flips side and clamps vertically/horizontally
+// to stay on-screen; falls back to the old lower-left position when no
+// anchor is supplied (see the CSS default in styles.css).
 //
 // The preview's width is viewport-derived (--card-unit, styles.css) and its
 // height depends on card art aspect ratio plus however much oracle text is
@@ -33,16 +36,52 @@ export function HoverPreview() {
 
   useLayoutEffect(() => {
     if (anchor === undefined || ref.current === null) { setStyle({}); return; }
-    const { width: w, height: h } = ref.current.getBoundingClientRect();
-    const preferRight = anchor.x < window.innerWidth / 2;
-    const left = preferRight ? anchor.x + GAP : anchor.x - GAP - w;
-    const maxLeft = Math.max(MARGIN, window.innerWidth - w - MARGIN);
-    const maxTop = Math.max(MARGIN, window.innerHeight - h - MARGIN);
-    setStyle({
-      left: `${Math.min(Math.max(left, MARGIN), maxLeft)}px`,
-      top: `${Math.min(Math.max(anchor.y - h / 2, MARGIN), maxTop)}px`,
-      bottom: 'auto',
-    });
+    const el = ref.current;
+
+    // Offsets off the card's *edges*, not its centre — every card on screen
+    // is far wider than GAP, so a centre-relative offset used to land the
+    // preview's near edge inside the card's own box.
+    const reposition = () => {
+      const { width: w, height: h } = el.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      const rightPos = anchor.left + anchor.width + GAP;
+      const leftPos = anchor.left - GAP - w;
+      const fitsRight = rightPos + w <= viewportWidth - MARGIN;
+      const fitsLeft = leftPos >= MARGIN;
+
+      let left: number;
+      if (fitsRight) {
+        left = rightPos;
+      } else if (fitsLeft) {
+        left = leftPos;
+      } else {
+        // Neither side clears the card fully (very wide preview, narrow
+        // viewport) — clamp to the viewport and accept overlap, but pick
+        // whichever side overlaps the card's box the least.
+        const maxLeft = Math.max(MARGIN, viewportWidth - w - MARGIN);
+        const rightClamped = Math.min(rightPos, maxLeft);
+        const leftClamped = Math.max(leftPos, MARGIN);
+        const overlap = (pos: number) =>
+          Math.max(0, Math.min(pos + w, anchor.left + anchor.width) - Math.max(pos, anchor.left));
+        left = overlap(rightClamped) <= overlap(leftClamped) ? rightClamped : leftClamped;
+      }
+
+      const maxTop = Math.max(MARGIN, viewportHeight - h - MARGIN);
+      const top = anchor.top + anchor.height / 2 - h / 2;
+      setStyle({
+        left: `${left}px`,
+        top: `${Math.min(Math.max(top, MARGIN), maxTop)}px`,
+        bottom: 'auto',
+      });
+    };
+
+    reposition();
+    // A window resize mid-hover would otherwise leave the preview positioned
+    // against stale bounds until the next hover fires the effect again.
+    window.addEventListener('resize', reposition);
+    return () => window.removeEventListener('resize', reposition);
     // image?.status is a dependency too: swapping the text-frame body for the
     // resolved <img> (or vice versa) changes the box's height.
   }, [anchor, card, image?.status]);

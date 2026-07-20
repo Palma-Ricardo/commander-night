@@ -117,7 +117,7 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
         className="log-ref"
         onMouseEnter={card !== undefined ? (e: ReactMouseEvent<HTMLSpanElement>) => {
           const r = e.currentTarget.getBoundingClientRect();
-          hoverCard(card, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
+          hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
         } : undefined}
         onMouseLeave={card !== undefined ? () => hoverCard(undefined) : undefined}
       >
