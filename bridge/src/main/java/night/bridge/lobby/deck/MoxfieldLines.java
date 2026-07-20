@@ -41,19 +41,34 @@ final class MoxfieldLines {
             problems.add("no cards found");
             return new ParsedLines(List.of(), List.copyOf(problems), List.copyOf(discarded));
         }
+        // A Moxfield list is one unnamed block, optionally followed by named sections
+        // (which were already split off above). A second *unnamed* stanza is still a
+        // problem, but per deck-import spec §4 a discarded card must never vanish
+        // without a trace — so, like a named section, its cards are counted and
+        // reported rather than simply skipped. It has no header to label it, so the
+        // discard entry is anchored to its starting line number instead.
         for (int i = 1; i < body.size(); i++) {
-            problems.add("unexpected blank line at line " + body.get(i).lines().get(0).lineNo()
+            Stanzas.Stanza extra = body.get(i);
+            int startLine = extra.lines().get(0).lineNo();
+            problems.add("unexpected blank line at line " + startLine
                     + " — a Moxfield list is one block, optionally followed by named sections");
+            discarded.add(new ParsedLines.Discarded("unnamed section at line " + startLine,
+                    DeckText.countCards(extra, LINE, problems)));
         }
 
-        for (Stanzas.Raw raw : body.get(0).lines()) {
+        // Section is keyed off physical position within stanza 1, not off lines.size()
+        // (the count of successfully parsed lines) — otherwise an unparseable line 1
+        // would silently promote line 2 to COMMANDER and line 3 to MAYBE_COMMANDER.
+        List<Stanzas.Raw> stanza1 = body.get(0).lines();
+        for (int i = 0; i < stanza1.size(); i++) {
+            Stanzas.Raw raw = stanza1.get(i);
             Matcher m = LINE.matcher(raw.text());
             if (!m.matches()) {
                 problems.add("line " + raw.lineNo() + ": cannot parse: "
                         + DeckText.abbreviate(raw.text()));
                 continue;
             }
-            DeckLine.Section section = switch (lines.size()) {
+            DeckLine.Section section = switch (i) {
                 case 0 -> DeckLine.Section.COMMANDER;
                 case 1 -> DeckLine.Section.MAYBE_COMMANDER;
                 default -> DeckLine.Section.MAIN;

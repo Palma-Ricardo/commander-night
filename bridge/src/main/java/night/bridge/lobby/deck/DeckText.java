@@ -20,6 +20,15 @@ final class DeckText {
      * that doesn't match {@code linePattern} as a problem instead of silently
      * dropping it. Shared by every line parser: the quantity is always capture
      * group 1, only the line shape (and therefore {@code linePattern}) differs.
+     *
+     * <p><b>Contract on {@code linePattern}:</b> capture group 1 must be the card
+     * quantity, parseable with {@link Integer#parseInt}. This is a bare convention,
+     * not something the compiler or this method can check — both {@code
+     * MtgoLines.LINE} and {@code MoxfieldLines.LINE} keep quantity as their first
+     * group purely so they can be passed here. If you ever reorder either regex's
+     * capture groups, keep (or restore) the quantity in group 1, or this method
+     * will parse the wrong group and corrupt discarded-card counts silently rather
+     * than fail to compile.
      */
     static int countCards(Stanzas.Stanza s, Pattern linePattern, List<String> problems) {
         int n = 0;
