@@ -62,7 +62,17 @@ scp deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
 scp deploy/xmage-server.service deploy/night-bridge.service vps:/etc/systemd/system/
 # merge deploy/Caddyfile (with your real hostname) into /etc/caddy/Caddyfile
 
-# 7. start
+# 7. card database symlink — deck import resolves card names through XMage's own
+#    database, and night.bridge.Main hard-exits if it can't read one (see "Card
+#    database access" below). Do this BEFORE the next step: if the bridge starts
+#    first, H2 auto-creates an empty, non-symlink `db` directory here and the
+#    guard then fails on every restart until that stray directory is removed.
+#    `test -L` makes this command safe to re-run even if that already happened.
+sudo test -L /var/lib/commander-night/db || sudo rm -rf --one-file-system /var/lib/commander-night/db
+sudo ln -sfn /opt/commander-night/xmage-dist/xmage/mage-server/db /var/lib/commander-night/db
+sudo chown -h commander:commander /var/lib/commander-night/db
+
+# 8. start
 sudo systemctl daemon-reload
 sudo systemctl enable --now xmage-server night-bridge
 sudo systemctl reload caddy
@@ -72,29 +82,47 @@ sudo systemctl reload caddy
 
 The bridge resolves deck card names through XMage's own card database. `CardRepository`
 hardcodes the relative path `./db/cards.h2`, so the bridge's working directory needs a symlink —
-create it before step 7, or the bridge will refuse to start (see the guard below) until you do:
+Install step 7 above creates it before the bridge is ever started. If you need to (re)create it
+by hand — e.g. recovering from the stray-directory failure described below — the same command is
+safe to re-run:
 
 ```sh
+sudo test -L /var/lib/commander-night/db || sudo rm -rf --one-file-system /var/lib/commander-night/db
 sudo ln -sfn /opt/commander-night/xmage-dist/xmage/mage-server/db /var/lib/commander-night/db
 sudo chown -h commander:commander /var/lib/commander-night/db
 ```
 
-The database is opened in H2 mixed mode (`AUTO_SERVER=TRUE`), so the bridge and the game server
-may hold it at the same time; start order does not matter — `night-bridge.service`'s
-`Restart=on-failure` retries every 3 s, so a bridge that starts before the database exists just
-comes up on the next attempt. `AUTO_SERVER=TRUE` does write a lock file on every open, though,
-even for the bridge's read-only lookups, and that file lands in the *real* directory the symlink
-points at, under `/opt`. `night-bridge.service` already lists that path (not just
-`/var/lib/commander-night`) in `ReadWritePaths=` for exactly this reason — `ProtectSystem=strict`
-follows the symlink to its target's actual mount, so only paths named there are writable. If you
-relocate the XMage dist, update both the symlink target above and the unit's `ReadWritePaths=`
-together.
+The `test -L` guard matters: `ln -sfn` refuses to replace an *existing directory* named `db` — it
+silently (exit 0) creates a symlink named `db` *inside* it instead, so a plain `ln -sfn` retry on
+its own never fixes the stray-directory failure below. Removing the non-symlink `db` first
+(`--one-file-system` so it cannot cross a mount point into the real XMage installation) is what
+makes the command idempotent.
 
-The bridge refuses to start if the table is missing or implausibly small. That guard is
-deliberate: `CardRepository`'s constructor drops and rebuilds the card table when it thinks the
-jar is newer than the database, and only the game server's set scanner can repopulate it. If you
-hit the guard, start the XMage server once and let it rebuild, then start (or let systemd retry)
-the bridge.
+The database is opened in H2 mixed mode (`AUTO_SERVER=TRUE`), so the bridge and the game server
+may hold it at the same time; start order between the two *services* does not matter (the symlink
+must still exist before either one *first* starts) — `night-bridge.service`'s `Restart=on-failure`
+retries every 3 s, so a bridge that starts before XMage has populated the database just comes up
+on the next attempt. `AUTO_SERVER=TRUE` does write a lock file on every open, though, even for the
+bridge's read-only lookups, and that file lands in the *real* directory the symlink points at,
+under `/opt`. `night-bridge.service` already lists that path (not just `/var/lib/commander-night`)
+in `ReadWritePaths=` for exactly this reason: opening a file through a symlink is ordinary kernel
+path resolution landing the `open()` on the target path, and `ProtectSystem=strict` bind-mounts
+everything else read-only — so the target, not just the symlink itself, has to be named in
+`ReadWritePaths=` too. If you relocate the XMage dist, update both the symlink target above and
+the unit's `ReadWritePaths=` together.
+
+The bridge refuses to start if the table is missing or implausibly small. Two different things
+produce that guard:
+
+- **Build-Time mismatch.** `CardRepository`'s constructor drops and rebuilds the card table when
+  it thinks the jar is newer than the database, and only the game server's set scanner can
+  repopulate it. Start the XMage server once and let it rebuild, then start (or let systemd
+  retry) the bridge.
+- **Stray auto-created empty db.** If the bridge ever started before the symlink existed, H2
+  silently created a real `cards.h2.mv.db` inside a real (non-symlink) `db` directory, and the
+  table it opens is simply empty — restarting XMage does not touch that stray file at all.
+  Recreate the symlink with the command above (its `test -L` guard removes the stray directory
+  first) before restarting the bridge.
 
 ## TLS via DNS-01 (Route 53)
 
