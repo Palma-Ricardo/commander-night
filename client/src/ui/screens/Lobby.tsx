@@ -7,6 +7,47 @@ import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
 import { inviteUrl } from '../../deeplink';
+import type { LobbyState } from '../../protocol/protocol';
+import { deckView } from './deck-view';
+
+/** One seat's deck verdict. Thin shell over `deckView` — see that module for why
+ *  commander names render individually, and on invalid decks too. */
+function DeckVerdict({ deck, own }: {
+  deck: LobbyState['seats'][number]['deck'];
+  own: boolean;
+}) {
+  const view = deckView(deck, { own });
+  if (view.kind === 'none') return <span className="deck-missing">no deck yet</span>;
+  return (
+    <span className="deck-status">
+      <span className={view.kind === 'valid' ? 'deck-ok' : 'deck-bad'}>
+        {view.cards} cards
+        {view.format !== undefined && <em className="deck-format">{view.format}</em>}
+      </span>
+      {/* The Moxfield commander inference can false-positive and still pass every
+          legality check, so these names are the only place a human catches it.
+          One element per name — protocol §5 forbids a joined summary. */}
+      {view.commanders.length > 0 && (
+        <ul
+          className="deck-commanders"
+          aria-label={view.commanders.length > 1 ? 'detected commanders' : 'detected commander'}
+        >
+          {view.commanders.map((name, i) => <li key={`${i}-${name}`}>{name}</li>)}
+        </ul>
+      )}
+      {view.problems.length > 0 && (
+        <ul className="deck-problems">
+          {view.problems.map((p, i) => <li key={i}>{p}</li>)}
+        </ul>
+      )}
+      {view.warnings.length > 0 && (
+        <ul className="deck-warnings">
+          {view.warnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      )}
+    </span>
+  );
+}
 
 export function Lobby() {
   const lobby = useStore(appStores.lobby, s => s.state);
@@ -58,31 +99,23 @@ export function Lobby() {
             <span className={seat.ready ? 'seat-ready' : 'seat-unready'}>
               {seat.ready ? 'ready' : 'not ready'}
             </span>
-            {seat.deck ? (
-              seat.deck.valid ? (
-                <span className="deck-ok">
-                  {seat.deck.cards} cards{seat.deck.commander?.length ? ` — ${seat.deck.commander.join(' + ')}` : ''}
-                </span>
-              ) : (
-                <ul className="deck-problems">
-                  {(seat.deck.problems ?? ['deck invalid']).map((p, i) => <li key={i}>{p}</li>)}
-                </ul>
-              )
-            ) : (
-              <span className="deck-missing">no deck yet</span>
-            )}
+            <DeckVerdict deck={seat.deck} own={seat.userId === userId} />
           </li>
         ))}
         {lobby.seats.length === 0 && <li className="seat seat-empty">nobody seated yet</li>}
       </ul>
 
       <div className="deck-editor">
-        <h2>Your deck (.dck — commander on SB: lines)</h2>
+        <h2>Your deck</h2>
+        <p className="deck-hint">
+          Paste a Moxfield export, an MTGO list, or an XMage .dck — the format is detected
+          for you. Check the commander names it reports back.
+        </p>
         <textarea
           value={deckText}
           rows={10}
           spellCheck={false}
-          placeholder={'1 [C21:263] Command Tower\n…\nSB: 1 [KHM:222] Lathril, Blade of the Elves'}
+          placeholder={'1 Rose Tyler (WHO) 5\n1 The Tenth Doctor (WHO) 3\n1 Sol Ring (WHO) 245\n…'}
           onChange={e => appActions.setDeckText(e.target.value)}
         />
         <div className="deck-controls">

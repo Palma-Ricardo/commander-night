@@ -1,8 +1,14 @@
 // Deck-text → image-warm identities (C5, design §9). The .dck trap: LAYOUT
 // lines repeat every [SET:NUM] identity, so a whole-text scan double-counts.
+// Three syntaxes now, matching what the bridge sniffs: .dck, .moxfield, .mtgo.
 
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseDeckIdentities } from '../src/images/deck';
+
+const fixture = (name: string): string => fs.readFileSync(
+  fileURLToPath(new URL(`../../bridge/src/test/resources/decks/${name}`, import.meta.url)), 'utf8');
 
 describe('parseDeckIdentities', () => {
   it('parses main-deck lines into set/number/name', () => {
@@ -43,5 +49,59 @@ describe('parseDeckIdentities', () => {
     expect(parseDeckIdentities('  12 [HOB:197] Mountain  \n')).toEqual([
       { set: 'HOB', number: '197', name: 'Mountain' },
     ]);
+  });
+
+  describe('.moxfield lines', () => {
+    it('parses name (SET) NUM and strips the foil marker', () => {
+      const out = parseDeckIdentities('1 Rose Tyler (WHO) 5 *F*\n1 Adipose Offspring (WHO) 10\n');
+      expect(out).toEqual([
+        { set: 'WHO', number: '5', name: 'Rose Tyler' },
+        { set: 'WHO', number: '10', name: 'Adipose Offspring' },
+      ]);
+    });
+
+    it('keeps a split-card name whole', () => {
+      expect(parseDeckIdentities('1 Coward / Killer (WHO) 77\n')).toEqual([
+        { set: 'WHO', number: '77', name: 'Coward / Killer' },
+      ]);
+    });
+
+    it('skips section headers such as PLANES: and SIDEBOARD:', () => {
+      const out = parseDeckIdentities('PLANES:\n1 Ood Sphere (WHO) 594\nSIDEBOARD:\n');
+      expect(out).toEqual([{ set: 'WHO', number: '594', name: 'Ood Sphere' }]);
+    });
+
+    it('warms a whole real Moxfield export with printings on every identity', () => {
+      const out = parseDeckIdentities(fixture('timey_wimey.moxfield'));
+      expect(out.length).toBeGreaterThan(90);
+      expect(out.every(c => c.set !== '' && c.number !== '')).toBe(true);
+      expect(out).toContainEqual({ set: 'WHO', number: '5', name: 'Rose Tyler' });
+      expect(out).toContainEqual({ set: 'WHO', number: '264', name: 'Command Tower' });
+    });
+  });
+
+  describe('.mtgo lines', () => {
+    it('warms name-only lines with an empty set and number', () => {
+      expect(parseDeckIdentities('1 Adipose Offspring\n4 Command Tower\n')).toEqual([
+        { set: '', number: '', name: 'Adipose Offspring' },
+        { set: '', number: '', name: 'Command Tower' },
+      ]);
+    });
+
+    it('dedupes name-only identities by name', () => {
+      expect(parseDeckIdentities('1 Forest\n1 Forest\n1 forest\n')).toHaveLength(1);
+    });
+
+    it('does not collapse two different names onto one empty printing', () => {
+      expect(parseDeckIdentities('1 Island\n1 Forest\n')).toHaveLength(2);
+    });
+
+    it('warms a whole real MTGO list, including the trailing commander stanza', () => {
+      const out = parseDeckIdentities(fixture('timey_wimey.mtgo'));
+      expect(out.length).toBeGreaterThan(90);
+      expect(out.every(c => c.set === '' && c.number === '')).toBe(true);
+      expect(out).toContainEqual({ set: '', number: '', name: 'Rose Tyler' });
+      expect(out).toContainEqual({ set: '', number: '', name: 'The Tenth Doctor' });
+    });
   });
 });

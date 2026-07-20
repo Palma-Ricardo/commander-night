@@ -77,7 +77,9 @@ describe('joinLobby / submitDeck', () => {
   it('submitDeck sends the persisted deck text and surfaces DECK_INVALID inline', async () => {
     actions.setDeckText('1 [C21:263] Command Tower');
     await actions.submitDeck();
-    expect(sent[0]).toMatchObject({ t: 'lobby.deck', format: 'dck', content: '1 [C21:263] Command Tower' });
+    // Always 'auto': the client never guesses the syntax, the bridge sniffs it
+    // and echoes what it concluded in lobby.state's deck.format (protocol §5).
+    expect(sent[0]).toMatchObject({ t: 'lobby.deck', format: 'auto', content: '1 [C21:263] Command Tower' });
 
     scripted = cmd => ({ t: 'error', re: cmd.id, code: 'DECK_INVALID', message: 'deck content is empty' });
     const err = await actions.submitDeck().catch((e: unknown) => e);
@@ -313,7 +315,7 @@ describe('submitDeck image warm-up (C5)', () => {
     // Must not throw, despite the resolver throwing
     await expect(warmActions.submitDeck()).resolves.toBeUndefined();
     // But the deck was still sent
-    expect(sent[0]).toMatchObject({ t: 'lobby.deck', format: 'dck' });
+    expect(sent[0]).toMatchObject({ t: 'lobby.deck', format: 'auto' });
   });
 });
 

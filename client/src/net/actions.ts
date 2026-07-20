@@ -129,7 +129,10 @@ export function createActions(
    *  the resolver queues internally and a warm failure is cosmetic. */
   async function submitDeckFlow(): Promise<void> {
     const content = stores.session.getState().deckText;
-    unwrap(await manager.send(lobbyDeck(ctx, { format: 'dck', content })));
+    // 'auto' always: the bridge sniffs .dck / .moxfield / .mtgo and echoes what
+    // it concluded in lobby.state's deck.format (protocol §5), so a misdetection
+    // is visible in the seat row before anyone readies.
+    unwrap(await manager.send(lobbyDeck(ctx, { format: 'auto', content })));
     if (opts.scryfall !== undefined && content.trim() !== '') {
       // Warm-up is strictly optional (design §9): the server already acked the deck,
       // so a throw from resolve() must never look like a submit failure (it's cosmetic).

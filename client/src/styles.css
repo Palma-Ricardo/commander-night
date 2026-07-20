@@ -153,12 +153,38 @@ button.reconnect { background: var(--accent); color: #14161a; }
 .seat-name em { color: var(--muted); font-style: normal; font-weight: 400; }
 .seat-ready { color: var(--in); }
 .seat-unready { color: var(--muted); }
+.deck-status { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
 .deck-ok { color: var(--in); }
+.deck-bad { color: var(--error); }
 .deck-missing { color: var(--muted); }
 .deck-problems { color: var(--error); margin: 0; padding-left: 1.2rem; font-size: 0.85rem; }
+
+/* Warnings are advisory — the deck is valid and startable. Deliberately distinct
+   from .deck-problems, which is fatal. Own seat only: they quote card names. */
+.deck-warnings { color: var(--out); margin: 0; padding-left: 1.2rem; font-size: 0.85rem; }
+
+/* The detected commanders, one chip per name (protocol §5). The Moxfield
+   inference can promote a maindeck card into a second commander slot and still
+   pass every legality check, so this is the one place a human catches it —
+   chips, not prose, because a spurious second name has to be impossible to skim
+   past at 1440p across the room. */
+.deck-commanders {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 0.35rem;
+}
+.deck-commanders li {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.1rem 0.6rem; font-size: 0.85rem; color: var(--text);
+}
+.deck-format {
+  color: var(--muted); font-style: normal; font-size: 0.85rem;
+  margin-left: 0.4rem; padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border); border-radius: 4px;
+}
 .seat-empty { color: var(--muted); }
 
-.deck-editor h2 { font-size: 1rem; color: var(--muted); }
+.deck-editor h2 { font-size: 1rem; color: var(--muted); margin-bottom: 0.2rem; }
+.deck-hint { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.9rem; }
 .deck-controls { display: flex; gap: 1rem; align-items: center; margin-top: 0.5rem; }
 .host-controls {
   margin-top: 1.25rem; display: flex; gap: 1rem; align-items: center;
