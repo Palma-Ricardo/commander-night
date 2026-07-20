@@ -27,6 +27,18 @@ class StanzasTest {
         assertEquals("PLANES:", s.get(1).header());
         assertEquals(1, s.get(1).lines().size());
         assertEquals("1 Pompeii", s.get(1).lines().get(0).text());
+        assertEquals(4, s.get(1).lines().get(0).lineNo());
+    }
+
+    @Test
+    void splitsOnBlankLinesAndKeepsLineNumbersWithCrlf() {
+        List<Stanzas.Stanza> s = Stanzas.split("1 A\r\n1 B\r\n\r\n1 C\r\n");
+        assertEquals(2, s.size());
+        assertNull(s.get(0).header());
+        assertEquals(2, s.get(0).lines().size());
+        assertEquals(1, s.get(0).lines().get(0).lineNo());
+        assertEquals("1 C", s.get(1).lines().get(0).text());
+        assertEquals(4, s.get(1).lines().get(0).lineNo());
     }
 
     @Test

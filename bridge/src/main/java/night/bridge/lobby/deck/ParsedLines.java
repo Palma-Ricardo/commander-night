@@ -9,6 +9,12 @@ import java.util.List;
  */
 public record ParsedLines(List<DeckLine> lines, List<String> problems, List<Discarded> discarded) {
 
+    public ParsedLines {
+        lines = List.copyOf(lines);
+        problems = List.copyOf(problems);
+        discarded = List.copyOf(discarded);
+    }
+
     public record Discarded(String section, int cards) {
     }
 }

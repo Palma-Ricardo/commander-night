@@ -12,6 +12,11 @@ import java.util.regex.Pattern;
  */
 final class Stanzas {
 
+    // Letters and spaces only, deliberately: every known section name (SIDEBOARD:,
+    // PLANES:, MAYBEBOARD:) matches, and a card line can never match because card
+    // lines always start with a digit. A future header with a digit or an apostrophe
+    // would be a false negative here — it would fall through to the card-line parser
+    // and be reported as an unparseable line rather than discarded as a section.
     private static final Pattern HEADER = Pattern.compile("^[A-Za-z][A-Za-z ]*:$");
 
     record Raw(int lineNo, String text) {
