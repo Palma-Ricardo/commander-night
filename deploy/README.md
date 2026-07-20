@@ -48,12 +48,16 @@ cd bridge && mvn -Pdist -DskipTests package
 rsync -a target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
 rsync -a target/lib/ vps:/opt/commander-night/bridge/lib/
 
-# 5. config + units + caddy
+# 5. build + ship the web client (on the dev machine)
+cd client && npm ci && npm run build
+rsync -a --delete dist/ vps:/opt/commander-night/client/
+
+# 6. config + units + caddy
 scp deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
 scp deploy/xmage-server.service deploy/night-bridge.service vps:/etc/systemd/system/
 # merge deploy/Caddyfile (with your real hostname) into /etc/caddy/Caddyfile
 
-# 6. start
+# 7. start
 sudo systemctl daemon-reload
 sudo systemctl enable --now xmage-server night-bridge
 sudo systemctl reload caddy
@@ -95,6 +99,38 @@ drop-in `/etc/systemd/system/caddy.service.d/route53.conf`:
 [Service]
 EnvironmentFile=/etc/caddy/route53.env
 ```
+
+## The web client
+
+Caddy serves the built SPA at `/` and proxies only `/ws` to the bridge
+(`deploy/Caddyfile`). The browser derives its WebSocket URL from the page
+origin, so there is no host baked into the bundle — the same `dist/` works on
+any hostname.
+
+**SELinux.** On Rocky/EL with SELinux enforcing, caddy cannot read a
+`file_server` root under `/opt` until it is labelled, and the failure is a
+silent 403 rather than an error in caddy's log:
+
+```sh
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/commander-night/client(/.*)?"
+sudo restorecon -Rv /opt/commander-night/client
+```
+
+(`semanage` comes from `policycoreutils-python-utils`.) Verify with
+`curl -I https://your.host/` — a 403 with an empty caddy error log is almost
+always this.
+
+**Client and bridge redeploy independently.** They are separate artifacts:
+
+| Changed | Redeploy |
+|---|---|
+| anything under `client/` | rebuild + rsync `dist/`; no service restart — caddy serves from disk |
+| anything under `bridge/` | rebuild + rsync the jar, then `systemctl restart night-bridge` (drops live seats) |
+| `deploy/Caddyfile` | `systemctl reload caddy` |
+
+Because `index.html` is served `no-cache`, a client redeploy reaches players
+on their next page load. A hard refresh is never required — and if you find
+yourself telling someone to hard-refresh, the cache headers are wrong.
 
 ## Verify
 
