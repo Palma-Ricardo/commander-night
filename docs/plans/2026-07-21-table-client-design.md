@@ -1,0 +1,537 @@
+# Commander Night — Table Client Design (Arena-like)
+
+**Date:** 2026-07-21 · **Status:** ACCEPTED — layout reviewed and chosen 2026-07-21 (§7); next
+action is M6 · **Scope:** the second web client — a
+canvas-rendered, fully animated four-player table, built alongside the existing React client
+(which stays as the working fallback). Covers the protocol extension it needs, the bridge work
+that feeds it, and the client architecture itself.
+
+Companion documents:
+
+- `docs/protocol/v1.md` — the wire contract. This phase **extends it additively** (§4); no
+  breaking change, no major bump.
+- `docs/bridge/design.md` — the daemon. This phase adds one stage to its translation pipeline (§5).
+- `docs/client/design.md` — the *classic* client. Stays live and supported; the shared layer
+  underneath it is extracted, not rewritten (§11).
+
+## 1. The premise, corrected
+
+The obvious reading of this phase is "throw away the client and rebuild it in something with
+animation". That is wrong twice over, and the second correction is the one that matters.
+
+**First:** roughly half of `client/src` — protocol, net, stores, state, image resolution — is
+view-independent, and it is the half that was expensive. It carries the socket FSM, resume and
+idempotency, the patch/resync gate, and the prompt fence, and it cost C0–C4 plus three bugs found
+the hard way (silent seat-identity loss, dead-end `chooseTargets`, the post-game chat gap). None of
+that is visual. It gets **extracted and shared**, not rewritten. That alone rules out Godot and
+native desktop, which would re-earn all of it in a new language for zero visual gain — on top of
+Godot's ~40 MB wasm payload, WebGL2-only export, and weakness at exactly the text-heavy UI (oracle
+text, log, chat, prompts) that this client is full of.
+
+**Second, and this reshapes the whole phase:** the reason v1 deferred animation was a factual
+error. `docs/protocol/v1.md:352-357` justifies shipping "teleport" rendering with
+
+> Deriving *"card X moved hand → battlefield"* events from XMage snapshots is heuristic (XMage
+> assigns a **new UUID when an object changes zone** — MTG "new object" semantics)
+
+XMage 1.4.60 does not do this. Object continuity is already on the wire, unused. §3 has the
+evidence. The consequence is that the hard, uncertain, research-shaped part of this phase does not
+exist: we are not inventing a heuristic, we are forwarding an identity XMage already gives us.
+
+## 2. Decisions
+
+| Decision | Choice | Basis |
+|---|---|---|
+| Platform | **Browser, same static-SPA shape as classic** — caddy already serves `dist/` with `/ws` proxied | Iteration is the whole game this phase; a URL that is always current beats any binary your friends must install. Also keeps Scryfall's CDN + the browser HTTP cache doing the image work for free. |
+| Language | **TypeScript**, unchanged | The shared core (§11) is TS and stays TS. A second language buys nothing and forks the protocol types. |
+| Table renderer | **PixiJS v8** (WebGL/WebGPU, 2D-native) | The table is card choreography, not a 3D scene; Pixi is the mature 2D GPU renderer (v8.18/8.19, ~500k weekly downloads) with the filter/particle vocabulary the effects need. three.js would cost more per effect for depth we can fake with perspective transforms. |
+| Chrome renderer | **React + DOM overlay** — log, chat, prompt dock, modals, lobby, hover preview body | Text-heavy, selectable, accessible, and already written. Canvas text is the wrong tool for oracle text and a 500-line scrolling log. |
+| Scene model | **Flat scene of card actors + pure layout function** (§6) | Cards must not be children of zones or they cannot leave them. This single change is what makes both "unified battlefield" and "cards fly between zones" fall out instead of being fought for. |
+| Coordinate spaces | **World vs screen, split at the top** (§7.1) | The table, all four boards, the piles, the stack and combat have table coordinates. Your hand, the prompt dock, log and chat have screen coordinates and never move. Every other layout question resolves once this line is drawn. |
+| Table layout | **One continuous felt surface, four quadrants, one camera** (§7) | Reviewed as a mockup 2026-07-21 against an opponent-arc alternative and chosen. An arc is still a *composition of panels*; a world with a camera is a table. Attackers stepping into the middle, a shared stack, and "move the viewport at will" are all free once the boards share one coordinate system. |
+| Camera | **Follows the active player, manual override, presets only** (§7.3) | Discrete presets (whole table + one per seat) interpolate predictably and unit-test trivially. Free pan/zoom is not wanted: there is no navigation problem to solve, only a "show me that player" problem. |
+| Animation timing | **Two clocks** — authoritative state vs presented state, joined by a director (§6.3) | The bridge emits at machine speed; animation has duration. Anything else either drops frames of story or blocks input. |
+| Input policy | **The prompt dock never waits on animation** (§6.4) | Non-negotiable. This is the specific way Arena feels bad and it is avoidable. |
+| Event source | **Bridge-derived semantic events**, additive on `game.patch`/`game.state` (§4) | The bridge holds the raw `GameView` (the client only sees the trimmed one) and gets the log one callback *ahead* of the state it describes. Deriving client-side means every future client redoes it against strictly less information. |
+| Protocol version | **Additive within v1** — no major bump | §13 permits new optional fields and new event types; §3 requires unknown fields be ignored. The classic client keeps working with no change at all. |
+| Classic client | **Stays**, served at `/classic` | It is the fallback for friends' nights during a phase with no natural end date. |
+| Milestones | Bridge continues **M6**; new client is **T0–T6** | C-numbers belong to the classic client. |
+
+## 3. Evidence: object identity is already on the wire
+
+Verified independently on two different full-game captures. Scanning every `GameView` in
+`bridge/logs/spike-1784169224029.jsonl` and bucketing each object UUID by the zones it is ever
+seen in:
+
+```
+distinct object ids: 169
+     90  ('stack',)
+     34  ('battlefield',)
+     12  ('graveyard', 'hand')
+      6  ('battlefield', 'graveyard')
+      2  ('battlefield', 'exile', 'graveyard')
+      1  ('exile', 'graveyard')
+any bucket containing 'stack' AND another zone?  False
+```
+
+A physical card keeps **one UUID** across hand ↔ battlefield ↔ graveyard ↔ exile ↔ library.
+`PermanentCard.java:44` passes `card.getId()` straight into the permanent; `CardView.java:302`
+does the same into the view. What XMage bumps on a zone change is a server-side zone-change
+counter that never crosses to the client.
+
+**The stack is the sole exception** — `Spell.java:55` sets `this.id = ability.getId()`, an
+ephemeral id, and `GameView.java:97` keys the stack by it. So hand → stack → battlefield is two
+identities, not one.
+
+**The log closes that gap.** Across a full game, **0 of 98** log `object_id`s were stack-ephemeral —
+the log speaks exclusively in stable ids, and arrives one callback *before* the state it describes
+(`seq 456` chat, `seq 457` the update carrying the new stack). Real captured lines:
+
+```
+… casts <object_id='87903dcb…'>Sensei's Divining Top</font> [879] from hand
+… puts  <object_id='87903dcb…'>Sensei's Divining Top</font> [879] from stack onto the Battlefield
+… moves <object_id='e39496f4…'>Knight of the White Orchid</font> [e39] from battlefield to the
+        exile zone (source: <object_id='bfadc0ae…'>Path to Exile</font> [bfa])
+… sacrificed <object_id='715c4020…'>Swamp</font> [715] (source: <object_id='c24461b2…'>Dust Bowl</font>)
+<object_id='ab636679…'>Zurgo Helmsmasher</font> [ab6] is put into graveyard from battlefield
+        (SBA: creature has toughness 0 or less)
+Attacker: <object_id='994992ec…'>Tasigur</font> (4/5) blocked by <object_id='4b6b4d71…'>Daxos</font> (2/2)
+```
+
+The same `object_id` appears in "casts … from hand" and "puts … from stack onto the Battlefield".
+That is the stack link, free.
+
+Two more anchors the bridge currently discards and should not: `CardView.mageObjectType`
+transitions `CARD → SPELL → PERMANENT → CARD` on the object itself, and
+`StackAbilityView.sourceCard.id` is the stable source id for triggered/activated abilities
+(already carried as `StackItem.source`).
+
+**Known gaps, all covered by state deltas rather than the log:**
+
+| Not in the log | Where it comes from instead |
+|---|---|
+| Tapping for mana (zero hits across ~3,000 lines) | `PermanentView.tapped` + `PlayerView.manaPool` deltas |
+| Attacker identity ("attacks with 3 creatures" names no cards) | `GameView.combat` / `CombatGroupView` |
+| Counter added/removed | `CardView.counters` delta |
+| Opponent draws (deliberately anonymous — hidden info) | `librarySize`/`handSize` delta → anonymous event (§4) |
+
+Also worth noting: `sync/Differ.java:9-14` already sets `OMIT_MOVE_OPERATION` /
+`OMIT_COPY_OPERATION` so that a zone change surfaces as `remove` + `add`, with a comment saying it
+is for "zone-change animation heuristics". The door was left open on purpose.
+
+## 4. Protocol: the event stream (additive, still v1)
+
+Events ride **on** the state message they explain, as an optional field, rather than as a separate
+message. They are meaningless apart from that specific transition, and a client that ignores the
+field degrades to exactly today's teleport rendering — which is what the classic client will do,
+untouched.
+
+```ts
+interface StateKeyframe { t:'game.state'; seq; gameId; state: GameState; events?: GameEvent[] }
+interface StatePatch    { t:'game.patch'; seq; gameId; base; ops; events?: GameEvent[] }
+
+type Zone = 'hand'|'battlefield'|'graveyard'|'exile'|'library'|'stack'|'command';
+
+type Verb = 'cast'|'play'|'resolve'|'counter'|'destroy'|'sacrifice'|'exile'|'discard'
+          | 'mill'|'bounce'|'draw'|'tutor'|'put'|'token'|'attach'|'detach';
+
+interface Cause { objectId?: Id; name?: string; playerId?: Id }
+
+type GameEvent =
+  // The workhorse. `objectId` is the stable card id on both sides of the move.
+  | { k:'move'; objectId: Id; from: Zone; to: Zone; verb: Verb; cause?: Cause; reason?: string }
+  // Anonymous movement — hidden information, animate as card backs.
+  | { k:'hidden'; playerId: Id; from: Zone; to: Zone; count: number; verb: Verb }
+  // Binds an ephemeral stack id to the stable card/source it came from (§3).
+  | { k:'stackLink'; stackId: Id; objectId: Id }
+  | { k:'tap'|'untap'; objectId: Id; forMana?: boolean }
+  | { k:'attack'; attackerIds: Id[]; defenderId: Id }
+  | { k:'block'; attackerId: Id; blockerIds: Id[] }
+  | { k:'damage'; targetId: Id; amount: number; combat: boolean; cause?: Cause }
+  | { k:'life'; playerId: Id; from: number; to: number; cause?: Cause }
+  | { k:'counters'; objectId: Id; name: string; from: number; to: number }
+  | { k:'trigger'; sourceId: Id; stackId?: Id }
+  | { k:'reveal'; objectIds: Id[]; playerId?: Id }
+  | { k:'shuffle'|'scry'|'search'; playerId: Id }
+  | { k:'step'; phase?: Phase; step?: Step; activePlayerId?: Id };
+```
+
+Rules:
+
+- **Events are advisory, state is authoritative.** A client must reach the same board by applying
+  `ops` alone. Events only say *how it looked*. A missing, wrong, or unknown event costs an
+  animation, never correctness — so the deriver may always fall back to silence.
+- **`move.objectId` is the stable id.** For a hand → stack move, `stackLink` accompanies it.
+- Events are ordered within the array; the client plays them in order.
+- Unknown `k` values are ignored per §3's forward-compatibility rule.
+
+## 5. Bridge: event derivation (M6)
+
+One new stage in the §7 pipeline, between the differ and the emit:
+
+```
+ClientCallback
+  → CHATMESSAGE            → LogTranslator → LogEntry  ─┐  (arrives BEFORE the state it describes)
+                                                        ├→ pending verb buffer
+  → embedded GameView      → ViewTranslator.trim        │
+      → StateStore + Differ  (ops)                      │
+      → EventDeriver ◄──────────────────────────────────┘   join: verbs ⋈ delta
+      → emit game.patch{ops, events} then game.prompt
+```
+
+**The join is the design.** Log lines are buffered as they arrive; when the next `GameView` lands,
+the deriver computes the state delta and correlates:
+
+- Delta shows an object left zone A and appeared in zone B → a `move`. A buffered log line naming
+  that `object_id` supplies the **verb and cause**; without one, the verb defaults to `put`.
+- Buffered line with no corresponding delta (opponent draws, shuffles, scry) → an event with no
+  object, or a `hidden` event sized from the `librarySize`/`handSize` delta.
+- Delta with no line (tap for mana, counters) → event derived from the delta alone.
+
+Retention this needs and the bridge does not currently have: `SeatPump.updateState` drops the raw
+`GameView` after translating (`SeatPump.java:582-588` keeps only the trimmed `lastState`). The
+deriver needs the previous **trimmed** state (already in `StateStore.lastTree`) plus a small set of
+fields currently thrown away — `mageObjectType`, `GameView.gameCycle`, `PermanentView.original`. Add
+those to the trim as internal-only fields, or hand the deriver the raw view before it is discarded.
+Retaining the whole raw view is not required and should be avoided: it is 169–191 MB per game
+per seat.
+
+**Testing is the reason this is bridge-side.** Six full-game captures (`bridge/logs/spike-*.jsonl`,
+191–403 MB each) replay offline with no server and no renderer. The M6 exit criterion is a coverage
+assertion over them: *every zone transition observable in the state delta is explained by at least
+one emitted event*, with the residue printed. That is a real, measurable, regression-testable bar,
+and it is unavailable to a client-side deriver.
+
+## 6. Client architecture
+
+### 6.1 Card actors
+
+One persistent `CardActor` per object, keyed by the stable UUID from §3, living in a **single flat
+scene** — not inside a zone container. Today `client/src/ui/board/Battlefield.tsx` builds flexbox
+rows, so a card physically cannot animate out of its parent. Actors instead hold a current
+transform and a target transform and interpolate.
+
+Actors outlive zone changes (that is the whole point), are created on first sight, and are retired
+only after their exit animation completes. Stack items get actors keyed by `stackId`, adopted onto
+the stable id when a `stackLink` arrives.
+
+### 6.2 Layout is a pure function — and the camera is not part of it
+
+The world/screen split (§7.1) buys a factoring that is better than one `layout()` taking a viewport:
+
+```ts
+layoutWorld (state: GameState): Map<ActorKey, Transform>            // table coords, fixed extent
+layoutScreen(state: GameState, viewport: Size): Map<ActorKey, Transform>   // hand fan, dock anchors
+camera      (view: CameraView, viewport: Size): Transform           // world → screen
+```
+
+`layoutWorld` takes **no viewport and no camera**. The table is a fixed-size world; where a
+permanent sits on Ana's board does not depend on how big the browser window is or where the lens is
+pointed. That makes it the most testable function in the codebase: same input, same table
+coordinates, forever. Only `layoutScreen` — the hand fan and anything anchored to a window edge —
+sees the viewport, and only `camera` sees the view.
+
+No side effects, no renderer types, no time in any of the three. Zones stop being containers and
+become layout *functions* — `handFan()`, `battlefieldRows()`, `pile()`, `stackSlot()`,
+`quadrant(seat)`. T1 therefore exits on tests rather than on screenshots.
+
+**Crossing the boundary.** A cast starts at a screen-space hand position and ends at a world-space
+stack slot. Rather than interpolate across two spaces, the director projects the hand card's screen
+position into world coordinates through the **inverse camera at animation start**, then animates
+purely in world space. The card is on the table from the first frame; if the camera moves mid-cast,
+the card stays glued to the felt, which is the correct physical read.
+
+### 6.3 The two clocks
+
+- **Authoritative state** — the current `GameState`, exactly as the shared core already maintains it.
+- **Presented state** — an *older, real* `GameState` that the scene currently depicts.
+- **Director** — consumes `(events, nextState)` steps, plays the animations, then advances
+  presented to nextState.
+
+**Invariant: the director never synthesizes state.** Presented is always a state the server
+actually sent, never an interpolation of two. Only *transforms* interpolate, between
+`layout(presented)` and `layout(next)`. This makes an entire class of "the board briefly showed
+something illegal" bug unrepresentable.
+
+Catch-up policy, since XMage emits far faster than animation plays: the director tracks queue
+depth and scales durations down as it grows; past a threshold it plays only the *last* step of a
+run and snaps the rest. Dropping animation is always legal (§4: events are advisory).
+
+### 6.4 Input never waits
+
+The prompt dock renders **immediately** against authoritative state, always. It is never gated on
+the director.
+
+Board affordances (highlighting candidates, click targets) do need the board to have caught up, so
+when a prompt for this seat arrives the director enters a **budgeted flush**: remaining animation
+plays compressed within a hard cap (~400 ms), then snaps. You still see your creature leave your
+hand; you never wait on it.
+
+The consequence is worth stating because it is a feature, not a compromise: **your own turns are
+snappy and your opponents' turns are cinematic.** With 138–379 prompts per game, that is where the
+animation windows naturally are, and it is the right allocation for a four-player game where most
+of the time you are watching.
+
+## 7. The table: one world, four place settings, one camera
+
+An opponent-arc layout was mocked up and **rejected** on 2026-07-21: it was still a composition of
+four panels, just curved, and it did not feel like sitting at a table. The accepted design is a
+single continuous felt surface divided into quadrants, with a camera over it. Mockup:
+`claude.ai/code/artifact/59d8b97f-b47f-4580-b366-e8f9f6cfe6a0`.
+
+### 7.1 Two spaces
+
+| | World space | Screen space |
+|---|---|---|
+| Contains | felt, four quadrants, all battlefields, all piles, the stack, combat, attack arrows | your hand fan, prompt dock, log/chat, turn ribbon, compass, toasts, modals, fatal overlay |
+| Coordinates | fixed table units, independent of window size | CSS pixels, anchored to window edges |
+| Moves when the camera moves | yes | **never** |
+| Laid out by | `layoutWorld(state)` | `layoutScreen(state, viewport)` |
+
+Everything in §7 that reads as a design decision is a consequence of this table.
+
+### 7.2 The world
+
+```
+       ┌───────────────────────┬───────────────────────┐
+       │  ▣ Marta 31   [pile]  │  [pile]  ▣ Tom 40 ◐   │   far half:
+       │  ▭ ▭ ▭ ▭ ▭ ▭  lands   │   lands  ▭ ▭ ▭ ▭ ▭    │   plate, lands,
+       │  ▭ ▭ ▭ ▭ ▭ ▭  spells  │  spells  ▭ ▭ ▭ ▭      │   spells forward
+       ├───────────────────────┼───────────────────────┤
+       │            ╭── stack ─┴──────────╮            │   the seam:
+       │            │ Swords → Muldrotha  │            │   stack + combat
+       ├───────────────────────┬──────────┴────────────┤
+       │  ▭ ▭ ▭ ▭ ▭ ▭  spells  │  spells  ▭ ▭ ▭        │   near half:
+       │  ▭ ▭ ▭ ▭ ▭ ▭  lands   │   lands  ▭ ▭ ▭ ▭ ▭    │   mirrored —
+       │  ▣ You 34     [pile]  │  [pile]  ▣ Ana 22     │   spells forward
+       └───────────────────────┴───────────────────────┘
+```
+
+- **Seats are quadrants; you are bottom-left**, and turn order runs clockwise from there. Your seat
+  is fixed regardless of actual seating order in the lobby.
+- **The world is always four seats**, so its extent is a constant and never a function of the player
+  count. Short lobbies are filled with server AI at start (`lobby.start { fillAI }`, protocol §4) and
+  those seats arrive in `LobbyState.seats` and `GameState.players` indistinguishable from humans —
+  the table client needs no notion of an empty quadrant, and AI turns animate like anyone else's.
+- **Each quadrant is a place setting, not a panel.** No borders, no background, no card. A seat is
+  located by its brass nameplate at the outer edge, its piles at the outer elbow, and a soft pool of
+  lamplight — all of which sit *on* the shared felt. The only marks on the cloth are the quarter
+  folds, and they stop well short of the edges.
+- **Spells face the middle, lands sit behind them**, mirrored across the seam, exactly as people lay
+  out a real table. Combat therefore happens across the centre by construction.
+- **The seam belongs to the stack and to combat.** Attackers physically step off their own half into
+  it, and attack/block arrows are drawn on the felt *under* the cards, so an arrow reads as chalk on
+  the table rather than an overlay floating above it. Because the arrow can be occluded, the
+  defending player also carries the state directly — nameplate turns to danger, with incoming
+  unblocked damage on it.
+- **Cards always billboard upright.** Rotating opponents' cards to face their own seat is the
+  literal table and it is unreadable; seat identity is carried by the furniture instead. This is a
+  deliberate break from realism and the only one.
+- **Opponents' hands are on the table, face down and fanned.** The count is public information, so
+  render it as objects; six card backs beats the string "Hand 6".
+
+### 7.3 The camera
+
+```ts
+type CameraView = 'table' | SeatId;
+interface CameraPreset { x: number; y: number; scale: number; tilt: number }
+```
+
+One transform on the world container. Discrete presets only — the whole table, plus one per seat.
+There is no free pan or zoom: the user's problem is "show me that player", not navigation.
+
+- **It follows the active player by default**, and re-frames on turn change.
+- **Manual override**: click a quadrant, use the compass, or press `1`–`4`. The badge switches from
+  *Following* to *Viewing* and auto-follow stops until released with `Esc`. An override is sticky —
+  the camera never yanks itself away from something you chose to look at. **One exception, and only
+  one:** a prompt naming an object the lens cannot see pulls back to the whole table (§14). Nothing
+  else breaks a pin.
+- **A focused seat is framed against the middle of the table, not centred in the window.** Centring
+  spends a third of the window on empty rail behind the player; framing them toward the far edge
+  keeps the contested ground and the neighbouring boards in shot. Measured on the mockup, not guessed.
+- **Neighbours bleed in at the edges.** The zoom is deliberately short of filling the window, because
+  seeing the edge of the next board is what proves it is one table.
+- **Tilt eases flatter as the camera comes in** — ~15° at the whole table, ~6–10° on a seat. Leaning
+  in over a table is the metaphor and it costs one interpolated number.
+- **Unfocused seats dim with a filter on their cards, never a scrim over their region.** A scrim
+  would redraw the exact box edges this layout exists to remove.
+
+Camera moves are the director's (§6.3), so they queue, scale and flush with everything else, and
+`prefers-reduced-motion` collapses them to cuts.
+
+At whole-table zoom, card names are legible as shapes rather than text — you read art, colour and
+board shape, then fly in to read. Confirmed acceptable at review; the two-tier texture policy (§10)
+is sized for exactly this.
+
+## 8. Zones as physical objects
+
+The brief was explicit that graveyard and exile should stop being lists in a floating box.
+
+All of these live in world space, at their owner's outer elbow (§7.2).
+
+- **Graveyard / exile / command** render as real stacked piles on the table, with per-card offset
+  and rotation jitter derived deterministically from the card UUID (never `Math.random()` — it must
+  be stable across frames and reloads). Depth reads as thickness, so a 12-card graveyard *looks*
+  like twelve cards, and the **top card is face up** so the pile says what is in it.
+- Clicking a pile **spreads it across the table** in place rather than opening a modal — the C5
+  filter/sort work carries over as a spread-view control strip. Clicking an opponent's pile flies the
+  camera to that seat first, so the spread is always read in its owner's space.
+- **Library** is a pile too, so draws and tutors have somewhere to physically come from, and mill
+  has somewhere to fall off.
+- **Exile gets its own visual language** — cold, drained, offset off-table — so "gone" and "dead"
+  are never confused at a glance.
+- An **empty pile leaves its footprint** on the felt rather than disappearing, so the place setting
+  does not reflow when the last card leaves.
+- **Hand** is the one zone in screen space (§7.1): a fan with hover-lift, pinned to the bottom edge,
+  visible no matter where the camera points. Cast animates from the actual card position in the fan,
+  projected into world space on the first frame (§6.2).
+
+## 9. Animation catalogue
+
+Driven entirely by §4 events. First pass, in the order they earn their keep:
+
+| Event | Motion |
+|---|---|
+| `move` hand→stack (`cast`) | card lifts from the fan, arcs to the stack slot, scales up, glows by colour identity |
+| `move` stack→battlefield (`resolve`) | drops onto the board with a landing squash + dust ring |
+| `move` library→hand (`draw`) | slides from the library pile into the fan; opponents' draws use `hidden` and show backs |
+| `move` hand→battlefield (`play`, land) | short direct arc, softer landing |
+| `tap` / `untap` | 90° rotation with overshoot ease; `forMana` adds a brief mana-coloured pip toward the pool |
+| `attack` | attacker steps off its own half into the seam and tilts toward its defender; chalk arrow drawn on the felt under the cards; defender's nameplate turns to danger with incoming damage |
+| `block` | blocker slides to interpose across the seam; attacker nudges back; the pair rims to a common colour |
+| `damage` (combat) | impact flash on the target, damage number arcs off, screen-shake scaled to amount |
+| `life` | number tumbles up/down at the seat; red vignette pulse on large losses |
+| `move` battlefield→graveyard (`destroy`) | card desaturates, tips over, falls onto the graveyard pile |
+| `move` …→graveyard (`sacrifice`) | different read from destroy: brief self-consuming flash, no attacker arrow |
+| `move` …→exile | rises and fades off-table into the exile pile, cold-toned |
+| `counters` | pip pops onto the card with a small bounce |
+| `trigger` | source card pulses and a ribbon spawns toward the stack |
+| `counter` (spell countered) | stack card shatters instead of resolving |
+| `step` | phase ribbon sweeps; untap step drives a rippling untap across the board |
+| `step` with new `activePlayerId` | camera re-frames to the new active player, unless the view is manually pinned (§7.3) |
+
+## 10. Rendering notes
+
+React and Pixi coexist: Pixi owns one canvas that fills the viewport; React renders the chrome above
+it. The world/screen split (§7.1) maps almost exactly onto the renderer split — world space is Pixi,
+screen space is DOM — with the deliberate exception of the **hand**, which is screen-space but must
+be rendered by Pixi so a card can leave it and fly to the table as one continuous actor.
+
+The one real coupling is anchoring DOM to scene coordinates (hover previews, popovers, seat menus)
+— a `sceneToScreen(actorKey)` helper on the director that composes `layoutWorld` with the live
+camera, sampled per frame while an anchor is open. Because the camera can move under an open
+anchor, anchors must track rather than position once.
+
+**Texture LOD is not optional.** A Scryfall card face is ~488×680; as RGBA that is ~1.3 MB
+uncompressed on the GPU, so 300 cards at full resolution would be ~400 MB of VRAM. Two tiers:
+
+- **Table tier** ~200×280 (~224 KB each) — everything on the board, in hands, in piles. 300 cards
+  ≈ 67 MB. Fine.
+- **Detail tier** full resolution — only the hover preview and the focused/stack card, a handful
+  live at a time, evicted on an LRU.
+
+Face-down cards and the text-frame fallback (`docs/client/design.md:225-228`) both stay: an
+unresolved image must remain fully playable, so the text frame is rendered into a texture rather
+than dropped.
+
+## 11. Repo layout & the shared core
+
+```
+packages/core/          # extracted from client/src, npm workspace @night/core
+    protocol/  net/  stores/  state/  images/scryfall.ts
+client/                 # classic client — unchanged behaviour, now imports @night/core
+table/                  # the new client
+    src/ scene/         # CardActor, director, two-clock queue
+         layout/        # layoutWorld / layoutScreen — pure, no renderer types (§6.2)
+         camera/        # presets, follow policy, world↔screen projection (§7.3)
+         render/        # Pixi: sprites, filters, particles, texture LOD
+         chrome/        # React DOM: prompt dock, log, chat, modals
+```
+
+The extraction is the risky part of T0, because `client/` is deployed and working. It is gated on
+the classic client's existing tiers staying green — unit, corpus, replay, and the `test:preview`
+production-bundle run. That suite is exactly what this refactor is for.
+
+`images/scryfall.ts` moves wholesale: URL resolution, rate limiting, and the localStorage cache are
+shared. Only the *rendering* of the resolved image differs between the two clients.
+
+## 12. Testing
+
+| Tier | What | How |
+|---|---|---|
+| Bridge event coverage | every state-delta zone transition explained by ≥1 event | replay all six `spike-*.jsonl` captures offline; assert residue is empty, print what is not |
+| Bridge golden fixtures | event arrays pinned per fixture | extend `GoldenFixtureTest`; regen on XMage upgrade as today |
+| Layout unit | `layoutWorld()` at many board densities; `layoutScreen()` at many viewports | pure functions, headless vitest — no canvas, no renderer. `layoutWorld` takes no viewport, so its cases are board states only |
+| Camera unit | preset framing, follow policy, override stickiness, `worldToScreen`/`screenToWorld` round-trip | pure; assert every seat's quadrant lands fully inside the viewport and clear of the hand at every supported window size |
+| Director unit | queue depth, duration scaling, budgeted flush, snap | drive with synthetic event steps and a fake clock |
+| Replay | recorded sessions re-driven through core + director | asserts no dropped steps, presented converges to authoritative, zero synthesized states |
+| Live E2E | the auto-player, as today | **needs a new driving surface** — see below |
+
+The Playwright cost is real and worth naming. `window.__night` is read-only today
+(`client/src/app.ts:68`, a `snapshot()`), and the auto-player drives the DOM by selector. A canvas
+table is opaque to that. The harness therefore grows a **semantic action API** — `click(objectId)`,
+`answer(...)`, `pass()`, plus a `scene()` accessor exposing actor keys, positions and animation
+state. This is a genuine improvement: the auto-player starts expressing game intent instead of CSS
+structure, and the same specs then run against both clients.
+
+## 13. Milestones
+
+| # | Deliverable | Exit criterion |
+|---|---|---|
+| M6 | Bridge event derivation: log⋈delta join, `stackLink`, `hidden` events, retained `mageObjectType`/`gameCycle`/`original`, protocol §4 additive | Coverage assertion green across all six full-game captures; golden fixtures extended; classic client provably unaffected (it ignores the new field) |
+| T0 | Extract `@night/core`; scaffold `table/`; Pixi bootstrap; card actor + texture LOD; render a captured keyframe as a flat scene | Classic client's full suite green post-extraction; a captured turn-25 keyframe renders as a recognizable table |
+| T1 | World layout (quadrants, place settings, piles, seam) + camera rig + screen-space hand. No animation — instant cuts | `layoutWorld`/`layoutScreen`/`camera` unit-tested; a whole recorded session renders correctly frame by frame; every seat preset framed clear of the hand at every supported window size |
+| T2 | Director, two clocks, move animations from the M6 stream (draw, cast, resolve, ETB, dies, exile, bounce); camera moves queued through the director | A recorded session replays as continuous motion with zero teleports; presented converges to authoritative; budget cap respected under a synthetic burst |
+| T3 | **Interaction parity** — all 11 prompt kinds, board affordances, hit-testing, hover preview, keyboard, chat/log chrome | A human plays a full game vs 3 AIs in the new client to `game.over`. *This is the gate at which switching becomes possible.* |
+| T4 | The juice — tap/untap, combat choreography, damage, death, sacrifice, counters, life numbers, particles, camera easing. Also the two legibility items deferred from review: **tapped-card readability under crowding** and **keeping the stack findable when the camera is on a corner** | Iterative and subjective by nature; reviewed at the table, not by assertion |
+| T5 | Resilience parity — resume, recovery join, bumped, rematch, post-game; semantic Playwright harness; auto-player + resilience specs green | Both e2e specs pass against the new client through the semantic harness |
+| T6 | Friends' night on the new client, classic still at `/classic` | A real four-human game played on the table client |
+
+T3 is the milestone that matters strategically: everything before it is unswitchable, everything
+after is polish on a working client.
+
+## 14. Risks
+
+- **Event derivation gaps.** Mana tapping is unlogged, attacker identity comes from the combat
+  view, counters from deltas. Mitigated structurally: §4 makes events advisory, so any gap costs an
+  animation and never correctness. The M6 coverage assertion is what stops gaps from being silent.
+- **The `@night/core` extraction destabilises the working client.** The single riskiest change in
+  the phase, done first and deliberately, while the classic client's four test tiers still describe
+  its behaviour exactly.
+- **VRAM.** Addressed by the two-tier texture policy (§10); the failure mode without it is a
+  browser tab crash mid-game, not a slow frame. Worth an explicit soak with four crowded
+  battlefields.
+- **Canvas kills the e2e specs** until the semantic harness lands (T5). Between T2 and T5 the new
+  client has weaker automated coverage than the classic one — which is precisely why the classic
+  client stays deployed and why T3's exit is a human-played game.
+- **Two hit-test systems.** Pixi owns the table, DOM owns the chrome; overlapping regions need one
+  clear owner per pixel. Cheap to get wrong, cheap to fix, annoying to leave ambiguous. The camera
+  makes it slightly worse than it sounds: a table click must be unprojected through the live camera
+  before it means anything, and the compass and hand sit *over* the table.
+- **A card can be off-screen when it needs your attention.** The camera is the feature and also the
+  hazard — a trigger, a target, or a prompt can concern a permanent the lens is not pointed at.
+  **Policy: pull back to the whole table, do not fly to the object.** A prompt whose objects are not
+  all visible resets the camera to `table` before the dock becomes actionable; the re-frame is inside
+  the §6.4 budget, not additional to it. Pulling back is right for three reasons: a prompt over
+  candidates in *several* seats has no single seat to fly to; the whole table is the one preset that
+  can never be wrong; and a hard cut to an opponent's corner disorients in a way that zooming out
+  does not. Untested until T3; the failure mode is a player who cannot find what they are being
+  asked about.
+- **No natural end.** "Animate everything" has no exit criterion. T3 is the defined switchable
+  point; T4 is explicitly open-ended and should be time-boxed per iteration rather than scoped.
+
+## 15. Open questions
+
+1. **`docs/protocol/v1.md:352-357` is factually wrong** (§3) and should be corrected in place
+   regardless of what else happens, since it currently argues against work we now know is easy.
+   Proposed as a standalone edit, not folded into M6.
+2. **`ChatMessage.soundToPlay`** is a coarse XMage-side event classification the bridge ignores
+   entirely. Possibly a free extra signal for the deriver; unexamined.
+3. **Tokens on the table.** Token identity is `imageNumber`-discriminated (protocol §6), and tokens
+   ceasing to exist needs its own animation distinct from dying. Deferred to T4.
+4. **Spectators.** `role:'spectator'` is still reserved. The quadrant world needs no change for it —
+   drop the screen-space hand, free the camera from any "own seat", and the whole table is already
+   the default view — but nothing is designed or tested against it.
+5. **DFC / transform animations.** `PermanentView.original` gives us the pre-transform face with the
+   same id, so a real flip animation is available — the state model still sends one face
+   (protocol §16.4).
