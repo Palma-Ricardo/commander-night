@@ -6,7 +6,7 @@
 // re-render asserted, protocol §14) and stopWhen (seat hand-off points).
 
 import { expect, type Page } from '@playwright/test';
-import type { NightSnapshot } from '../../src/app';
+import type { NightSnapshot } from '@night/core/harness';
 
 const TICK_MS = 200;
 const DEFAULT_STUCK_MS = 60_000;

@@ -2,6 +2,7 @@
 // from here; tests and headless runs build their own stacks via the factories.
 
 import { recorder } from '@night/core/dev/recorder';
+import { createCoreHarness, installHarness, sceneFromState } from '@night/core/harness';
 import { createScryfallResolver } from '@night/core/images/scryfall';
 import { createActions } from '@night/core/net/actions';
 import { createSocketManager } from '@night/core/net/socket';
@@ -32,56 +33,19 @@ export function bootApp(): void {
   appManager.connect();
 }
 
-// Dev-only introspection handle for the Playwright auto-player (design §13):
-// reads only — the auto-player drives the game through visible UI, but asserts
-// sync health (counters, §6) through here.
-export interface NightSnapshot {
-  gameId: string | null;
-  over: boolean;
-  syncMode: 'live' | 'awaitingKeyframe';
-  lastAppliedSeq: number;
-  counters: { patches: number; keyframes: number; resyncs: number; verifies: number; divergences: number };
-  promptId: number | null;
-  promptKind: string | null;
-  /** payMana only: the remaining cost — re-asks mint fresh promptIds, so this
-   *  is the auto-player's real progress signal for payment loops. */
-  payRemaining: string | null;
-  combatRole: 'attackers' | 'blockers' | null;
-  inflight: boolean;
-  turn: number | null;
-}
-
-declare global {
-  interface Window {
-    __night?: {
-      snapshot(): NightSnapshot;
-    };
-  }
-}
-
-// The auto-player handle ships in dev, and in an explicitly-flagged build so
-// the C5 smoke tier can drive the real production bundle. `npm run build` —
-// the deploy path — never sets VITE_NIGHT_HARNESS, so prod has no handle.
+// Semantic test-harness handle for the Playwright auto-player (design §12). The
+// shared `window.__night` contract (snapshot + click/answer/pass + scene) lives
+// in @night/core/harness so both clients implement it identically; the classic
+// client's scene() is state-derived (no canvas). Ships in dev, and in an
+// explicitly-flagged build so the C5 smoke tier can drive the real production
+// bundle. `npm run build` — the deploy path — never sets VITE_NIGHT_HARNESS, so
+// prod has no handle.
 const HARNESS = import.meta.env.DEV || import.meta.env.VITE_NIGHT_HARNESS === '1';
 
 if (HARNESS && typeof window !== 'undefined') {
-  window.__night = {
-    snapshot: () => {
-      const g = appStores.game.getState();
-      const p = appStores.prompt.getState();
-      return {
-        gameId: g.state?.gameId ?? null,
-        over: g.over !== undefined,
-        syncMode: g.syncMode,
-        lastAppliedSeq: g.lastAppliedSeq,
-        counters: { ...g.counters },
-        promptId: p.pending?.promptId ?? null,
-        promptKind: p.pending?.kind ?? null,
-        payRemaining: p.pending?.kind === 'payMana' ? p.pending.remaining : null,
-        combatRole: p.pending?.kind === 'priority' ? p.pending.combat?.role ?? null : null,
-        inflight: p.inflight,
-        turn: g.state?.turn.n ?? null,
-      };
-    },
-  };
+  installHarness(
+    window,
+    createCoreHarness(appStores, appActions),
+    () => sceneFromState(appStores.game.getState().state),
+  );
 }

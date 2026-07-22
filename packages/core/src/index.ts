@@ -53,3 +53,7 @@ export type { TraceEntry, TraceDirection } from './dev/recorder';
 
 // Deep-link (invite) helpers
 export { parseJoinHash, inviteUrl } from './deeplink';
+
+// Semantic test harness (§12) — the shared `window.__night` contract
+export { createCoreHarness, installHarness, sceneFromState } from './harness';
+export type { NightHarness, NightSnapshot, NightScene, SceneActor } from './harness';
