@@ -374,9 +374,12 @@ runs the auto-player against a `--mode harness` build (`playwright.preview.confi
    enables rollback only on all-human tables (AI tables gain nothing from it and XMage's
    per-turn rollback state copy loads the AI server; bridge design §9), so any game with
    AI fill renders without the control.
-3. **Semantic move animation** — protocol §16.5 accepted "teleport" rendering in v1 (XMage
-   mints new UUIDs on zone change). Candidate heuristic once the client exists: within one
-   patch, `remove`+`add` of same-named cards across zones → animate. Explicitly post-C5.
+3. **Semantic move animation** — the deferral rested on a false premise: XMage does *not* mint
+   new UUIDs on zone change (protocol §7/§16.5, corrected 2026-07-21). Object continuity is
+   already on the wire, and bridge M6 forwards it as an advisory `events?` field. **This client
+   stays teleport-rendered by choice** — it ignores the new optional field, exactly as protocol
+   §3 requires — because the animated build is a separate client
+   (`docs/plans/2026-07-21-table-client-design.md`) and this one is the stable fallback.
 4. **Spectators** — `role:'spectator'` is reserved (protocol §16.7); the client's `me`-less
    render path should not be *designed against*, but nothing is built in v1.
 5. **DFC both-faces preview** (protocol §16.4) — Scryfall has both faces; the state model
