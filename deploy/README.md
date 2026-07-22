@@ -20,8 +20,57 @@ Only caddy is publicly reachable. The lobby code is the only shared secret
   dist's own bundled JRE 8 — nothing to install for it.
 - A DNS A record for your chosen name (e.g. `night.example.com`) pointing at
   the VPS. Caddy provisions the TLS certificate automatically.
-- Firewall: allow 80/443 (caddy). Ports 8484 and 17171 stay loopback-bound —
-  do not expose them.
+- Firewall: allow 80/443 (caddy) and the SSH port. Ports 8484 and 17171 stay
+  loopback-bound — do not expose them. See "Firewall and SSH access" below.
+- An `ssh_config` entry named `vps` on the dev machine — every `rsync`/`scp`
+  below targets `vps:`, and it is what carries the non-default SSH port:
+
+  ```
+  Host vps
+      HostName <your.vps.ip>
+      User rocky
+      Port <ssh-port>
+      IdentityFile ~/.ssh/id_ed25519
+      IdentitiesOnly yes
+  ```
+
+### Firewall and SSH access
+
+Plain nftables, no firewalld: `/etc/sysconfig/nftables.conf` flushes the ruleset
+and includes `/etc/nftables/commander-night.nft`, which is the file to edit
+(`systemctl restart nftables` to apply, `nft -c -f <file>` to syntax-check
+first). The chain's policy is `drop`, so a port is closed by *deleting* its
+rule — there are no explicit deny rules. Open: 80/443 (+ UDP 443 for QUIC) and
+SSH.
+
+**SSH runs on <ssh-port>, not 22** (moved 2026-07-21: port 22 was drawing ~76 failed
+password attempts an hour). Three things must agree, and missing any one of
+them locks you out or silently fails:
+
+| Where | What |
+|---|---|
+| `/etc/ssh/sshd_config.d/09-port.conf` | `Port <ssh-port>` |
+| `/etc/nftables/commander-night.nft` | `tcp dport <ssh-port> accept` |
+| SELinux | `sudo semanage port -a -t ssh_port_t -p tcp <ssh-port>` |
+
+The SELinux label is not optional on Rocky/EL with SELinux enforcing —
+`ssh_port_t` is bound to 22 out of the box and sshd cannot bind any other port
+until the new one is labelled. It fails at *bind*, so sshd refuses to start
+rather than starting unreachable.
+
+When changing this port again, keep the old one open until the new one is
+verified from a *second, fresh* connection, and arm a rollback first — a
+config-only mistake is unrecoverable once the last session drops. Back up
+`/etc/ssh/sshd_config.d/` and the `.nft` file, write a throwaway script that
+copies them back and restarts `sshd` + `nftables`, then:
+
+```sh
+sudo systemd-run --on-active=15min --unit=ssh-rollback /root/ssh-rollback.sh <backup-dir>
+sudo systemctl stop ssh-rollback.timer   # cancel once verified, then delete the script
+```
+
+Close the old port only from a session on the new one. Backups of the 2026-07-21
+move are at `/root/ssh-port-backup/`.
 
 ## Install
 
