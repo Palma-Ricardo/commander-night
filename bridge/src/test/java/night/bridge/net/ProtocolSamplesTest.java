@@ -27,6 +27,14 @@ import night.bridge.proto.ServerMsg;
 import night.bridge.proto.StateKeyframe;
 import night.bridge.proto.StatePatch;
 import night.bridge.proto.Welcome;
+import night.bridge.proto.event.Cause;
+import night.bridge.proto.event.GameEvent;
+import night.bridge.proto.event.HiddenEvent;
+import night.bridge.proto.event.MoveEvent;
+import night.bridge.proto.event.StackLinkEvent;
+import night.bridge.proto.event.StepEvent;
+import night.bridge.proto.event.Verb;
+import night.bridge.proto.event.Zone;
 import night.bridge.proto.state.Card;
 import night.bridge.proto.state.Color;
 import night.bridge.proto.state.CommandObject;
@@ -283,6 +291,23 @@ class ProtocolSamplesTest {
         // ops ride verbatim (zjsonpatch output) — the envelope is what's under test
         JsonNode ops = sample("game.patch.json").get("ops");
         assertProduces("game.patch.json", new StatePatch(812, "g1", 810, ops));
+    }
+
+    // ---- M6: semantic events (protocol §7.1) ----
+
+    @Test
+    void gamePatchWithEventsIsReproducible() throws Exception {
+        // ops ride verbatim; the events array is the shape under test — one of each
+        // M6 kind, in emit order, exercising the optional-field omission (NON_NULL).
+        JsonNode ops = sample("game.patch.events.json").get("ops");
+        List<GameEvent> events = List.of(
+                new MoveEvent("sdt-1", Zone.HAND, Zone.STACK, Verb.CAST),
+                new StackLinkEvent("stk-9", "sdt-1"),
+                new MoveEvent("eng-2", Zone.BATTLEFIELD, Zone.GRAVEYARD, Verb.DESTROY,
+                        new Cause("swords-3", "Swords to Plowshares", null), null),
+                new HiddenEvent("p3", Zone.LIBRARY, Zone.HAND, 1, Verb.DRAW),
+                new StepEvent(null, null, "p2"));
+        assertProduces("game.patch.events.json", new StatePatch(902, "g1", 900, ops, events));
     }
 
     @Test

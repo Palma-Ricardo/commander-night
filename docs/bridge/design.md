@@ -187,11 +187,14 @@ game.over with all protocol invariants green.
 ```
 ClientCallback
   → PromptTranslator?          — is this one of the 11 dialog callbacks? (protocol §15 table)
+  → CHATMESSAGE?               — LogTranslator → game.log, AND buffered for the event join (M6)
   → embedded GameView?         — GAME_UPDATE*, and the view inside SELECT/TARGET/PLAY_MANA/…
       → ViewTranslator.trim    — protocol §6 rules: maps→arrays, render hints dropped,
                                  interaction hints stripped (they live in the prompt),
                                  commander fields structured (scrape below)
-      → StateStore + Differ    — RFC 6902 vs previous trimmed tree; empty diff → emit nothing
+      → EventDeriver           — join buffered log ⋈ (prev,next) trimmed delta → events (M6, below)
+      → StateStore + Differ    — RFC 6902 vs previous trimmed tree; empty diff → emit nothing;
+                                 events? ride on the patch/keyframe that carries the transition
       → KeyframePolicy         — patch, or keyframe at start/resync/reconnect/every 100 patches
   → emit order: game.patch (or keyframe) FIRST, then game.prompt
 ```
@@ -215,6 +218,23 @@ time.
 structure announcements, strip HTML, extract `object_id='…'` attributes into `refs`,
 `GAME_INFORM_PERSONAL` → `kind:'personal'`. Every entry lands in the seat's ring buffer
 (capacity 200) for resume backfill.
+
+**Event derivation** (`EventDeriver`; implemented M6, protocol §7.1, table-client design §4–§5):
+the advisory `events?` on `game.state`/`game.patch`. Between translation and emit, the pump joins
+the log lines buffered since the last state (they arrive one callback *ahead* of the state they
+describe and speak stable object ids) against the delta between the previous and next trimmed
+`GameState`. The **state delta is authoritative** for which object moved and its from/to across the
+enumerated zones (my hand, everyone's battlefield/graveyard/exile/command); the log supplies verb
+and cause and fills the one endpoint that crosses the ephemeral stack, the library, or an
+opponent's hidden hand. A default-verb table makes every enumerated transition emittable with no
+log at all, so a missing line costs a nicer verb, never a missing event. Pinned to 1.4.60 log
+phrasings exactly as `CommanderDamage` pins its scrape; degrades to silence on anything unmodelled
+(events are advisory — a wrong or absent one costs an animation, never correctness). The pump keeps
+only the previous trimmed `GameState` (`lastState`) and the small buffered log — **not** the raw
+`GameView`: the coverage assertion (§13) proved the trimmed delta plus the log fully explain every
+zone transition, so the `mageObjectType`/`gameCycle`/`original` retention the design speculated
+about was not needed for the M6 core. M6 emits `move`/`hidden`/`stackLink`/`step`; the remaining
+kinds are frozen in the protocol for the table client's T4 choreography.
 
 ## 8. Prompt FSM
 
@@ -345,7 +365,8 @@ JVM flags live in the systemd unit: `--add-opens=java.base/java.io=ALL-UNNAMED
 | Unit | translators, differ+keyframe policy, prompt FSM, deck parser, HTML strip, commander-damage regex | Plain JUnit; FSM driven by scripted callback sequences against a mocked `mage.remote.Session` (it's an interface), asserting the exact `sendPlayer*` calls |
 | Golden fixtures | `ViewTranslator`/`PromptTranslator` on real payloads | Capture **Java-serialized** `ClientCallback`s via the tap during live games (Gson JSON can't round-trip back into view objects — `Choice` proved that); deserialize in tests against the same pinned jars, assert golden JSON outputs. Implemented M5: `GoldenFixtureTest` over `src/test/resources/fixtures/` (10 fixtures incl. commander tax + damage, combat declaration), goldens are wire-message arrays in emit order. Regenerate on XMage upgrade (`mvn test -Dtest=GoldenFixtureTest -Dgolden.regen=true`) → diffs show exactly what the upgrade changed |
 | Live integration | whole bridge vs local server | JUnit tag `live`: boot bridge, JDK 26's built-in `java.net.http.WebSocket` as test client, 1 human + 3 AI game (spike recipe), auto-answering client. Asserts protocol invariants over a full game: seq gapless, every patch applies cleanly onto the running state (apply + periodically compare against a forced keyframe), ≤1 pending prompt, every prompt answered, clean `game.over` |
-| Conformance corpus | bridge ⇄ TS client agreement | Committed JSON samples per message type under `docs/protocol/samples/` — bridge tests assert it *produces/accepts* them, the future TS client tests assert it *parses/produces* them. The two codebases never drift silently |
+| Event coverage (M6) | every state-delta zone transition explained by ≥1 event | `EventCoverageReplayTest` (tagged `live`, offline — needs no server): replays the `CallbackTap` `.ser` full-game captures under `bridge/logs/tap/` through the real `ViewTranslator`→`LogTranslator`→`EventDeriver` path and asserts the residue is empty, printing any. An **independent** zone-map reimplementation cross-checks the deriver. Green over 20 captures / 4.8k transitions. `.ser`, not the spike's Gson JSONL — the `GameView` graph is polymorphic and won't round-trip through Gson (design §13's Java-serialization reason) |
+| Conformance corpus | bridge ⇄ TS client agreement | Committed JSON samples per message type under `docs/protocol/samples/` — bridge tests assert it *produces/accepts* them, the future TS client tests assert it *parses/produces* them. The two codebases never drift silently. Includes `game.patch.events.json` (the §7.1 `events` shape, one of each M6 kind) so the table client has a wire fixture to parse against |
 
 The live tier doubles as the JDK-26 soak (§1 runtime risk) and as the M2+ regression suite —
 what the spike was, promoted to CI.
@@ -365,6 +386,8 @@ what the spike was, promoted to CI.
 | | *M4 done 2026-07-18.* Browser resume (`hello{token,resume}` → `welcome{resumed}` → keyframe → pending prompt under its **original promptId** → log-tail backfill), `chat.send`, per-session idempotency (LRU 64 at the WS routing gate, replaying the recorded reply; §3 gained the ids-unique-across-reconnects rule it implies), lost-token recovery join (registry *adopt*: the caller's session takes over the seat's userId, the old token is retired, the old socket bumped), rematch = started lobbies release their members, post-game teardown after `postGameGraceSecs` (lost seats count toward it, so an abandoned seat can't leak the game). §5 seat recovery implemented via XMage's restore-session handshake (live verification on the M5 list). Harness learned session persistence/`reconnect`/`chat`. Validated: `MultiHumanLiveTest` — 2 humans + 2 AIs, full game, mid-prompt hard refresh on **both** seats (same-promptId re-emit asserted), chat + verbatim-duplicate probe (two acks, one execution), mid-game recovery handover to a fresh session, post-game resume replay, rematch lobby, teardown expiry (`UNKNOWN_GAME`/`RESUME_FAILED`). 151-test unit tier; M3 solo game stays green (379/379 prompts, 2.2 MB/seat) | |
 | M5 | Commander damage scrape, golden-fixture suite, conformance corpus, systemd/caddy deploy docs | A real 4-human friends' night on the deployed host |
 | | *M5 engineering done 2026-07-18.* Commander damage/tax scrape (§7): pinned regexes over the watcher's info lines with a drift-canary WARN, castCount on command-zone objects, damage on the *victim's* `commanderDamage` (sorted for patch stability), watcher lines stripped from all card text (they had been leaking). Callback tap productionized (§12): pre-decompression `.ser` + `.jsonl` index per seat, on by default in the live tier. Golden tier realized (§13): `FixtureSelectMain` curation + `GoldenFixtureTest` over 10 live-captured fixtures — incl. real `castCount:1`, a real 4-damage commander entry, and the combat-declaration ask — goldens are wire-message arrays; regen flow for upgrades. Corpus audited complete (47 samples, every type/kind/variant asserted; added hello-keyframes + chat-echo). §5 seat recovery live-verified (SIGSTOP test above). `deploy/`: both systemd units, Caddyfile, prod config, runbook; `-Pdist` package profile, launch command smoke-tested. Unit tier 168 tests. **Remaining for exit: the actual 4-human night on the deployed host** | |
+| M6 | Semantic event derivation (table-client phase): `EventDeriver` log⋈delta join, `move`/`hidden`/`stackLink`/`step` on the additive `events?` field (protocol §7.1) | Event-coverage assertion green across the full-game captures; classic client provably unaffected (it ignores the new field) |
+| | *M6 engineering done 2026-07-22.* `proto/event/` records + `events?` on `StateKeyframe`/`StatePatch` (nullable, NON_NULL → omitted, so existing goldens/corpus are byte-identical — the classic client is untouched, protocol §13/§3). `EventDeriver` (§7): state-authoritative delta + log-enriched verb/cause, pinned to 1.4.60 phrasings, degrades to silence. Threaded through `StateStore.update` (events ride the transition-carrying message, never the backstop keyframe) and `SeatPump.updateState`/`logLine` (log buffered, drained on non-empty delta only). Tests: `EventDeriverTest` (14 synthetic cases), `EventCoverageReplayTest` (§13, tagged `live`, offline — **0 unexplained across 20 `.ser` captures / 4,816 transitions**, independent zone-map cross-check), `game.patch.events.json` corpus sample. Scope: the design's speculated `mageObjectType`/`gameCycle`/`original` retention proved unnecessary — the coverage assertion holds on the trimmed delta + log alone; the T4 event kinds (`tap`/`attack`/`damage`/…) are frozen in the protocol but not yet emitted. **Remaining for exit: nothing bridge-side — the table client (T0–T6) consumes it.** | |
 
 ## 15. Risks
 

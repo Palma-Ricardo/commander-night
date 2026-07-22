@@ -22,9 +22,11 @@ import night.bridge.proto.GameResync;
 import night.bridge.proto.LogEntry;
 import night.bridge.proto.PromptDone;
 import night.bridge.proto.ServerMsg;
+import night.bridge.proto.event.GameEvent;
 import night.bridge.proto.state.GameState;
 import night.bridge.proto.state.Player;
 import night.bridge.sync.StateStore;
+import night.bridge.translate.EventDeriver;
 import night.bridge.translate.LogTranslator;
 import night.bridge.translate.PromptNames;
 import night.bridge.translate.PromptTranslator;
@@ -105,6 +107,14 @@ public final class SeatPump implements AutoCloseable {
     private PromptFsm fsm;
     private GameState lastState;
     private final List<PendingLogLine> preGameLog = new ArrayList<>();
+    /**
+     * Log lines seen since the last state emit, buffered for the M6 event join
+     * (design §5): the log arrives one callback ahead of the state it describes,
+     * so {@link #updateState} drains this into {@link EventDeriver}. Kept (not
+     * cleared) across an empty-delta snapshot, so a cast line still meets the
+     * update that actually puts the spell on the stack.
+     */
+    private final List<LogEntry> pendingLog = new ArrayList<>();
     private GamePrompt deferredRequest;
     private UUID deferredRequestData;
     private boolean over;
@@ -583,8 +593,16 @@ public final class SeatPump implements AutoCloseable {
         if (view == null || gameIdStr == null) {
             return;
         }
+        GameState prev = lastState;
         lastState = ViewTranslator.translate(view, gameIdStr, playerId, this::displayName);
-        store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean()).forEach(sink::send);
+        List<GameEvent> events = EventDeriver.derive(prev, lastState, pendingLog);
+        List<ServerMsg> msgs = store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean(), events);
+        if (!msgs.isEmpty()) {
+            // The buffered log fed this transition; an empty delta consumed none, so
+            // hold the lines for the update that actually carries their state.
+            pendingLog.clear();
+        }
+        msgs.forEach(sink::send);
     }
 
     /** Every positional dialog flows through the FSM's replay interception (§8). */
@@ -698,6 +716,12 @@ public final class SeatPump implements AutoCloseable {
         logRing.addLast(entry);
         if (logRing.size() > logRingCapacity) {
             logRing.removeFirst();
+        }
+        // Buffer for the M6 event join; drained by the next non-empty state emit. Bounded
+        // by the same capacity in case a burst of log lines outruns state updates.
+        pendingLog.add(entry);
+        if (pendingLog.size() > logRingCapacity) {
+            pendingLog.removeFirst();
         }
         sink.send(entry);
     }

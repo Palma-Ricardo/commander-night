@@ -1,0 +1,33 @@
+{
+  "t": "game.patch",
+  "seq": 902,
+  "gameId": "g1",
+  "base": 900,
+  "ops": [
+    { "op": "replace", "path": "/turn/activePlayerId", "value": "p2" },
+    { "op": "replace", "path": "/turn/priorityPlayerId", "value": "p2" },
+    { "op": "remove", "path": "/me/hand/0" },
+    { "op": "add", "path": "/stack/0",
+      "value": { "id": "stk-9", "kind": "spell",
+                 "card": { "id": "stk-9", "name": "Sensei's Divining Top", "set": "5DN",
+                           "number": "33", "manaCost": "{1}", "manaValue": 1,
+                           "types": ["ARTIFACT"], "subtypes": [], "supertypes": [], "colors": [],
+                           "text": ["{1}, {T}: Look at the top three cards of your library."] },
+                 "text": [] } },
+    { "op": "remove", "path": "/players/1/battlefield/0" },
+    { "op": "add", "path": "/players/1/graveyard/2",
+      "value": { "id": "eng-2", "name": "Solemn Simulacrum", "set": "MRD", "number": "203",
+                 "manaCost": "{4}", "manaValue": 4, "types": ["ARTIFACT", "CREATURE"],
+                 "subtypes": ["Golem"], "supertypes": [], "colors": [],
+                 "text": ["When Solemn Simulacrum enters, search your library for a basic land card."],
+                 "power": "2", "toughness": "2" } }
+  ],
+  "events": [
+    { "k": "move", "objectId": "sdt-1", "from": "hand", "to": "stack", "verb": "cast" },
+    { "k": "stackLink", "stackId": "stk-9", "objectId": "sdt-1" },
+    { "k": "move", "objectId": "eng-2", "from": "battlefield", "to": "graveyard", "verb": "destroy",
+      "cause": { "objectId": "swords-3", "name": "Swords to Plowshares" } },
+    { "k": "hidden", "playerId": "p3", "from": "library", "to": "hand", "count": 1, "verb": "draw" },
+    { "k": "step", "activePlayerId": "p2" }
+  ]
+}

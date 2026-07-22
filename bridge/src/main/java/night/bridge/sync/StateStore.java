@@ -5,6 +5,7 @@ import night.bridge.proto.Json;
 import night.bridge.proto.ServerMsg;
 import night.bridge.proto.StateKeyframe;
 import night.bridge.proto.StatePatch;
+import night.bridge.proto.event.GameEvent;
 import night.bridge.proto.state.GameState;
 
 import java.util.List;
@@ -51,24 +52,35 @@ public final class StateStore {
         return seq;
     }
 
-    /** Empty when the trimmed tree is unchanged from the last emitted one;
-     *  the patch plus the same-tree backstop keyframe when the backstop fires. */
     public List<ServerMsg> update(String gameId, GameState state, boolean keyframesOnly) {
+        return update(gameId, state, keyframesOnly, null);
+    }
+
+    /**
+     * Empty when the trimmed tree is unchanged from the last emitted one; the
+     * patch plus the same-tree backstop keyframe when the backstop fires. The
+     * derived §7.1 {@code events} ride on the message that carries the
+     * transition — the patch, or the first keyframe of the game — never on the
+     * backstop keyframe (it only restates the tree the patch already produced).
+     */
+    public List<ServerMsg> update(String gameId, GameState state, boolean keyframesOnly,
+                                  List<GameEvent> events) {
         JsonNode tree = Json.tree(state);
         if (tree.equals(lastTree)) {
             return List.of();
         }
+        List<GameEvent> hints = emptyToNull(events);
         if (lastTree == null || keyframesOnly) {
-            return List.of(keyframe(gameId, tree));
+            return List.of(keyframe(gameId, tree, hints));
         }
         JsonNode ops = Differ.diff(lastTree, tree);
         lastTree = tree;
         patchesSinceKeyframe++;
         long base = lastStateSeq;
         lastStateSeq = nextSeq();
-        StatePatch patch = new StatePatch(lastStateSeq, gameId, base, ops);
+        StatePatch patch = new StatePatch(lastStateSeq, gameId, base, ops, hints);
         if (patchesSinceKeyframe >= keyframeEvery) {
-            return List.of(patch, keyframe(gameId, tree));
+            return List.of(patch, keyframe(gameId, tree, null));
         }
         return List.of(patch);
     }
@@ -76,13 +88,17 @@ public final class StateStore {
     /** Fresh keyframe of the current tree (resync/reconnect); empty before the first state. */
     public Optional<StateKeyframe> forceKeyframe(String gameId) {
         return lastTree == null ? Optional.empty()
-                : Optional.of(keyframe(gameId, lastTree));
+                : Optional.of(keyframe(gameId, lastTree, null));
     }
 
-    private StateKeyframe keyframe(String gameId, JsonNode tree) {
+    private StateKeyframe keyframe(String gameId, JsonNode tree, List<GameEvent> events) {
         lastTree = tree;
         patchesSinceKeyframe = 0;
         lastStateSeq = nextSeq();
-        return new StateKeyframe(lastStateSeq, gameId, tree);
+        return new StateKeyframe(lastStateSeq, gameId, tree, events);
+    }
+
+    private static List<GameEvent> emptyToNull(List<GameEvent> events) {
+        return events == null || events.isEmpty() ? null : events;
     }
 }

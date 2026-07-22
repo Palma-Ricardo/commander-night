@@ -1,7 +1,8 @@
 # Commander Night — Table Client Design (Arena-like)
 
-**Date:** 2026-07-21 · **Status:** ACCEPTED — layout reviewed and chosen 2026-07-21 (§7); next
-action is M6 · **Scope:** the second web client — a
+**Date:** 2026-07-21 · **Status:** ACCEPTED — layout reviewed and chosen 2026-07-21 (§7); M6
+(bridge event derivation) done 2026-07-22; next action is T0 (`@night/core` extraction) · **Scope:**
+the second web client — a
 canvas-rendered, fully animated four-player table, built alongside the existing React client
 (which stays as the working fallback). Covers the protocol extension it needs, the bridge work
 that feeds it, and the client architecture itself.
@@ -188,19 +189,27 @@ the deriver computes the state delta and correlates:
   object, or a `hidden` event sized from the `librarySize`/`handSize` delta.
 - Delta with no line (tap for mana, counters) → event derived from the delta alone.
 
-Retention this needs and the bridge does not currently have: `SeatPump.updateState` drops the raw
-`GameView` after translating (`SeatPump.java:582-588` keeps only the trimmed `lastState`). The
-deriver needs the previous **trimmed** state (already in `StateStore.lastTree`) plus a small set of
-fields currently thrown away — `mageObjectType`, `GameView.gameCycle`, `PermanentView.original`. Add
-those to the trim as internal-only fields, or hand the deriver the raw view before it is discarded.
-Retaining the whole raw view is not required and should be avoided: it is 169–191 MB per game
-per seat.
+Retention this needs: the deriver needs the previous **trimmed** state and the buffered log — and,
+it turned out, *only* those. This section speculated the deriver would also need a small set of
+discarded fields (`mageObjectType`, `GameView.gameCycle`, `PermanentView.original`). **Implemented
+(2026-07-22): it does not.** The trimmed `GameState` already encodes zone membership (which list an
+id sits in), `librarySize`/`handSize`, the stack, and — for abilities — the stable source id on
+`StackItem.card`; the log supplies verbs, causes, and the stable id behind a cast spell (which the
+stack keys ephemerally). The coverage assertion below is green with none of the three retained, so
+they were not added — the pump keeps only `lastState` (already present) plus a small drained log
+buffer, and the raw `GameView` is still dropped. `PermanentView.original` returns as a real need
+only at T4, for the DFC flip animation (§15.5).
 
-**Testing is the reason this is bridge-side.** Six full-game captures (`bridge/logs/spike-*.jsonl`,
-191–403 MB each) replay offline with no server and no renderer. The M6 exit criterion is a coverage
-assertion over them: *every zone transition observable in the state delta is explained by at least
-one emitted event*, with the residue printed. That is a real, measurable, regression-testable bar,
-and it is unavailable to a client-side deriver.
+**Testing is the reason this is bridge-side.** Full-game captures replay offline with no server and
+no renderer. The M6 exit criterion is a coverage assertion over them: *every zone transition
+observable in the state delta is explained by at least one emitted event*, with the residue
+printed. That is a real, measurable, regression-testable bar, unavailable to a client-side deriver.
+**Implemented (2026-07-22)** as `EventCoverageReplayTest` — **green over 20 captures / 4,816
+transitions, 0 unexplained.** It replays the `CallbackTap` `.ser` streams (`bridge/logs/tap/`), not
+the spike's Gson JSONL: the `GameView` graph is polymorphic and does not round-trip through Gson
+(the same limitation that put the golden tier on Java serialization, bridge design §13). The `.ser`
+captures are byte-faithful and run through the exact production translators; the coverage check
+reimplements the zone map *independently* of the deriver so it can actually catch a bug in it.
 
 ## 6. Client architecture
 
@@ -459,8 +468,9 @@ shared. Only the *rendering* of the resolved image differs between the two clien
 
 | Tier | What | How |
 |---|---|---|
-| Bridge event coverage | every state-delta zone transition explained by ≥1 event | replay all six `spike-*.jsonl` captures offline; assert residue is empty, print what is not |
-| Bridge golden fixtures | event arrays pinned per fixture | extend `GoldenFixtureTest`; regen on XMage upgrade as today |
+| Bridge event coverage | every state-delta zone transition explained by ≥1 event | **done (M6):** `EventCoverageReplayTest` replays the `.ser` full-game captures offline; residue empty, printed. Green over 20 captures / 4,816 transitions |
+| Bridge event unit | the log⋈delta join per transition kind | **done (M6):** `EventDeriverTest` — cast+stackLink, resolve, land, destroy+cause, sacrifice, mill, opponent-draw hidden, own-draw visible, ability link, token, step, empty |
+| Bridge event wire shape | `events?` array reproducible; classic client unaffected | **done (M6):** `game.patch.events.json` conformance sample (one of each M6 kind); existing goldens byte-identical (single-callback fixtures carry no prior state, so no events — the additive field is simply absent) |
 | Layout unit | `layoutWorld()` at many board densities; `layoutScreen()` at many viewports | pure functions, headless vitest — no canvas, no renderer. `layoutWorld` takes no viewport, so its cases are board states only |
 | Camera unit | preset framing, follow policy, override stickiness, `worldToScreen`/`screenToWorld` round-trip | pure; assert every seat's quadrant lands fully inside the viewport and clear of the hand at every supported window size |
 | Director unit | queue depth, duration scaling, budgeted flush, snap | drive with synthetic event steps and a fake clock |
@@ -478,7 +488,7 @@ structure, and the same specs then run against both clients.
 
 | # | Deliverable | Exit criterion |
 |---|---|---|
-| M6 | Bridge event derivation: log⋈delta join, `stackLink`, `hidden` events, retained `mageObjectType`/`gameCycle`/`original`, protocol §4 additive | Coverage assertion green across all six full-game captures; golden fixtures extended; classic client provably unaffected (it ignores the new field) |
+| M6 | ✅ **done 2026-07-22.** Bridge event derivation: `EventDeriver` log⋈delta join, `move`/`hidden`/`stackLink`/`step` on the additive `events?` field (protocol §7.1) | Coverage assertion green over **20 captures / 4,816 transitions, 0 unexplained**; classic client provably unaffected (existing goldens/corpus byte-identical). Retention of `mageObjectType`/`gameCycle`/`original` proved unnecessary (§5); T4 event kinds frozen but not yet emitted |
 | T0 | Extract `@night/core`; scaffold `table/`; Pixi bootstrap; card actor + texture LOD; render a captured keyframe as a flat scene | Classic client's full suite green post-extraction; a captured turn-25 keyframe renders as a recognizable table |
 | T1 | World layout (quadrants, place settings, piles, seam) + camera rig + screen-space hand. No animation — instant cuts | `layoutWorld`/`layoutScreen`/`camera` unit-tested; a whole recorded session renders correctly frame by frame; every seat preset framed clear of the hand at every supported window size |
 | T2 | Director, two clocks, move animations from the M6 stream (draw, cast, resolve, ETB, dies, exile, bounce); camera moves queued through the director | A recorded session replays as continuous motion with zero teleports; presented converges to authoritative; budget cap respected under a synthetic burst |
