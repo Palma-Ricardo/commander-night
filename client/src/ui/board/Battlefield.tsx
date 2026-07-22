@@ -1,7 +1,7 @@
 // Battlefield rows (§8): controller-grouped, lands compressed into a small
 // overlapping row, attachments nested under their host, tapped = rotation.
 
-import type { Permanent, Player } from '../../protocol/protocol';
+import type { Permanent, Player } from '@night/core/protocol/protocol';
 import { CardView } from '../cards/CardView';
 
 const isLand = (p: Permanent) => p.types.includes('LAND') && !p.types.includes('CREATURE');

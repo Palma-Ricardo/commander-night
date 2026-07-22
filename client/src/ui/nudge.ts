@@ -9,7 +9,7 @@
 // Playwright, so this state machine is proven headlessly (design §13).
 
 import type { StoreApi } from 'zustand/vanilla';
-import type { PromptStoreState } from '../stores/prompt';
+import type { PromptStoreState } from '@night/core/stores/prompt';
 
 export interface NudgeDoc {
   hidden: boolean;

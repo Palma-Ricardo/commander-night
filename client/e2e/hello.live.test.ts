@@ -6,11 +6,11 @@
 // Env: NIGHT_WS_URL overrides the target (default: through the Vite dev proxy).
 
 import { expect, it } from 'vitest';
-import { Recorder } from '../src/dev/recorder';
-import { createSocketManager } from '../src/net/socket';
-import { createStores } from '../src/stores';
-import { KEYS, memoryKV } from '../src/stores/storage';
-import type { Welcome } from '../src/protocol/protocol';
+import { Recorder } from '@night/core/dev/recorder';
+import { createSocketManager } from '@night/core/net/socket';
+import { createStores } from '@night/core/stores';
+import { KEYS, memoryKV } from '@night/core/stores/storage';
+import type { Welcome } from '@night/core/protocol/protocol';
 
 const URL_UNDER_TEST = process.env['NIGHT_WS_URL'] ?? 'ws://localhost:5173/ws';
 

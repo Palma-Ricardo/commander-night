@@ -6,8 +6,8 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import { parseJoinHash } from '../../deeplink';
-import { CommandError } from '../../net/actions';
+import { parseJoinHash } from '@night/core/deeplink';
+import { CommandError } from '@night/core/net/actions';
 
 export function Home() {
   const name = useStore(appStores.session, s => s.name);

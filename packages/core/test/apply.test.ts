@@ -14,7 +14,7 @@ import { memoryKV } from '../src/stores/storage';
 
 const keyframe = (() => {
   const text = fs.readFileSync(
-    fileURLToPath(new URL('../../docs/protocol/samples/game.state.json', import.meta.url)), 'utf8');
+    fileURLToPath(new URL('../../../docs/protocol/samples/game.state.json', import.meta.url)), 'utf8');
   const r = decode(text, { strict: true });
   if (!r.ok || r.msg?.t !== 'game.state') throw new Error('sample did not decode');
   return r.msg as StateKeyframe;

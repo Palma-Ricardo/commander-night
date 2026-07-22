@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { decode } from '../src/protocol/codec';
 
 const stateSample = fs.readFileSync(
-  fileURLToPath(new URL('../../docs/protocol/samples/game.state.json', import.meta.url)), 'utf8');
+  fileURLToPath(new URL('../../../docs/protocol/samples/game.state.json', import.meta.url)), 'utf8');
 
 describe('decode envelope policy', () => {
   it('rejects unparseable frames in both modes', () => {

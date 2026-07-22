@@ -16,7 +16,7 @@ import * as cmd from '../src/protocol/commands';
 import type { CommandContext } from '../src/protocol/commands';
 import type { ClientMsg } from '../src/protocol/protocol';
 
-const samplesDir = fileURLToPath(new URL('../../docs/protocol/samples/', import.meta.url));
+const samplesDir = fileURLToPath(new URL('../../../docs/protocol/samples/', import.meta.url));
 const files = fs.readdirSync(samplesDir).filter(f => f.endsWith('.json')).sort();
 
 const SERVER_TYPES = new Set([
@@ -83,8 +83,8 @@ const builders: Record<string, (c: CommandContext) => ClientMsg> = {
 };
 
 describe('conformance corpus', () => {
-  it('holds the complete 49-sample set', () => {
-    expect(files.length).toBe(49);
+  it('holds the complete 50-sample set', () => {
+    expect(files.length).toBe(50);
   });
 
   it('covers every sample in exactly one direction', () => {

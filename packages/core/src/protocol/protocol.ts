@@ -181,11 +181,48 @@ export type JsonPatchOp =                       // RFC 6902, restricted per brid
   | { op: 'remove';  path: string }
   | { op: 'replace'; path: string; value: unknown };
 
-export interface StateKeyframe { t:'game.state'; seq: number; gameId: Id; state: GameState }
+export interface StateKeyframe { t:'game.state'; seq: number; gameId: Id;
+                                 state: GameState;
+                                 events?: GameEvent[] }         // §7.1 advisory hints
 export interface StatePatch    { t:'game.patch'; seq: number; gameId: Id;
                                  base: number;                  // seq the ops apply to
-                                 ops: JsonPatchOp[] }           // paths into GameState
+                                 ops: JsonPatchOp[];            // paths into GameState
+                                 events?: GameEvent[] }         // §7.1 advisory hints
 export interface Resync        { t:'game.resync'; id: string; gameId: Id }   // client → server
+
+// ── §7.1 Semantic events (advisory) ──────────────────────────────────────────
+//
+// Bridge-derived (M6) animation hints riding on the state message they explain.
+// **Advisory, not authoritative** — a client reaches the same board from `ops`
+// alone and may ignore `events` entirely; the classic client does. `move.objectId`
+// is the stable card id on both sides of the move; events are ordered; unknown `k`
+// is ignored (§3 forward-compat), never an error. Absent (never `[]`) when a
+// transition carries none.
+//
+// This is the subset M6 emits — the zone-motion core (move/hidden/stackLink) plus
+// step — mirroring the bridge's `GameEvent permits` clause. Further kinds
+// (tap, attack, block, damage, life, counters, trigger, reveal, shuffle/scry/
+// search) are frozen in v1.md §7.1 for the table client's T4 choreography and gain
+// variants here when the bridge starts emitting them.
+
+export type Zone = 'hand'|'battlefield'|'graveyard'|'exile'|'library'|'stack'|'command';
+
+export type Verb =
+  | 'cast'|'play'|'resolve'|'counter'|'destroy'|'sacrifice'|'exile'|'discard'
+  | 'mill'|'bounce'|'draw'|'tutor'|'put'|'token'|'attach'|'detach';
+
+export interface Cause { objectId?: Id; name?: string; playerId?: Id }
+
+export type GameEvent =
+  // The workhorse. `objectId` is the stable card id on both sides of the move;
+  // a hand → stack move is accompanied by a `stackLink`.
+  | { k:'move'; objectId: Id; from: Zone; to: Zone; verb: Verb; cause?: Cause; reason?: string }
+  // Anonymous movement — hidden information (opponent draws), animate as backs.
+  | { k:'hidden'; playerId: Id; from: Zone; to: Zone; count: number; verb: Verb }
+  // Binds an ephemeral stack id to the stable card/source it came from (§3).
+  | { k:'stackLink'; stackId: Id; objectId: Id }
+  // Phase/step advance; a changed activePlayerId re-frames the camera (T2).
+  | { k:'step'; phase?: Phase; step?: Step; activePlayerId?: Id };
 
 // ── §8 Prompts (server asks) and answers ─────────────────────────────────────
 

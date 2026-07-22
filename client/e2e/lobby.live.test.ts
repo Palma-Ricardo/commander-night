@@ -7,11 +7,11 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { Recorder } from '../src/dev/recorder';
-import { createActions } from '../src/net/actions';
-import { createSocketManager } from '../src/net/socket';
-import { createStores } from '../src/stores';
-import { memoryKV } from '../src/stores/storage';
+import { Recorder } from '@night/core/dev/recorder';
+import { createActions } from '@night/core/net/actions';
+import { createSocketManager } from '@night/core/net/socket';
+import { createStores } from '@night/core/stores';
+import { memoryKV } from '@night/core/stores/storage';
 
 const URL_UNDER_TEST = process.env['NIGHT_WS_URL'] ?? 'ws://localhost:5173/ws';
 

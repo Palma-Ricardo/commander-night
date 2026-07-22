@@ -4,8 +4,8 @@
 import { useSyncExternalStore } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appManager, appScryfall, appStores } from '../app';
-import { recorder } from '../dev/recorder';
-import type { TraceEntry } from '../dev/recorder';
+import { recorder } from '@night/core/dev/recorder';
+import type { TraceEntry } from '@night/core/dev/recorder';
 
 function describe(entry: TraceEntry): string {
   const m = entry.msg;

@@ -7,7 +7,7 @@
 // same prompt pending): 1 → cancel, 2 → confirm-false, then give up (null)
 // and let the test time out loudly.
 
-import type { AnswerValue, Prompt } from '../src/protocol/protocol';
+import type { AnswerValue, Prompt } from '@night/core/protocol/protocol';
 
 export function policyAnswer(prompt: Prompt, attempt: number): AnswerValue | null {
   if (attempt === 1) return { type: 'cancel' };

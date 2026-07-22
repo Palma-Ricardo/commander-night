@@ -12,7 +12,7 @@
 // serializable and decoupled from whatever element produced it.
 
 import { createStore } from 'zustand/vanilla';
-import type { Card } from '../protocol/protocol';
+import type { Card } from '@night/core/protocol/protocol';
 
 export interface HoverAnchor { left: number; top: number; width: number; height: number }
 

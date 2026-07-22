@@ -11,8 +11,8 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { decode } from '../src/protocol/codec';
-import type { LobbyState } from '../src/protocol/protocol';
+import { decode } from '@night/core/protocol/codec';
+import type { LobbyState } from '@night/core/protocol/protocol';
 import { deckView } from '../src/ui/screens/deck-view';
 
 // Decoded dev-strict, so this test also fails if the sample ever grows a field

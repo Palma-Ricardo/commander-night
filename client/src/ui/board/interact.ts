@@ -4,9 +4,9 @@
 // objectClick.
 
 import { appActions } from '../../app';
-import type { Id } from '../../protocol/protocol';
-import { affordanceFor } from '../../state/selectors';
-import type { PromptStoreState } from '../../stores/prompt';
+import type { Id } from '@night/core/protocol/protocol';
+import { affordanceFor } from '@night/core/state/selectors';
+import type { PromptStoreState } from '@night/core/stores/prompt';
 
 export function answerObject(promptId: number, objectId: Id): void {
   void appActions.answerPrompt(promptId, { type: 'object', objectId });

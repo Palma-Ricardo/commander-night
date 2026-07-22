@@ -7,8 +7,8 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import type { GameState, LogEntry } from '../../protocol/protocol';
-import { findObject, playerName, rematchCode } from '../../state/selectors';
+import type { GameState, LogEntry } from '@night/core/protocol/protocol';
+import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
 import { hoverCard } from '../hover';
 
 export function LogPanel({ state }: { state: GameState }) {

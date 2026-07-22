@@ -3,7 +3,7 @@
 // a name filter over the C5 scan ordering (pile.ts).
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Card } from '../../protocol/protocol';
+import type { Card } from '@night/core/protocol/protocol';
 import { CardView, type CardSize } from '../cards/CardView';
 import { filterSortPile } from './pile';
 

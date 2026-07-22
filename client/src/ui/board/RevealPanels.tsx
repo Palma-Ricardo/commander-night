@@ -3,7 +3,7 @@
 // Cards stay interactive: choose-from-revealed prompts list their ids as
 // candidates.
 
-import type { GameState } from '../../protocol/protocol';
+import type { GameState } from '@night/core/protocol/protocol';
 import { CardView } from '../cards/CardView';
 
 export function RevealPanels({ state }: { state: GameState }) {

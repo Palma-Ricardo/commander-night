@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { parseDeckIdentities } from '../src/images/deck';
 
 const fixture = (name: string): string => fs.readFileSync(
-  fileURLToPath(new URL(`../../bridge/src/test/resources/decks/${name}`, import.meta.url)), 'utf8');
+  fileURLToPath(new URL(`../../../bridge/src/test/resources/decks/${name}`, import.meta.url)), 'utf8');
 
 describe('parseDeckIdentities', () => {
   it('parses main-deck lines into set/number/name', () => {

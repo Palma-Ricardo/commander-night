@@ -6,9 +6,9 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appScryfall, appStores } from '../../app';
-import type { ImagePriority } from '../../images/scryfall';
-import type { Card, Permanent } from '../../protocol/protocol';
-import { affordanceFor } from '../../state/selectors';
+import type { ImagePriority } from '@night/core/images/scryfall';
+import type { Card, Permanent } from '@night/core/protocol/protocol';
+import { affordanceFor } from '@night/core/state/selectors';
 import { answerObject, objectClick } from '../board/interact';
 import { hoverCard } from '../hover';
 import { ManaSymbols } from './ManaSymbols';

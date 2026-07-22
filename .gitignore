@@ -1,6 +1,13 @@
 vendor/
 target/
 *.log
+
+# JS workspaces (npm hoists node_modules to the root; build output per package)
+node_modules/
+dist/
+test-results/
+playwright-report/
+e2e/pw/artifacts/
 mage-full_*/
 mage-full_*.zip
 bridge/logs/

@@ -15,7 +15,7 @@ import { emptyScratch, type PromptStoreState } from '../src/stores/prompt';
 
 function sample<T>(name: string): T {
   const text = fs.readFileSync(
-    fileURLToPath(new URL(`../../docs/protocol/samples/${name}`, import.meta.url)), 'utf8');
+    fileURLToPath(new URL(`../../../docs/protocol/samples/${name}`, import.meta.url)), 'utf8');
   const r = decode(text, { strict: true });
   if (!r.ok || r.msg === null) throw new Error(`sample ${name} did not decode`);
   return r.msg as T;

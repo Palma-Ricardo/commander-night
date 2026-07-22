@@ -4,7 +4,7 @@
 
 import { useEffect } from 'react';
 import { appActions, appStores } from '../app';
-import { resolveShortcut } from '../state/shortcuts';
+import { resolveShortcut } from '@night/core/state/shortcuts';
 
 export function isTextInput(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

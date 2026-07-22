@@ -5,8 +5,8 @@
 
 import { useStore } from 'zustand';
 import { appStores } from '../../app';
-import type { GameState } from '../../protocol/protocol';
-import { affordanceFor, targetName } from '../../state/selectors';
+import type { GameState } from '@night/core/protocol/protocol';
+import { affordanceFor, targetName } from '@night/core/state/selectors';
 import { CardView } from '../cards/CardView';
 import { objectClick } from './interact';
 

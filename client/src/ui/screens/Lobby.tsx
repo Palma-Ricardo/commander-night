@@ -6,8 +6,8 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import { inviteUrl } from '../../deeplink';
-import type { LobbyState } from '../../protocol/protocol';
+import { inviteUrl } from '@night/core/deeplink';
+import type { LobbyState } from '@night/core/protocol/protocol';
 import { deckView } from './deck-view';
 
 /** One seat's deck verdict. Thin shell over `deckView` — see that module for why

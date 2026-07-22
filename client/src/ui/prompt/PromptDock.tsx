@@ -9,9 +9,9 @@ import { useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import type { AnswerValue, Card, Prompt } from '../../protocol/protocol';
-import { parseManaCost } from '../../state/mana';
-import { me, unreachableCandidates } from '../../state/selectors';
+import type { AnswerValue, Card, Prompt } from '@night/core/protocol/protocol';
+import { parseManaCost } from '@night/core/state/mana';
+import { me, unreachableCandidates } from '@night/core/state/selectors';
 import { CardGrid, Modal } from '../board/Modal';
 import { ManaSymbols } from '../cards/ManaSymbols';
 

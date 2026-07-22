@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appManager, appStores } from '../app';
-import type { Notice, SocketStatus } from '../stores';
+import type { Notice, SocketStatus } from '@night/core/stores';
 import { DebugPanel } from './DebugPanel';
 import { Game } from './screens/Game';
 import { Home } from './screens/Home';

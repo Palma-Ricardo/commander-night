@@ -3,8 +3,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NUDGE_TITLE, startNudge, type NudgeDoc } from '../src/ui/nudge';
-import { createPromptStore } from '../src/stores/prompt';
-import type { Prompt } from '../src/protocol/protocol';
+import { createPromptStore } from '@night/core/stores/prompt';
+import type { Prompt } from '@night/core/protocol/protocol';
 
 const priority = (promptId: number): Prompt =>
   ({ kind: 'priority', promptId, actions: [] } as unknown as Prompt);

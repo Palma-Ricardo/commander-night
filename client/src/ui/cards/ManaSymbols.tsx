@@ -1,6 +1,6 @@
 // Mana symbols as styled spans — hand-rolled (no external symbol font, §1).
 
-import { parseManaCost, symbolColor, type ManaSymbol } from '../../state/mana';
+import { parseManaCost, symbolColor, type ManaSymbol } from '@night/core/state/mana';
 
 export function ManaSymbols({ cost, symbols }: { cost?: string; symbols?: ManaSymbol[] }) {
   const syms = symbols ?? parseManaCost(cost);

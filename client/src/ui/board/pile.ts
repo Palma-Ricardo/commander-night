@@ -2,7 +2,7 @@
 // order, which is the wrong order for finding a card: scan order is type, then
 // cost, then name. Pure — the modal is a thin shell over this.
 
-import type { Card } from '../../protocol/protocol';
+import type { Card } from '@night/core/protocol/protocol';
 
 // Card.types is uppercase on the wire (protocol §1: "CREATURE, INSTANT, …").
 const TYPE_RANK = [

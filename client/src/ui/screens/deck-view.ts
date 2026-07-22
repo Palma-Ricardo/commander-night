@@ -17,7 +17,7 @@
 //    them behind `valid` would blank them on precisely the decks most likely to
 //    be misread, so `kind` and `commanders` are independent.
 
-import type { LobbyState } from '../../protocol/protocol';
+import type { LobbyState } from '@night/core/protocol/protocol';
 
 type SeatDeck = NonNullable<LobbyState['seats'][number]['deck']>;
 

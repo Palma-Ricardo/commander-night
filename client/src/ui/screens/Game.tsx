@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import { combatLines, me, opponents, playerName, statusLine } from '../../state/selectors';
+import { combatLines, me, opponents, playerName, statusLine } from '@night/core/state/selectors';
 import { useRematchCode } from '../log/LogPanel';
 import { Battlefield } from '../board/Battlefield';
 import { CardGrid, Modal } from '../board/Modal';

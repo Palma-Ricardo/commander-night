@@ -1,7 +1,8 @@
 # Commander Night — Table Client Design (Arena-like)
 
 **Date:** 2026-07-21 · **Status:** ACCEPTED — layout reviewed and chosen 2026-07-21 (§7); M6
-(bridge event derivation) done 2026-07-22; next action is T0 (`@night/core` extraction) · **Scope:**
+(bridge event derivation) done 2026-07-22; **T0 (extraction + table scaffold) done 2026-07-22**;
+next action is T1 (world layout + camera) · **Scope:**
 the second web client — a
 canvas-rendered, fully animated four-player table, built alongside the existing React client
 (which stays as the working fallback). Covers the protocol extension it needs, the bridge work
@@ -475,21 +476,32 @@ shared. Only the *rendering* of the resolved image differs between the two clien
 | Camera unit | preset framing, follow policy, override stickiness, `worldToScreen`/`screenToWorld` round-trip | pure; assert every seat's quadrant lands fully inside the viewport and clear of the hand at every supported window size |
 | Director unit | queue depth, duration scaling, budgeted flush, snap | drive with synthetic event steps and a fake clock |
 | Replay | recorded sessions re-driven through core + director | asserts no dropped steps, presented converges to authoritative, zero synthesized states |
-| Live E2E | the auto-player, as today | **needs a new driving surface** — see below |
+| Live E2E | the auto-player, as today | **semantic contract landed at T0** — see below |
 
-The Playwright cost is real and worth naming. `window.__night` is read-only today
-(`client/src/app.ts:68`, a `snapshot()`), and the auto-player drives the DOM by selector. A canvas
-table is opaque to that. The harness therefore grows a **semantic action API** — `click(objectId)`,
-`answer(...)`, `pass()`, plus a `scene()` accessor exposing actor keys, positions and animation
-state. This is a genuine improvement: the auto-player starts expressing game intent instead of CSS
-structure, and the same specs then run against both clients.
+The Playwright cost is real and worth naming. `window.__night` used to be a read-only `snapshot()`,
+and the auto-player drove the DOM by selector. A canvas table is opaque to that. So the harness grew
+a **semantic action API** — `click(objectId)`, `answer(...)`, `pass()`, plus a `scene()` accessor
+exposing actor keys, positions and animation state. This is a genuine improvement: the auto-player
+starts expressing game intent instead of CSS structure, and the same specs then run against both
+clients.
+
+**Brought forward to T0** (2026-07-22, at Ricardo's call: retrofitting it after T4 is harder than
+growing it alongside the client). The contract now lives in `@night/core/harness` as `NightHarness`
+— the view-independent half (`snapshot` + `click`/`answer`/`pass`, all backed by the shared
+stores/actions) is implemented once in core; only `scene()` is client-specific (classic derives it
+from state via `sceneFromState`, the table reads its live Pixi actors). Both clients `installHarness`
+from their first commit, so the table client is never opaque to Playwright. The driver types against
+`@night/core/harness`, not a client's internals. **Deferred:** physically relocating the spec files
+from `client/e2e` to a shared root `e2e/` (so one spec drives either client by baseURL) waits until
+the table client is actually drivable (T2–T3) — the shared *contract* is the part that had to exist
+early, and it does; moving spec files now would be churn with no target to point at.
 
 ## 13. Milestones
 
 | # | Deliverable | Exit criterion |
 |---|---|---|
 | M6 | ✅ **done 2026-07-22.** Bridge event derivation: `EventDeriver` log⋈delta join, `move`/`hidden`/`stackLink`/`step` on the additive `events?` field (protocol §7.1) | Coverage assertion green over **20 captures / 4,816 transitions, 0 unexplained**; classic client provably unaffected (existing goldens/corpus byte-identical). Retention of `mageObjectType`/`gameCycle`/`original` proved unnecessary (§5); T4 event kinds frozen but not yet emitted |
-| T0 | Extract `@night/core`; scaffold `table/`; Pixi bootstrap; card actor + texture LOD; render a captured keyframe as a flat scene | Classic client's full suite green post-extraction; a captured turn-25 keyframe renders as a recognizable table |
+| T0 | ✅ **done 2026-07-22.** npm workspaces; `@night/core` extracted (protocol/net/stores/state/images/dev + the `deeplink` helper + the shared `harness`); `table/` scaffolded (Pixi v8 + React); `CardTextures` two-tier LOD (text-frame faces = the §10 image fallback), `CardActor` flat scene, `layoutFlat`, `TableScene`; the **semantic harness contract** (`snapshot`+`scene`+`click`/`answer`/`pass`) brought forward from T5 into `@night/core/harness`, both clients install it | **Met.** Classic suite green post-extraction (core 219 · client 30 · build byte-identical hash → prod bundle provably unaffected); a synthetic 4-seat keyframe renders as a recognizable table (headless-WebGL screenshot: 36 actors, four nameplates, piles, stack, hand, opponent backs). Also closed M6's client-side gap: `@night/core` now knows the additive `events?` field (types + strict decoder), so `npm run dev`/dev-strict no longer reject event-bearing patches |
 | T1 | World layout (quadrants, place settings, piles, seam) + camera rig + screen-space hand. No animation — instant cuts | `layoutWorld`/`layoutScreen`/`camera` unit-tested; a whole recorded session renders correctly frame by frame; every seat preset framed clear of the hand at every supported window size |
 | T2 | Director, two clocks, move animations from the M6 stream (draw, cast, resolve, ETB, dies, exile, bounce); camera moves queued through the director | A recorded session replays as continuous motion with zero teleports; presented converges to authoritative; budget cap respected under a synthetic burst |
 | T3 | **Interaction parity** — all 11 prompt kinds, board affordances, hit-testing, hover preview, keyboard, chat/log chrome | A human plays a full game vs 3 AIs in the new client to `game.over`. *This is the gate at which switching becomes possible.* |

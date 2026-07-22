@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
-import type { GameState } from '../../protocol/protocol';
+import type { GameState } from '@night/core/protocol/protocol';
 import { Modal } from '../board/Modal';
 
 type SkipMode = NonNullable<GameState['me']['skip']>;

@@ -1,12 +1,12 @@
 // Composition root: the app's store/manager/action singletons. React imports
 // from here; tests and headless runs build their own stacks via the factories.
 
-import { recorder } from './dev/recorder';
-import { createScryfallResolver } from './images/scryfall';
-import { createActions } from './net/actions';
-import { createSocketManager } from './net/socket';
-import { createStores } from './stores';
-import { browserKV } from './stores/storage';
+import { recorder } from '@night/core/dev/recorder';
+import { createScryfallResolver } from '@night/core/images/scryfall';
+import { createActions } from '@night/core/net/actions';
+import { createSocketManager } from '@night/core/net/socket';
+import { createStores } from '@night/core/stores';
+import { browserKV } from '@night/core/stores/storage';
 
 function bridgeUrl(): string {
   const configured = import.meta.env.VITE_BRIDGE_WS as string | undefined;

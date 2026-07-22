@@ -8,8 +8,8 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appStores } from '../../app';
-import type { Card, GameState, Player } from '../../protocol/protocol';
-import { affordanceFor, commanderDamageRows } from '../../state/selectors';
+import type { Card, GameState, Player } from '@night/core/protocol/protocol';
+import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
 import { CardView } from '../cards/CardView';
 import { ManaSymbols } from '../cards/ManaSymbols';
 import { objectClick } from './interact';

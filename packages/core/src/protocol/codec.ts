@@ -243,6 +243,41 @@ const patchOpC: Check = (v, p, c) => {
   else fail(`${p}.op`, `expected "add"|"remove"|"replace", got ${JSON.stringify(op)}`);
 };
 
+// ── §7.1 semantic events (advisory) ──────────────────────────────────────────
+
+const phaseC = strEnum('BEGINNING', 'PRECOMBAT_MAIN', 'COMBAT', 'POSTCOMBAT_MAIN', 'END');
+const stepC = strEnum('UNTAP', 'UPKEEP', 'DRAW', 'PRE_MAIN', 'BEGIN_COMBAT', 'DECLARE_ATTACKERS',
+                      'DECLARE_BLOCKERS', 'FIRST_COMBAT_DAMAGE', 'COMBAT_DAMAGE', 'END_COMBAT',
+                      'POST_MAIN', 'END_TURN', 'CLEANUP');
+const zoneC = strEnum('hand', 'battlefield', 'graveyard', 'exile', 'library', 'stack', 'command');
+const verbC = strEnum('cast', 'play', 'resolve', 'counter', 'destroy', 'sacrifice', 'exile', 'discard',
+                      'mill', 'bounce', 'draw', 'tutor', 'put', 'token', 'attach', 'detach');
+const causeC = obj({ req: {}, opt: { objectId: idc, name: str, playerId: idc } });
+
+// The four kinds M6 emits (mirrors the bridge's GameEvent `permits`).
+const eventKindChecks: Record<string, Check> = {
+  move: obj({
+    req: { k: lit('move'), objectId: idc, from: zoneC, to: zoneC, verb: verbC },
+    opt: { cause: causeC, reason: str },
+  }),
+  hidden: obj({
+    req: { k: lit('hidden'), playerId: idc, from: zoneC, to: zoneC, count: num, verb: verbC },
+  }),
+  stackLink: obj({ req: { k: lit('stackLink'), stackId: idc, objectId: idc } }),
+  step: obj({ req: { k: lit('step') }, opt: { phase: phaseC, step: stepC, activePlayerId: idc } }),
+};
+
+// Events are advisory (§7.1): unlike prompt kinds (frozen, unknown = error), an
+// unknown event `k` is *ignored* even in strict mode — a client degrades to
+// teleport rendering. Known kinds are shape-checked so real drift still trips.
+const eventC: Check = (v, p, c) => {
+  if (!isPlainObject(v)) fail(p, `expected event object, got ${typeName(v)}`);
+  const k = v['k'];
+  if (typeof k !== 'string') fail(`${p}.k`, 'missing event kind');
+  const check = eventKindChecks[k];
+  if (check) check(v, p, c);   // unknown k: accepted opaquely (forward-compat)
+};
+
 // ── §8 prompts ───────────────────────────────────────────────────────────────
 
 const promptBaseReq: Record<string, Check> = {
@@ -354,9 +389,11 @@ const serverChecks: Record<string, Check> = {
   }),
   'game.state': obj({
     req: { t: lit('game.state'), seq: num, gameId: idc, state: gameStateC },
+    opt: { events: arr(eventC) },
   }),
   'game.patch': obj({
     req: { t: lit('game.patch'), seq: num, gameId: idc, base: num, ops: arr(patchOpC) },
+    opt: { events: arr(eventC) },
   }),
   'game.prompt': promptC,
   'game.promptDone': obj({

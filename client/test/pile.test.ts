@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { filterSortPile } from '../src/ui/board/pile';
-import type { Card } from '../src/protocol/protocol';
+import type { Card } from '@night/core/protocol/protocol';
 
 const card = (name: string, types: string[], manaValue: number): Card =>
   ({
