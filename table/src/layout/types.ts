@@ -26,6 +26,10 @@ export interface ActorPlacement extends Transform {
    *  permanents (basic lands / tokens); the render layer overlays a "×count"
    *  tally so eight Forests read as one cell, not eight (design T4). */
   count?: number;
+  /** A triggered/activated ability on the stack (StackItem.kind === 'ability'):
+   *  it renders as its source card, so the render layer overlays an "ABILITY"
+   *  banner to keep it from reading as the permanent itself (design §9, T4). */
+  ability?: boolean;
 }
 
 /** Which coordinate space a placement lives in (design §7.1). World actors are

@@ -117,13 +117,17 @@ export class CardActor {
       ? `${card.power}/${card.toughness}` : '';
     const counters = artbox ? countersLabel(card.counters) : '';
     const count = artbox ? Math.max(1, Math.round(p.count ?? 1)) : 1;
-    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${counters}|${count}`;
+    // A stack ability renders as its source card, so it gets an "ABILITY" banner
+    // to keep it from reading as the permanent itself (§9 T4).
+    const ability = p.zone === 'stack' && p.faceUp && p.ability === true;
+    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${counters}|${count}|${ability}`;
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
     // (face tint is applied per-frame in render — it blends the tap dim with the
     //  death ramp, so it can't be baked here.)
     for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
+    if (ability) this.chrome.addChild(abilityBanner(w, h));
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
     if (counters !== '') this.chrome.addChild(counterBadge(counters, w, h));
@@ -381,6 +385,30 @@ function ptBadge(pt: string, w: number, h: number, edge: number): Container {
   label.position.set(0, -1);
   c.addChild(g, label);
   c.position.set(w / 2 - bw / 2 - 6, h / 2 - bh / 2 - 6);                     // bottom-right inset
+  return c;
+}
+
+/** A gilt "ABILITY" band laid over the type-line region of an ability's source
+ *  card, so a triggered/activated ability on the stack doesn't read as the
+ *  permanent itself (design §9, T4). Sized to the card texture, billboarded and
+ *  scaled with the face by `render`. */
+function abilityBanner(w: number, h: number): Container {
+  const c = new Container();
+  const label = new Text({
+    text: 'ABILITY',
+    style: new TextStyle({
+      fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.072), fontWeight: '800',
+      fill: 0xf1d792, letterSpacing: Math.round(h * 0.018),
+    }),
+  });
+  label.anchor.set(0.5, 0.5);
+  const bw = w * 0.86, bh = label.height + h * 0.028;
+  const g = new Graphics();
+  g.roundRect(-bw / 2, -bh / 2, bw, bh, PLATE_RADIUS).fill({ color: 0x14100c, alpha: 0.88 });
+  g.roundRect(-bw / 2 + 1.2, -bh / 2 + 1.2, bw - 2.4, bh - 2.4, PLATE_RADIUS)
+    .stroke({ width: 1.5, color: 0xc9a24a, alpha: 0.95 });                    // gilt edge
+  c.addChild(g, label);
+  c.position.set(0, h * 0.06);                                               // over the type line
   return c;
 }
 

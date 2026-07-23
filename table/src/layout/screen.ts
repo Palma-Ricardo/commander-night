@@ -132,6 +132,7 @@ function layoutStack(state: GameState, viewport: Size, rightInset: number, out: 
         zone: 'stack',
         ownerId: item.controllerId,
         faceUp: true,
+        ...(item.kind === 'ability' ? { ability: true } : {}),
       },
     });
   });
