@@ -34,7 +34,7 @@ import {
 } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
-import { layoutScreen } from '../layout/screen';
+import { layoutScreen, stackAnchor } from '../layout/screen';
 import { promptObjectIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, isClickable, rectContains, type Projector, type ScreenAnchor,
@@ -52,6 +52,8 @@ const DMG_INK = 0xf0a89a;
 const DMG_FILL = 0x2a100c;
 const DMG_EDGE = 0x5e1f16;
 const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
+const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
+const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
 
 // Zones a newly-created actor can fly *in from* — the owner's pile/fan anchor, in
 // world space. A draw comes from the library, an opponent's cast from their hand.
@@ -96,8 +98,16 @@ export class TableScene implements DirectorSink {
   private shapeSpecs: FurnitureShape[] = [];
   private textItems: { node: Text; anchor: Point }[] = [];
   private readonly worldActors = new Container();
-  private readonly screenActors = new Container();  // fixed (the hand)
+  private readonly screenActors = new Container();  // fixed (the hand + the stack pile)
   private readonly actors = new Map<string, CardActor>();
+  // Stack tethers (T4 §9): the source + target arrows of the top-of-stack item.
+  // A screen-space overlay under the cards, redrawn every frame so the arrows
+  // track the camera as their felt endpoints keystone across the seam. The links
+  // (ephemeral stackId → source objectId) and the top item's actor key are cached
+  // from the last transition so the per-frame redraw stays cheap.
+  private readonly stackTethers = new Graphics();
+  private stackLinks: StackLinks = new Map();
+  private topStackKey: string | undefined;
   // §9 transient effects (dust, damage, arrows, ribbons, ghosts, vignette, shake).
   private readonly effects = new Effects();
   // Delayed one-shots (landing squash/dust fire on arrival, not takeoff): advanced
@@ -154,11 +164,15 @@ export class TableScene implements DirectorSink {
     // pointer events so a tap on bare felt still reaches the felt mesh below.
     this.furnitureShapes.eventMode = 'none';
     this.furnitureText.eventMode = 'none';
+    this.stackTethers.eventMode = 'none';   // arrows never eat a click
     // Effects: worldFx keystones among the actors (it self-projects), screenFx is a
     // fixed overlay on top of everything (vignette, phase ribbon).
     this.worldLayer.addChild(this.feltMesh, this.furnitureShapes, this.furnitureText,
       this.worldActors, this.effects.worldFx);
-    this.app.stage.addChild(this.worldLayer, this.screenActors, this.effects.screenFx);
+    // Tethers sit above the felt/world actors (so an arrowhead lands visibly on a
+    // target permanent) but below the screen cards (so the pile stays readable and
+    // the arrow reads as emerging from beneath the top card).
+    this.app.stage.addChild(this.worldLayer, this.stackTethers, this.screenActors, this.effects.screenFx);
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
@@ -200,6 +214,18 @@ export class TableScene implements DirectorSink {
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
 
+    // Cache what the per-frame tether redraw needs: the stackLink bindings and the
+    // actor key of the top-of-stack item (matched by its card view id, which is the
+    // one field adoption leaves untouched on the placed stack actor).
+    this.stackLinks = links;
+    this.topStackKey = undefined;
+    const topItem = to.stack[to.stack.length - 1];
+    if (topItem !== undefined) {
+      for (const [key, pp] of placed) {
+        if (pp.placement.zone === 'stack' && pp.objectId === topItem.card?.id) { this.topStackKey = key; break; }
+      }
+    }
+
     const focusedId = this.focusedPlayerId(to);
     const live = new Set<string>();
 
@@ -240,7 +266,7 @@ export class TableScene implements DirectorSink {
     this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
-    if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration);
+    if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration, preset);
     this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
 
@@ -271,6 +297,7 @@ export class TableScene implements DirectorSink {
     this.updateFeltMesh(preset);
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
+    this.drawStackTethers(preset);   // arrows read the actors' fresh projected bounds
     this.effects.render(world);   // effects live in world space (they self-project)
   }
 
@@ -332,9 +359,11 @@ export class TableScene implements DirectorSink {
    *  "dropping animation is always legal". Card-attached juice (glow/flash/tip)
    *  rides the actor so it follows the card mid-flight; landing effects are delayed
    *  to arrival; particles are spawned into the effects layer at world anchors. */
-  private playJuice(to: GameState, events: readonly GameEvent[], duration: number): void {
+  private playJuice(to: GameState, events: readonly GameEvent[], duration: number, preset: CameraPreset): void {
     const me = to.me?.playerId;
-    const stack = { x: WORLD.w / 2, y: WORLD.h / 2 };
+    // The stack now lives at the right edge in screen space; unproject its anchor so
+    // a world-space trigger ghost/ribbon still flies to where the pile actually is.
+    const stack = screenToWorld(preset, stackAnchor(this.size, this.rightInset));
     let untapIdx = 0;
     for (const e of events) {
       switch (e.k) {
@@ -493,6 +522,73 @@ export class TableScene implements DirectorSink {
     const seat = seatLayouts(state).find(s => s.player.id === playerId);
     if (seat === undefined) return undefined;
     return { x: seat.nameplate.x + NAMEPLATE.w / 2, y: seat.nameplate.y + NAMEPLATE.h / 2 };
+  }
+
+  // ── stack tethers (design §9, T4): what's on the stack and where it points ─────
+
+  /** Redraw the top-of-stack item's source + target arrows for the current camera.
+   *  Screen-space overlay: the pile end comes from the stack actor's projected
+   *  bounds, and each felt end (source permanent, target permanent/player) is
+   *  projected here, so the whole arrow keystones with the table every frame.
+   *  Only the top item is tethered — it is what was just added and what resolves
+   *  next, so "arrows show when it lands / re-show as it resolves" falls out. */
+  private drawStackTethers(preset: CameraPreset): void {
+    const g = this.stackTethers.clear();
+    const state = this.director.presented;
+    if (state === undefined || this.topStackKey === undefined) return;
+    const stackActor = this.actors.get(this.topStackKey);
+    const top = state.stack[state.stack.length - 1];
+    if (stackActor === undefined || top === undefined) return;
+    const pile = centreOf(stackActor.bounds());
+
+    // Source arrow (triggered/activated abilities): the source permanent → the
+    // pile. The stackLink binds the ability's ephemeral id to its source; a spell's
+    // link points at the stack actor itself (zone 'stack'), which we skip.
+    const srcActor = this.actorByObject(this.stackLinks.get(top.id));
+    if (srcActor !== undefined && srcActor.placement.zone !== 'stack') {
+      const col = srcActor.card !== undefined ? identityColor(srcActor.card) : TETHER_SOURCE;
+      this.tether(g, centreOf(srcActor.bounds()), pile, col, false);   // head at the pile
+    }
+
+    // Target arrows: the pile → each chosen target (permanent, player, or — for a
+    // counterspell — another stack item), head on the thing being pointed at.
+    for (const tid of top.targets ?? []) {
+      const to = this.targetAnchor(tid, state, preset);
+      if (to !== undefined) this.tether(g, pile, to, TETHER_TARGET, true);
+    }
+  }
+
+  /** The on-screen point of a stack item's target: a live actor's projected centre
+   *  (permanent or another stack card), else a player's projected nameplate. */
+  private targetAnchor(id: Id, state: GameState, preset: CameraPreset): Point | undefined {
+    const actor = this.actorByObject(id);
+    if (actor !== undefined) return centreOf(actor.bounds());
+    const seat = this.seatPoint(id, state);
+    return seat !== undefined ? worldToScreen(preset, seat) : undefined;
+  }
+
+  /** One tether: a gently bowed line with an arrowhead at the pointed-at end. Drawn
+   *  in screen space (both endpoints are already projected). */
+  private tether(g: Graphics, from: Point, to: Point, color: number, arrowAtTo: boolean): void {
+    const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // bow the curve perpendicular to the run, a fixed fraction of its length
+    const bow = Math.min(60, len * 0.16);
+    const cx = mx - (dy / len) * bow, cy = my + (dx / len) * bow;
+    g.moveTo(from.x, from.y).quadraticCurveTo(cx, cy, to.x, to.y)
+      .stroke({ width: 3, color, alpha: 0.9, cap: 'round' });
+    // arrowhead: aim along the tangent at the pointed-at end (from the control pt)
+    const head = arrowAtTo ? to : from;
+    const ctrl = { x: cx, y: cy };
+    const ang = Math.atan2(head.y - ctrl.y, head.x - ctrl.x);
+    const h = 13;
+    for (const d of [2.5, -2.5]) {
+      g.moveTo(head.x, head.y)
+        .lineTo(head.x + Math.cos(ang + d) * h, head.y + Math.sin(ang + d) * h)
+        .stroke({ width: 3, color, alpha: 0.9, cap: 'round' });
+    }
+    g.circle(arrowAtTo ? from.x : to.x, arrowAtTo ? from.y : to.y, 4).fill({ color, alpha: 0.9 });
   }
 
   // ── actor helpers ────────────────────────────────────────────────────────────
@@ -923,6 +1019,11 @@ export class TableScene implements DirectorSink {
     this.textures?.destroy();
     this.app?.destroy(true, { children: true });
   }
+}
+
+/** The centre of an on-screen bounding box (a projected actor face). */
+function centreOf(b: ScreenAnchor): Point {
+  return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
 }
 
 /** The upward bow of a move's path (design §9), in the actor's own-space units

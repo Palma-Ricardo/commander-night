@@ -9,7 +9,7 @@
 // headless — no renderer, no camera, no time.
 
 import type { GameState } from '@night/core';
-import type { PlacedActor, Size } from './types';
+import type { PlacedActor, Point, Size } from './types';
 
 const CARD_TEX = { w: 200, h: 280 } as const;
 
@@ -83,11 +83,11 @@ function stackFrontHeight(viewport: Size): number {
   return Math.round(viewport.h * 0.33);
 }
 
-function layoutStack(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
-  const items = state.stack;
-  const n = items.length;
-  if (n === 0) return;
+interface StackGeom { frontX: number; frontY: number; scale: number; cardW: number; step: number }
 
+/** The shared right-edge geometry of the pile — one place computes the front-card
+ *  centre and the per-item left step, so `layoutStack` and `stackAnchor` agree. */
+function stackGeometry(viewport: Size, rightInset: number, n: number): StackGeom {
   const frontH = stackFrontHeight(viewport);
   const scale = frontH / CARD_TEX.h;
   const cardW = CARD_TEX.w * scale;
@@ -95,13 +95,28 @@ function layoutStack(state: GameState, viewport: Size, rightInset: number, out: 
   const frontX = rightEdge - STACK_MARGIN - cardW / 2;
   // Centre the pile vertically in the play area (clear of the hand band below).
   const frontY = (viewport.h - handBandHeight(viewport)) / 2;
-
   // The fan steps left by a sliver per buried item, but never so far that a deep
   // stack runs off into the centre of the table: cap the total spread at ~45% of
   // the felt width and shrink the step to fit.
   const baseStep = cardW * STACK_SLIVER;
   const maxSpan = Math.min(viewport.w * 0.45, rightEdge - cardW - STACK_MARGIN);
   const step = Math.min(baseStep, maxSpan / Math.max(1, n - 1));
+  return { frontX, frontY, scale, cardW, step };
+}
+
+/** The screen point of the top-of-stack card's centre — where a trigger ghost
+ *  should fly and where a source/target tether meets the pile (design §9, T4). */
+export function stackAnchor(viewport: Size, rightInset = 0): Point {
+  const g = stackGeometry(viewport, rightInset, 1);
+  return { x: g.frontX, y: g.frontY };
+}
+
+function layoutStack(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
+  const items = state.stack;
+  const n = items.length;
+  if (n === 0) return;
+
+  const { frontX, frontY, scale, step } = stackGeometry(viewport, rightInset, n);
 
   items.forEach((item, i) => {
     // depth: 0 for the top (front), growing as we descend toward the oldest item.

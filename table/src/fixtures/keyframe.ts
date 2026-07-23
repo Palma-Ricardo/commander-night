@@ -136,13 +136,17 @@ const ana = seat('p2', 'Ana', false, 22, {
   handSize: 2, librarySize: 63,
 });
 
+// Hoisted so the stack's Lightning Bolt can name it as a target (the §9 target
+// tether draws from the pile to this permanent's world cell).
+const tomWall = perm('p3', card('Wall of Omens', 'tdc', '138', 2, ['CREATURE'],
+  { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Wall'], power: '0', toughness: '4' }));
+
 const tom = seat('p3', 'Tom', false, 40, {
   commander: commander('Brago, King Eternal', 'khc', '82', ['W', 'U'], '{2}{W}{U}', ['2', '4']),
   battlefield: [
     perm('p3', land('Plains', ['W'])),
     perm('p3', land('Island', ['U'])),
-    perm('p3', card('Wall of Omens', 'tdc', '138', 2, ['CREATURE'],
-      { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Wall'], power: '0', toughness: '4' })),
+    tomWall,
   ],
   handSize: 6, librarySize: 74,
 });
@@ -183,8 +187,8 @@ export const demoKeyframe: StateKeyframe = {
       },
       { id: uuid('stk'), kind: 'ability', controllerId: 'p2', text: ['Create a 1/1 red Goblin creature token.'],
         card: card('Krenko, Mob Boss', 'fdn', '204', 4, ['LEGENDARY', 'CREATURE'], { colors: ['R'], power: '3', toughness: '3' }) },
-      { id: uuid('stk'), kind: 'spell', controllerId: 'p1', text: [],
-        card: card('Counterspell', 'dsc', '114', 2, ['INSTANT'], { manaCost: '{U}{U}', colors: ['U'], text: ['Counter target spell.'] }) },
+      { id: uuid('stk'), kind: 'spell', controllerId: 'p1', text: [], targets: [tomWall.id],
+        card: card('Lightning Bolt', 'msc', '806', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage to any target.'] }) },
     ],
     me: {
       playerId: 'p1',
