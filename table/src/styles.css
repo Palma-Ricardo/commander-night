@@ -91,7 +91,10 @@ button.danger { background: var(--error); color: #14161a; }
 /* ── top HUD: turn ribbon (centre), compass + camstate (right) ───────────── */
 
 .ribbon {
-  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 18;
+  /* Centred in the felt viewport, i.e. left of the sidebar: shift the midpoint by
+     half the rail so it re-centres (and eases) as the log opens or collapses. */
+  position: fixed; top: 12px; left: calc(50% - var(--rail-w) / 2); transform: translateX(-50%); z-index: 18;
+  transition: left 180ms ease;
   pointer-events: none;
   display: flex; align-items: center; gap: 0.5rem;
   font-family: ui-monospace, monospace; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
@@ -230,7 +233,9 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 
 /* banners */
 .board-banner, .over-banner {
-  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 25;
+  /* Centred in the felt viewport (left of the sidebar), matching the turn ribbon. */
+  position: fixed; top: 8px; left: calc(50% - var(--rail-w) / 2); transform: translateX(-50%); z-index: 25;
+  transition: left 180ms ease;
   max-width: 90vw; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.9rem;
   box-shadow: 0 8px 30px #000a;
 }
