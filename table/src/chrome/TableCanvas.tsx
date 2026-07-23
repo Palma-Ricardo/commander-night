@@ -1,12 +1,23 @@
 // The Pixi host: a React component that owns one <canvas> filling the viewport
 // (design §10 — Pixi owns the world, React the chrome above it). It creates the
-// TableScene, renders the current GameState, and re-renders on every store
-// change and on resize. The scene is imperative Pixi; React only mounts and
-// tears it down.
+// TableScene, drives it from the stores, and wires the scene's semantic
+// interaction callbacks into the shared @night/core logic:
+//
+//  • game store  → director.present(state, events)   (T2, gated on applied seq)
+//  • prompt store → scene.setPrompt(...)             (T3 board affordances + §6.4/§14)
+//  • scene click  → interact.objectClick(prompt, id) (the same router the DOM uses)
+//  • scene hover  → the hover store, anchored to the live actor (§9/§10)
+//
+// The scene is imperative Pixi; React only mounts and tears it down. Keyboard
+// (camera + game shortcuts) is owned by chrome/shortcuts.ts, mounted by the game
+// overlay — not here — so it exists only where a game does.
 
 import { useEffect, useRef } from 'react';
 import { appStores } from '../app';
+import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
+import { objectClick } from './interact';
+import { hoverCard } from './hover';
 
 export function TableCanvas(): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -17,22 +28,23 @@ export function TableCanvas(): React.JSX.Element {
 
     const scene = new TableScene();
     let disposed = false;
-    let unsub: (() => void) | undefined;
+    const unsubs: (() => void)[] = [];
     let observer: ResizeObserver | undefined;
-
-    // Camera rig (design §7.3): 1–4 pin a seat, ` frames the whole table, Esc
-    // releases back to following the active player. Suspended while typing (T3
-    // adds chat) — no text inputs exist yet, so guard on the target tag now.
-    const onKey = (e: KeyboardEvent): void => {
-      const el = e.target as HTMLElement | null;
-      if (el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-      if (e.key >= '1' && e.key <= '4') scene.focusSeat(Number(e.key) - 1);
-      else if (e.key === '`' || e.key === '0') scene.showTable();
-      else if (e.key === 'Escape') scene.releaseCamera();
-    };
 
     void scene.mount(host).then(() => {
       if (disposed) { scene.destroy(); return; }
+
+      // Clicks route through the pending prompt's affordance, exactly as a DOM
+      // card click does — the felt and a modal grid mean the same thing (§7).
+      scene.onObjectClick = (id) => { objectClick(appStores.prompt.getState(), id); };
+
+      // Hover previews any face-up card, anchored beside the live actor (§9/§10).
+      scene.onObjectHover = (id, anchor) => {
+        if (id === undefined) { hoverCard(undefined); return; }
+        const card = findObject(appStores.game.getState().state!, id);
+        if (card !== undefined) hoverCard(card, anchor);
+      };
+
       // The director (§6.3) diffs consecutive states itself, so hand it the
       // authoritative state + the advisory events that rode on the transition
       // into it (game store `lastEvents`); it decides animate-vs-snap. Gate on
@@ -47,17 +59,23 @@ export function TableCanvas(): React.JSX.Element {
         scene.present(g.state, g.lastEvents);
       };
       paint();
-      unsub = appStores.game.subscribe(paint);
+      unsubs.push(appStores.game.subscribe(paint));
+
+      // Board affordances + the §6.4 flush / §14 pull-back key off the prompt.
+      // Selection scratch (chooseTargets) also lives in this store, so a toggle
+      // re-renders the highlight without a new promptId.
+      const syncPrompt = (): void => scene.setPrompt(appStores.prompt.getState());
+      syncPrompt();
+      unsubs.push(appStores.prompt.subscribe(syncPrompt));
+
       observer = new ResizeObserver(() => scene.resize());
       observer.observe(host);
-      window.addEventListener('keydown', onKey);
     });
 
     return () => {
       disposed = true;
-      unsub?.();
+      for (const u of unsubs) u();
       observer?.disconnect();
-      window.removeEventListener('keydown', onKey);
       scene.destroy();
     };
   }, []);

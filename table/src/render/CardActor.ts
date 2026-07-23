@@ -6,12 +6,14 @@
 // completes exactly when the director advances `presented` — no exponential
 // chase, so snap (duration 0) and burst-compression are both exact.
 
-import { Container, Sprite, type Texture } from 'pixi.js';
+import { Container, Graphics, Sprite, type Texture } from 'pixi.js';
 import type { ActorPlacement, ActorSpace, Transform } from '../layout/types';
+import type { HighlightSpec } from '../scene/interaction';
 
 // Re-exported for existing importers; the definitions live in the Pixi-free
-// layout/types so the whole layout tier stays headless.
+// layout/types (and scene/interaction) so those tiers stay headless.
 export type { ActorPlacement, Transform } from '../layout/types';
+export type { HighlightSpec } from '../scene/interaction';
 
 const TWO_PI = Math.PI * 2;
 
@@ -28,7 +30,9 @@ function angleDelta(a: number, b: number): number {
 
 export class CardActor {
   readonly view = new Container();
+  private readonly highlight = new Graphics();   // affordance ring, behind the sprite
   private readonly sprite: Sprite;
+  private highlightSpec: HighlightSpec | undefined;
   private readonly from: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly current: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly target: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
@@ -48,12 +52,33 @@ export class CardActor {
   ) {
     this.sprite = new Sprite(texture);
     this.sprite.anchor.set(0.5);
-    this.view.addChild(this.sprite);
+    this.view.addChild(this.highlight, this.sprite);   // ring behind the face
   }
 
   setTexture(texture: Texture): void {
     this.sprite.texture = texture;
   }
+
+  /** Paint (or clear) the affordance ring (§7). Sized in the sprite's own local
+   *  coords so it scales with the card; the ring sits just outside the face. */
+  setHighlight(spec: HighlightSpec | undefined): void {
+    if (sameHighlight(this.highlightSpec, spec)) return;
+    this.highlightSpec = spec;
+    const g = this.highlight.clear();
+    if (spec === undefined) return;
+    const w = this.sprite.texture.width;
+    const h = this.sprite.texture.height;
+    const pad = Math.round(w * 0.06);
+    if (spec.selected === true) {
+      g.roundRect(-w / 2 - pad, -h / 2 - pad, w + 2 * pad, h + 2 * pad, 12)
+        .fill({ color: spec.color, alpha: 0.22 });
+    }
+    g.roundRect(-w / 2 - pad, -h / 2 - pad, w + 2 * pad, h + 2 * pad, 12)
+      .stroke({ width: Math.max(4, Math.round(w * 0.035)), color: spec.color, alpha: spec.dim === true ? 0.4 : 1 });
+  }
+
+  /** Whether this actor currently offers a click affordance (drives the cursor). */
+  get highlighted(): boolean { return this.highlightSpec !== undefined; }
 
   /** Jump instantly to `p` — first sight, snap steps, or the reduced-motion cut. */
   snapTo(p: ActorPlacement): void {
@@ -120,4 +145,9 @@ export class CardActor {
 
 function transformOf(p: ActorPlacement): Transform {
   return { x: p.x, y: p.y, rotation: p.rotation, scale: p.scale };
+}
+
+function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.color === b.color && a.selected === b.selected && a.dim === b.dim;
 }

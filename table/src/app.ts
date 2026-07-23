@@ -41,9 +41,12 @@ export function seedDemo(): void {
 }
 
 export function bootApp(): void {
-  // T0 renders the seeded keyframe offline; connecting the socket is deferred to
-  // the interaction milestones (T3) — nothing here dials the bridge yet.
-  seedDemo();
+  // T3: the client is interactive — dial the bridge and start at Home, exactly
+  // like the classic client. `?demo` still seeds the offline demo table (visual
+  // dev + the headless boot smoke); a live keyframe overwrites it, and if no
+  // bridge answers the demo simply stays on screen.
+  if (typeof location !== 'undefined' && location.search.includes('demo')) seedDemo();
+  appManager.connect();
 }
 
 // Semantic harness (§12), identical contract to the classic client. scene()

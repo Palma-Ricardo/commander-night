@@ -15,7 +15,10 @@
 // onto that stable key via `stackLink` (scene/keys.ts), unifying cast → resolve.
 
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { Card, GameEvent, GameState, Id, NightScene, SceneActor } from '@night/core';
+import type { FederatedPointerEvent } from 'pixi.js';
+import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, Zone } from '@night/core';
+import { affordanceFor } from '@night/core/state/selectors';
+import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
 import { CardTextures } from '../render/textures';
 import { NAMEPLATE, seatLayouts, WORLD, type PileZone, type SeatLayout } from '../layout/world';
@@ -23,6 +26,10 @@ import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/
 import { camera, worldToScreen, screenToWorld, type CameraPreset } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
+import { promptObjectIds } from './prompt-objects';
+import {
+  highlightForAffordance, isClickable, rectContains, screenAnchor, type ScreenAnchor,
+} from './interaction';
 
 const RAIL = 0x0e0b08;      // the floor the table sits on
 const FELT = 0x1f3a2e;
@@ -49,6 +56,21 @@ export class TableScene implements DirectorSink {
   private readonly screenActors = new Container();  // fixed (the hand)
   private readonly actors = new Map<string, CardActor>();
 
+  // ── interaction (T3) ─────────────────────────────────────────────────────────
+  /** The pending prompt + selection scratch, so the scene can derive board
+   *  affordances (§7) exactly as the classic client's CardView does. */
+  private currentPrompt: PromptStoreState | undefined;
+  private lastPromptId: number | undefined;
+  private lastViewKey = '';
+  /** Raised on a semantic click / hover; the chrome (TableCanvas) wires these to
+   *  the shared @night/core click router and the hover store, so the scene stays
+   *  free of any React-chrome import. */
+  onObjectClick?: (objectId: Id) => void;
+  onObjectHover?: (objectId: Id | undefined, anchor?: ScreenAnchor) => void;
+  /** Raised when the felt (an empty quadrant / a nameplate) is clicked — a manual
+   *  camera focus (§7.3). */
+  onFocusSeat?: (display: number) => void;
+
   async mount(parent: HTMLElement): Promise<void> {
     this.app = new Application();
     await this.app.init({
@@ -60,6 +82,12 @@ export class TableScene implements DirectorSink {
 
     this.worldLayer.addChild(this.feltG, this.furniture, this.worldActors);
     this.app.stage.addChild(this.worldLayer, this.screenActors);
+
+    // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
+    // felt sits under the actors in z-order, so a card tap is picked first; only a
+    // tap on bare cloth (or a nameplate, which falls through) reaches here.
+    this.feltG.eventMode = 'static';
+    this.feltG.on('pointertap', (e: FederatedPointerEvent) => this.handleFeltTap(e));
 
     const reducedMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
@@ -120,7 +148,7 @@ export class TableScene implements DirectorSink {
       }
       if (duration > 0) actor.animateTo(p.placement, duration);
       else actor.snapTo(p.placement);
-      actor.view.alpha = this.dimAlpha(p, focusedId);
+      actor.view.alpha = this.dimAlpha(p.space, p.placement.zone, p.placement.ownerId, focusedId);
     }
 
     for (const [key, actor] of this.actors) {
@@ -129,6 +157,7 @@ export class TableScene implements DirectorSink {
 
     this.drawFelt();
     this.drawFurniture(to);
+    this.refreshAffordances();   // newly-created actors need their §7 highlights
   }
 
   frame(dtMs: number, preset: CameraPreset): void {
@@ -136,13 +165,29 @@ export class TableScene implements DirectorSink {
     this.worldLayer.scale.set(preset.scale);
     this.worldLayer.position.set(preset.x, preset.y);
     // preset.tilt is the T4 perspective concern; T2 keeps the world flat.
+    // Re-dim only when the focused seat actually changed (a manual camera move
+    // has no state transition to re-apply §7.3 dimming, so do it here).
+    const key = this.cameraViewKey();
+    if (key !== this.lastViewKey) { this.lastViewKey = key; this.redim(); }
+  }
+
+  private cameraViewKey(): string {
+    const v = this.director.cameraView();
+    return v.kind === 'table' ? 'table' : `seat:${v.seat}`;
   }
 
   // ── actor helpers ────────────────────────────────────────────────────────────
 
   private createActor(key: string, p: PlacedActor): CardActor {
     const tex = p.card !== undefined ? this.textures.face(p.card, 'table') : this.textures.faceDown();
-    return new CardActor(key, p.objectId, tex);
+    const actor = new CardActor(key, p.objectId, tex);
+    // Every actor is hit-testable (§10: Pixi owns the table). Clicks route through
+    // the pending prompt's affordance; hover previews any face-up card.
+    actor.view.eventMode = 'static';
+    actor.view.on('pointertap', () => this.handleActorTap(actor));
+    actor.view.on('pointerover', () => this.handleActorOver(actor));
+    actor.view.on('pointerout', () => this.handleActorOut(actor));
+    return actor;
   }
 
   private refreshTexture(actor: CardActor, p: PlacedActor): void {
@@ -212,10 +257,96 @@ export class TableScene implements DirectorSink {
   }
 
   /** Unfocused seats dim (design §7.3); the contested stack and your hand never do. */
-  private dimAlpha(p: PlacedActor, focusedId: Id | undefined): number {
-    if (focusedId === undefined || p.space === 'screen') return 1;
-    if (p.placement.zone === 'stack') return 1;
-    return p.placement.ownerId === focusedId ? 1 : DIM_ALPHA;
+  private dimAlpha(space: ActorSpace, zone: Zone, ownerId: Id | undefined, focusedId: Id | undefined): number {
+    if (focusedId === undefined || space === 'screen') return 1;
+    if (zone === 'stack') return 1;
+    return ownerId === focusedId ? 1 : DIM_ALPHA;
+  }
+
+  /** Re-apply §7.3 dimming to every actor for the current camera focus. Called on
+   *  a camera-view change (which carries no state transition to re-dim through). */
+  private redim(): void {
+    const state = this.director.presented;
+    if (state === undefined) return;
+    const focusedId = this.focusedPlayerId(state);
+    for (const a of this.actors.values()) {
+      a.view.alpha = this.dimAlpha(a.space, a.placement.zone, a.placement.ownerId, focusedId);
+    }
+  }
+
+  // ── interaction (T3): affordances, hit-testing, hover, prompt-driven camera ────
+
+  /** Feed the pending prompt (+ selection scratch) so the board can highlight
+   *  candidates and route clicks (§7). On a *new* prompt for this seat, catch the
+   *  board up under the §6.4 budget so affordances are actionable, then run the
+   *  §14 pull-back if a named object is off-screen under a manual pin. */
+  setPrompt(prompt: PromptStoreState | undefined): void {
+    const newId = prompt?.pending?.promptId;
+    const changed = newId !== this.lastPromptId;
+    this.currentPrompt = prompt;
+    this.refreshAffordances();
+    if (changed && prompt?.pending !== undefined) {
+      this.director.flush();          // §6.4: input never waits on animation
+      this.pullBackForPrompt(prompt); // §14: keep the asked-about objects in shot
+    }
+    this.lastPromptId = newId;
+  }
+
+  /** Paint each actor's affordance ring and set its cursor (§7). Pure over the
+   *  stored prompt + the live actors, so it is safe to call on every prompt or
+   *  transition change. */
+  private refreshAffordances(): void {
+    const prompt = this.currentPrompt;
+    for (const a of this.actors.values()) {
+      const aff = prompt !== undefined && a.objectId !== undefined
+        ? affordanceFor(prompt, a.objectId) : undefined;
+      a.setHighlight(highlightForAffordance(aff));
+      a.view.cursor = isClickable(aff) ? 'pointer' : 'default';
+    }
+  }
+
+  private handleActorTap(actor: CardActor): void {
+    if (actor.objectId !== undefined) this.onObjectClick?.(actor.objectId);
+  }
+
+  private handleActorOver(actor: CardActor): void {
+    if (actor.objectId !== undefined && actor.placement.faceUp) {
+      this.onObjectHover?.(actor.objectId, this.actorAnchor(actor));
+    }
+  }
+
+  private handleActorOut(_actor: CardActor): void {
+    this.onObjectHover?.(undefined);
+  }
+
+  /** The on-screen rect of an actor's card face, for anchoring a DOM hover
+   *  preview (§10 sceneToScreen). Composes layout with the live camera preset;
+   *  world actors project through it, the screen-space hand does not. */
+  private actorAnchor(actor: CardActor): ScreenAnchor {
+    return screenAnchor(actor.space, actor.pos, actor.placement.scale, this.director.cameraPreset());
+  }
+
+  private handleFeltTap(e: FederatedPointerEvent): void {
+    const state = this.director.presented;
+    if (state === undefined) return;
+    const local = e.getLocalPosition(this.worldLayer);   // world coords
+    const seat = seatLayouts(state).findIndex(s => rectContains(s.quadrant, local));
+    if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
+  }
+
+  /** §14: pull back to the whole table if a card the prompt names sits off-screen
+   *  under the current (manual) camera. Screen-space objects (your hand) are
+   *  always visible, so only world actors contribute points. */
+  private pullBackForPrompt(prompt: PromptStoreState): void {
+    const ids = new Set(promptObjectIds(prompt));
+    if (ids.size === 0) return;
+    const pts: Point[] = [];
+    for (const a of this.actors.values()) {
+      if (a.objectId !== undefined && a.space === 'world' && ids.has(a.objectId)) {
+        pts.push({ x: a.placement.x, y: a.placement.y });
+      }
+    }
+    this.director.ensureVisible(pts);
   }
 
   // ── camera controls (design §7.3), delegated to the director ──────────────────
