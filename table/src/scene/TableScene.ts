@@ -854,30 +854,39 @@ export class TableScene implements DirectorSink {
       new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: INK, fontWeight: '700' }),
       1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
     );
-    this.drawCommanderDamage(box.x, box.y, commanderDamageRows(state, p));
+    this.drawCommanderDamage(seat, commanderDamageRows(state, p));
   }
 
-  /** Commander-damage chips (§6), one per attacking commander, in a strip to the
-   *  right of the plate — a red pill of "⚔ <commander> N" so lethal (21) creeps up
-   *  where the victim reads it, without tracing a combat arrow. Chip boxes keystone;
-   *  their text billboards. */
-  private drawCommanderDamage(bx: number, by: number, rows: { commander: string; amount: number }[]): void {
-    let x = NAMEPLATE.w + 8;
-    const h = 22;
-    for (const row of rows) {
+  /** Commander-damage chips (§6), one per attacking commander — a red pill of
+   *  "⚔ <commander> N" so lethal (21) creeps up where the victim reads it, without
+   *  tracing a combat arrow. Laid in a strip on the *rail side* of the plate (below
+   *  a near seat, above a far seat), centred under it: the old strip ran off the
+   *  right of the plate, straight under an opponent's inboard hand fan, which hid it
+   *  (reviewed 2026-07-23). Chip boxes keystone; their text billboards. */
+  private drawCommanderDamage(seat: SeatLayout, rows: { commander: string; amount: number }[]): void {
+    if (rows.length === 0) return;
+    const h = 18;
+    const gap = 5;
+    const centerX = seat.nameplate.x + NAMEPLATE.w / 2;
+    const chips = rows.map(row => {
       const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
-      const style = new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 14, fill: DMG_INK, fontWeight: '700' });
+      const style = new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 13, fill: DMG_INK, fontWeight: '700' });
       const node = new Text({ text: `⚔ ${short} ${row.amount}`, style });
-      const w = Math.round(node.width) + 12;
+      return { node, w: Math.round(node.width) + 12 };
+    });
+    const totalW = chips.reduce((s, c) => s + c.w, 0) + gap * (chips.length - 1);
+    const cy = seat.bandY + seat.out * (NAMEPLATE.h / 2 + h / 2 + 2);
+    let x = centerX - totalW / 2;
+    for (const chip of chips) {
       this.shapeSpecs.push({
-        rect: { x: bx + x, y: by + NAMEPLATE.h / 2 - h / 2, w, h },
+        rect: { x, y: cy - h / 2, w: chip.w, h },
         fill: { color: DMG_FILL, alpha: 1 },
         stroke: { width: 1, color: DMG_EDGE, alpha: 1 },
       });
-      node.anchor.set(0, 0.5);
-      this.furnitureText.addChild(node);
-      this.textItems.push({ node, anchor: { x: bx + x + 6, y: by + NAMEPLATE.h / 2 } });
-      x += w + 5;
+      chip.node.anchor.set(0, 0.5);
+      this.furnitureText.addChild(chip.node);
+      this.textItems.push({ node: chip.node, anchor: { x: x + 6, y: cy } });
+      x += chip.w + gap;
     }
   }
 

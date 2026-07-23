@@ -156,6 +156,10 @@ const marta = seat('p4', 'Marta', false, 31, {
       { manaCost: '{4}', subtypes: ['Golem'], power: '2', toughness: '2' })),
   ],
   handSize: 3, librarySize: 68,
+  // Marta is a left-corner seat, so her held fan sits to the right of the plate —
+  // right where the commander-damage strip used to run, hiding it. Krenko has been
+  // swinging (the strip now sits on the rail side of the plate, clear of the fan).
+  commanderDamage: [{ fromCommanderId: krenko.id, amount: 15 }],
 });
 
 export const demoKeyframe: StateKeyframe = {
