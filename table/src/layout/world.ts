@@ -246,16 +246,21 @@ function place(
 // Forests or eight Saprolings are interchangeable, eight distinct nonbasics are
 // not — and even then never across a difference the board must show: tapped, sick,
 // counters, or P/T all split the stack, and any individuated permanent (attached,
-// damaged, morphed, flipped, a copy) refuses to stack at all. undefined ⇒ singleton.
+// damaged, morphed, flipped) refuses to stack at all. Token *copies* do stack with
+// each other — two identical Sandwurm Convergence copies (Anikthea + Doubling
+// Season) are interchangeable — so `copy` folds into the key rather than
+// disqualifying, keeping copies apart from a real printing but merging like copies.
+// undefined ⇒ singleton.
 function stackKey(p: Permanent): string | undefined {
   const basicLand = p.types.includes('LAND') && p.supertypes.includes('Basic');
   if (!basicLand && p.token !== true) return undefined;
   if ((p.attachments?.length ?? 0) > 0 || p.attachedTo !== undefined) return undefined;
   if ((p.damage ?? 0) > 0 || p.morph !== undefined || p.flipped === true
-    || p.transformed === true || p.copy === true || (p.faceDown ?? false)) return undefined;
+    || p.transformed === true || (p.faceDown ?? false)) return undefined;
   const counters = (p.counters ?? []).map(c => `${c.name}=${c.count}`).sort().join(',');
   return [
     p.token === true ? 'tok' : 'basic', p.name,
+    p.copy === true ? 'copy' : '_',
     p.tapped ? 'T' : 'U', p.summoningSick === true ? 'S' : '_',
     p.power ?? '', p.toughness ?? '', counters,
   ].join('|');

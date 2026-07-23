@@ -35,17 +35,32 @@ function perm(controllerId: string, c: Card, opts: { tapped?: boolean } = {}): P
   return { ...c, controllerId, tapped: opts.tapped ?? false };
 }
 
+// Every card carries a *real* set + collector number so the Scryfall ladder's
+// first rung (cards/{set}/{number}) resolves the correct art. The old fixture
+// hardcoded CMR/1..13, so cards/cmr/1 returned whatever shares that number — a
+// Plains rendered as "The Prismatic Piper" (CMR #1). A faithful-art harness is
+// the whole point of the T4 review loop, so these are pinned to printings whose
+// cards/{set}/{number} was verified to return the right card.
+
 // The basic lands — flagged Basic on the wire (mage's SuperType.BASIC), which is
 // what lets the table collapse a fistful of Forests into one ×N cell (T4).
-const land = (name: string, colors: Card['colors']): Card =>
-  card(name, 'CMR', '1', 0, ['LAND'], { colors, supertypes: ['Basic'], text: [`{T}: Add mana.`] });
+const BASIC_PRINTING: Record<string, [string, string]> = {
+  Plains: ['msc', '866'], Island: ['msh', '289'], Swamp: ['msh', '291'],
+  Mountain: ['msc', '858'], Forest: ['msh', '295'],
+};
+const land = (name: string, colors: Card['colors']): Card => {
+  const [set, number] = BASIC_PRINTING[name] ?? ['msh', '295'];
+  return card(name, set, number, 0, ['LAND'], { colors, supertypes: ['Basic'], text: [`{T}: Add mana.`] });
+};
 
 const goblin = (): Permanent =>
   perm('p2', card('Goblin Token', 'CMR', '', 0, ['CREATURE'],
     { colors: ['R'], subtypes: ['Goblin'], power: '1', toughness: '1', text: [], token: true, imageNumber: 0 }));
 
-const commander = (name: string, colors: Card['colors'], mc: string, pt: [string, string]): CommandObject => ({
-  ...card(name, 'CMR', '2', mc.replace(/[^0-9]/g, '').length, ['LEGENDARY', 'CREATURE'],
+const commander = (
+  name: string, set: string, number: string, colors: Card['colors'], mc: string, pt: [string, string],
+): CommandObject => ({
+  ...card(name, set, number, mc.replace(/[^0-9]/g, '').length, ['LEGENDARY', 'CREATURE'],
     { manaCost: mc, colors, supertypes: ['Legendary'], power: pt[0], toughness: pt[1] }),
   kind: 'commander',
 });
@@ -74,13 +89,13 @@ function seat(id: string, name: string, human: boolean, life: number, opts: {
 // Two opponents' commanders are hoisted so You can carry commander damage from
 // them (the plate chips, T4): the *same* object must sit in the dealer's command
 // zone for the name to resolve (commanderDamageRows → objectName).
-const krenko = commander('Krenko, Mob Boss', ['R'], '{2}{R}{R}', ['3', '3']);
-const martaCmdr = commander('Marta, Relic Warden', ['W', 'B'], '{2}{W}{B}', ['3', '4']);
+const krenko = commander('Krenko, Mob Boss', 'fdn', '204', ['R'], '{2}{R}{R}', ['3', '3']);
+const martaCmdr = commander('Elenda, the Dusk Rose', 'lcc', '268', ['W', 'B'], '{2}{W}{B}', ['1', '0']);
 
 // ── the four seats ────────────────────────────────────────────────────────────
 
 const you = seat('p1', 'You', true, 34, {
-  commander: commander("Muldrotha, the Gravetide", ['B', 'G', 'U'], '{3}{B}{G}{U}', ['6', '6']),
+  commander: commander('Muldrotha, the Gravetide', 'ecc', '128', ['B', 'G', 'U'], '{3}{B}{G}{U}', ['6', '6']),
   battlefield: [
     perm('p1', land('Forest', ['G'])),
     perm('p1', land('Forest', ['G'])),
@@ -88,16 +103,16 @@ const you = seat('p1', 'You', true, 34, {
     perm('p1', land('Island', ['U'])),
     perm('p1', land('Island', ['U'])),
     perm('p1', land('Swamp', ['B'])),
-    perm('p1', card('Sol Ring', 'CMR', '3', 1, ['ARTIFACT'], { manaCost: '{1}', text: ['{T}: Add {C}{C}.'] })),
-    perm('p1', card('Sakura-Tribe Elder', 'CMR', '4', 2, ['CREATURE'],
+    perm('p1', card('Sol Ring', 'msc', '211', 1, ['ARTIFACT'], { manaCost: '{1}', text: ['{T}: Add {C}{C}.'] })),
+    perm('p1', card('Sakura-Tribe Elder', 'soc', '285', 2, ['CREATURE'],
       { manaCost: '{1}{G}', colors: ['G'], subtypes: ['Snake', 'Shaman'], power: '1', toughness: '1' })),
   ],
-  graveyard: [card('Eternal Witness', 'CMR', '5', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' })],
+  graveyard: [card('Eternal Witness', 'cmm', '286', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' })],
   handSize: 4, librarySize: 71,
   // Mid-cast: two Forests + Sol Ring tapped for Cultivate leave floating mana, so
   // the bottom-left pool window shows real glyph pips (T4 mana symbols).
   manaPool: { W: 0, U: 1, B: 0, R: 0, G: 2, C: 1 },
-  // Beating on since turn 6: Krenko's swarm and Marta's warden have both connected.
+  // Beating on since turn 6: Krenko's swarm and Elenda have both connected.
   commanderDamage: [
     { fromCommanderId: krenko.id, amount: 9 },
     { fromCommanderId: martaCmdr.id, amount: 4 },
@@ -117,16 +132,16 @@ const ana = seat('p2', 'Ana', false, 22, {
     goblin(), goblin(), goblin(), goblin(),
     { ...goblin(), tapped: true },
   ],
-  graveyard: [card('Lightning Bolt', 'CMR', '6', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage.'] })],
+  graveyard: [card('Lightning Bolt', 'msc', '806', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage.'] })],
   handSize: 2, librarySize: 63,
 });
 
 const tom = seat('p3', 'Tom', false, 40, {
-  commander: commander('Tom, the Foretold', ['W', 'U'], '{2}{W}{U}', ['4', '5']),
+  commander: commander('Brago, King Eternal', 'khc', '82', ['W', 'U'], '{2}{W}{U}', ['2', '4']),
   battlefield: [
     perm('p3', land('Plains', ['W'])),
     perm('p3', land('Island', ['U'])),
-    perm('p3', card('Wall of Omens', 'CMR', '7', 2, ['CREATURE'],
+    perm('p3', card('Wall of Omens', 'tdc', '138', 2, ['CREATURE'],
       { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Wall'], power: '0', toughness: '4' })),
   ],
   handSize: 6, librarySize: 74,
@@ -137,7 +152,7 @@ const marta = seat('p4', 'Marta', false, 31, {
   battlefield: [
     perm('p4', land('Plains', ['W']), { tapped: true }),
     perm('p4', land('Swamp', ['B'])),
-    perm('p4', card('Solemn Simulacrum', 'CMR', '8', 4, ['ARTIFACT', 'CREATURE'],
+    perm('p4', card('Solemn Simulacrum', 'msc', '215', 4, ['ARTIFACT', 'CREATURE'],
       { manaCost: '{4}', subtypes: ['Golem'], power: '2', toughness: '2' })),
   ],
   handSize: 3, librarySize: 68,
@@ -156,17 +171,17 @@ export const demoKeyframe: StateKeyframe = {
     stack: [
       {
         id: uuid('stk'), kind: 'spell', controllerId: 'p1', text: [],
-        card: card('Cultivate', 'CMR', '9', 3, ['SORCERY'],
+        card: card('Cultivate', 'msc', '172', 3, ['SORCERY'],
           { manaCost: '{2}{G}', colors: ['G'], text: ['Search your library for two basic lands.'] }),
       },
     ],
     me: {
       playerId: 'p1',
       hand: [
-        card('Llanowar Elves', 'CMR', '10', 1, ['CREATURE'], { manaCost: '{G}', colors: ['G'], power: '1', toughness: '1' }),
-        card('Counterspell', 'CMR', '11', 2, ['INSTANT'], { manaCost: '{U}{U}', colors: ['U'], text: ['Counter target spell.'] }),
-        card('Reclamation Sage', 'CMR', '12', 3, ['CREATURE'], { manaCost: '{2}{G}', colors: ['G'], power: '2', toughness: '1' }),
-        card('Command Tower', 'CMR', '13', 0, ['LAND'], { text: ['{T}: Add one mana of any color in your commander’s identity.'] }),
+        card('Llanowar Elves', 'fdn', '227', 1, ['CREATURE'], { manaCost: '{G}', colors: ['G'], power: '1', toughness: '1' }),
+        card('Counterspell', 'dsc', '114', 2, ['INSTANT'], { manaCost: '{U}{U}', colors: ['U'], text: ['Counter target spell.'] }),
+        card('Reclamation Sage', 'fdn', '231', 3, ['CREATURE'], { manaCost: '{2}{G}', colors: ['G'], power: '2', toughness: '1' }),
+        card('Command Tower', 'msc', '233', 0, ['LAND'], { text: ['{T}: Add one mana of any color in your commander’s identity.'] }),
       ],
     },
   },

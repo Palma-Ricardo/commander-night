@@ -109,10 +109,15 @@ export class CardActor {
     const tapped = artbox && p.tapped === true;
     const w = this.texW;
     const h = this.texH;
-    const pt = artbox && card.power !== undefined && card.toughness !== undefined
+    // Only creatures carry a P/T badge. XMage ships power/toughness as "0"/"0" for
+    // lands and enchantments too, so gating on `power !== undefined` alone painted a
+    // spurious "0/0" on every land — gate on the CREATURE type instead.
+    const pt = artbox && card.types.includes('CREATURE')
+      && card.power !== undefined && card.toughness !== undefined
       ? `${card.power}/${card.toughness}` : '';
+    const counters = artbox ? countersLabel(card.counters) : '';
     const count = artbox ? Math.max(1, Math.round(p.count ?? 1)) : 1;
-    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${count}`;
+    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${counters}|${count}`;
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
@@ -121,6 +126,7 @@ export class CardActor {
     for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
+    if (counters !== '') this.chrome.addChild(counterBadge(counters, w, h));
     if (tapped) this.chrome.addChild(tapGlyph(w, h));
     if (count > 1) this.chrome.addChild(countBadge(count, w, h));
   }
@@ -339,6 +345,9 @@ function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefine
 const TAP_DIM = 0x8b8b8b;   // face tint for a tapped permanent (~55% brightness)
 const DEATH_TINT = 0x4a4640;   // grave-grey the face desaturates toward as it dies (§9)
 const DEATH_TIP = 0.42;        // radians a dying card tips over as it falls to the pile
+// Corner radius of the embossed metal chrome (P/T / counter / count plates). A
+// small radius reads as bevelled brass, not a soft stadium pill (reviewed 2026-07-23).
+const PLATE_RADIUS = 4;
 
 /** Blend two packed 0xRRGGBB colours, `t` 0 ⇒ a, 1 ⇒ b (per-channel linear). */
 function mixColor(a: number, b: number, t: number): number {
@@ -360,7 +369,7 @@ function ptBadge(pt: string, w: number, h: number, edge: number): Container {
     style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 20, fill: 0x24252c, fontWeight: '700' }),
   });
   label.anchor.set(0.5, 0.5);
-  const bw = Math.max(label.width + 18, 38), bh = label.height + 6, r = bh / 2;
+  const bw = Math.max(label.width + 18, 38), bh = label.height + 6, r = PLATE_RADIUS;
   const g = new Graphics();
   g.roundRect(-bw / 2, -bh / 2, bw, bh, r).fill(0xe1d9c0);                    // cream face
   g.moveTo(-bw / 2 + r, -bh / 2 + 1.5).lineTo(bw / 2 - r, -bh / 2 + 1.5)
@@ -375,6 +384,48 @@ function ptBadge(pt: string, w: number, h: number, edge: number): Container {
   return c;
 }
 
+/** Compact label for a permanent's counters — the buffed P/T is already on the
+ *  badge, so this is the "why": `+1/+1` and `-1/-1` collapse to a signed pair,
+ *  anything else (charge, loyalty, oil, …) reads as `N× name`. Multiple kinds
+ *  join on one plate. Empty ⇒ no counter chrome. */
+function countersLabel(counters: Card['counters']): string {
+  if (counters === undefined || counters.length === 0) return '';
+  return counters
+    .filter(c => c.count !== 0)
+    .map(c => {
+      const n = c.name.toLowerCase();
+      if (n === '+1/+1') return `+${c.count}/+${c.count}`;
+      if (n === '-1/-1') return `−${c.count}/−${c.count}`;
+      const short = c.name.length > 8 ? c.name.slice(0, 8) : c.name;
+      return `${c.count}× ${short}`;
+    })
+    .join('  ');
+}
+
+/** A counter plate pinned to the card's top-right — cream-on-ink like the count
+ *  tally, tinted green for growth (+1/+1) and red for shrink (−1/−1) so the sign
+ *  reads at a glance. Top-left holds the ×N collapse tally, so these never clash. */
+function counterBadge(label: string, w: number, h: number): Container {
+  const c = new Container();
+  const grow = label.startsWith('+');
+  const shrink = label.startsWith('−');
+  const ink = grow ? 0x9be8a8 : shrink ? 0xf0a89a : 0xe1d9c0;
+  const text = new Text({
+    text: label,
+    style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 18, fill: ink, fontWeight: '700' }),
+  });
+  text.anchor.set(0.5, 0.5);
+  const bw = Math.max(text.width + 14, 30), bh = text.height + 5, r = PLATE_RADIUS;
+  const g = new Graphics();
+  g.roundRect(-bw / 2, -bh / 2, bw, bh, r).fill({ color: 0x24252c, alpha: 0.92 });   // ink face
+  g.roundRect(-bw / 2 + 0.9, -bh / 2 + 0.9, bw - 1.8, bh - 1.8, r)
+    .stroke({ width: 1.5, color: ink, alpha: 0.5 });                                 // tinted edge
+  text.position.set(0, -1);
+  c.addChild(g, text);
+  c.position.set(w / 2 - bw / 2 - 6, -h / 2 + bh / 2 + 6);                           // top-right inset
+  return c;
+}
+
 /** A "×N" tally for a collapsed stack of identical permanents (basics/tokens),
  *  pinned to the card's top-left — the corner the P/T badge (bottom-right) and the
  *  tap glyph (centre) never reach. Cream-on-ink so it reads over any art. */
@@ -385,7 +436,7 @@ function countBadge(n: number, w: number, h: number): Container {
     style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 19, fill: 0xe1d9c0, fontWeight: '700' }),
   });
   label.anchor.set(0.5, 0.5);
-  const bw = Math.max(label.width + 14, 30), bh = label.height + 5, r = bh / 2;
+  const bw = Math.max(label.width + 14, 30), bh = label.height + 5, r = PLATE_RADIUS;
   const g = new Graphics();
   g.roundRect(-bw / 2, -bh / 2, bw, bh, r).fill({ color: 0x24252c, alpha: 0.92 });   // ink face
   g.roundRect(-bw / 2 + 0.9, -bh / 2 + 0.9, bw - 1.8, bh - 1.8, r)

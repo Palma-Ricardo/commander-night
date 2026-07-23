@@ -56,6 +56,14 @@ function cssHex(n: number): string {
   return `#${n.toString(16).padStart(6, '0')}`;
 }
 
+/** A distinct URL for the CORS (WebGL) image fetch, so its browser-cache entry can
+ *  never collide with a plain `<img>` no-cors entry for the same card (which lacks
+ *  the `access-control-allow-origin` header and would poison the CORS load). The
+ *  extra query param is inert to Scryfall's CDN. */
+function corsCacheKey(url: string): string {
+  return url + (url.includes('?') ? '&' : '?') + 'night-cors';
+}
+
 /** Derive a card's `art_crop` (just the illustration, ~626×457) from the resolver's
  *  `normal`/`large`/`small` URL by swapping the CDN size segment (design T4). A URL
  *  we don't recognise is returned unchanged — the art-box builder then cover-fits
@@ -201,8 +209,17 @@ export class CardTextures {
   }
 
   /** Load a resolved Scryfall image, build a tier texture from it (`build`), and
-   *  cache it under `url` in `into`. `crossOrigin='anonymous'` keeps the WebGL
-   *  upload untainted — Scryfall serves `access-control-allow-origin: *`. */
+   *  cache it under `url` in `into`. `crossOrigin='anonymous'` is required so the
+   *  decoded pixels can be uploaded to a WebGL texture untainted.
+   *
+   *  Scryfall's CDN returns `access-control-allow-origin: *` **only when the
+   *  request carries an `Origin` header** (and sets `vary: Origin` there). A plain
+   *  `<img>` — the classic client, and our own DOM hover preview (§10) — is a
+   *  no-cors request that sends no Origin, so its cached response has neither ACAO
+   *  nor `vary`. The browser then reuses that poisoned entry for this CORS request
+   *  and blocks it ("No 'Access-Control-Allow-Origin' header is present"). We give
+   *  the CORS load its own cache key (`&night-cors`) so it can never collide with a
+   *  no-cors entry and always sees the ACAO response. Scryfall ignores the param. */
   private loadImage(url: string, into: Map<string, Texture>, build: (img: HTMLImageElement) => Texture): void {
     if (into.has(url) || this.loading.has(url)) return;
     this.loading.add(url);
@@ -217,7 +234,7 @@ export class CardTextures {
       } catch { /* upload failed — the fallback frame stays, still fully playable */ }
     };
     image.onerror = () => { this.loading.delete(url); };
-    image.src = url;
+    image.src = corsCacheKey(url);
   }
 
   /** Portrait card art, downscaled to the table tier (§10 VRAM budget). */
@@ -346,8 +363,9 @@ function artboxCanvas(card: Card, image?: HTMLImageElement): Texture {
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Embossed name plate + engraved name.
-  drawEmbossPill(ctx, pad, 4, w - 2 * pad, nameH - 8, (nameH - 8) / 2, edge);
+  // Embossed name plate + engraved name. A small corner radius reads as a bevelled
+  // brass bar, not a soft stadium pill (reviewed 2026-07-23).
+  drawEmbossPill(ctx, pad, 4, w - 2 * pad, nameH - 8, 4, edge);
   ctx.font = '600 15px Georgia, serif';
   ctx.textBaseline = 'middle';
   const name = ellipsize(ctx, card.name, w - 2 * pad - 20);
