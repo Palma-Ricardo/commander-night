@@ -92,6 +92,32 @@ describe('deep GameState validation', () => {
     expect(msg.state.stack[0]?.targets).toEqual(['perm-1']);
   });
 
+  it('accepts imageNumber on token cards in strict mode (§6 tokens-only art discriminator)', () => {
+    // Regression guard. Live 2026-07-23 a token copy on the stack carried
+    // imageNumber (XMage TokenInfo.imageNumber, set by ViewTranslator for tokens);
+    // the type + spec both define the field but cardShape.opt omitted it, so
+    // dev-strict decode rejected `stack[2].card.imageNumber` as unknown — dropping
+    // the keyframe and forcing a resync. Cover both the stack path (the exact live
+    // site) and a battlefield permanent (Permanent inherits the card shape).
+    const doctored = JSON.parse(stateSample) as {
+      state: {
+        players: { battlefield: Record<string, unknown>[] }[];
+        stack: { card: Record<string, unknown> }[];
+      };
+    };
+    doctored.state.stack[0]!.card!.token = true;
+    doctored.state.stack[0]!.card!.imageNumber = 3;
+    doctored.state.players[0]!.battlefield[0]!.token = true;
+    doctored.state.players[0]!.battlefield[0]!.imageNumber = 0;
+
+    const r = decode(doctored, { strict: true });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (!r.ok || r.msg === null) throw new Error('unreachable');
+    if (r.msg.t !== 'game.state') throw new Error('wrong type');
+    expect(r.msg.state.stack[0]?.card?.imageNumber).toBe(3);
+    expect(r.msg.state.players[0]?.battlefield[0]?.imageNumber).toBe(0);
+  });
+
   it('flags an unknown field nested deep in a player (strict), passes it leniently', () => {
     const doctored = JSON.parse(stateSample) as {
       state: { players: Record<string, unknown>[] };
