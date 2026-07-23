@@ -16,7 +16,8 @@ import type { Card, CommandObject, Permanent, Player, StateKeyframe } from '@nig
 let n = 0;
 const uuid = (tag: string): string => `${tag}-${(++n).toString(16).padStart(4, '0')}-4a60`;
 
-type CardOpts = Partial<Pick<Card, 'manaCost' | 'power' | 'toughness' | 'subtypes' | 'supertypes' | 'colors' | 'text'>>;
+type CardOpts = Partial<Pick<Card,
+  'manaCost' | 'power' | 'toughness' | 'subtypes' | 'supertypes' | 'colors' | 'text' | 'token' | 'imageNumber'>>;
 
 function card(name: string, set: string, number: string, manaValue: number, types: string[], o: CardOpts = {}): Card {
   return {
@@ -25,6 +26,8 @@ function card(name: string, set: string, number: string, manaValue: number, type
     ...(o.manaCost !== undefined ? { manaCost: o.manaCost } : {}),
     ...(o.power !== undefined ? { power: o.power } : {}),
     ...(o.toughness !== undefined ? { toughness: o.toughness } : {}),
+    ...(o.token !== undefined ? { token: o.token } : {}),
+    ...(o.imageNumber !== undefined ? { imageNumber: o.imageNumber } : {}),
   };
 }
 
@@ -80,8 +83,11 @@ const ana = seat('p2', 'Ana', false, 22, {
   battlefield: [
     perm('p2', land('Mountain', ['R']), { tapped: true }),
     perm('p2', land('Mountain', ['R']), { tapped: true }),
-    perm('p2', card('Goblin Token', 'CMR', '0', 0, ['CREATURE'],
-      { colors: ['R'], subtypes: ['Goblin'], power: '1', toughness: '1', text: [] })),
+    // A real token as the wire sends it (scryfall.ts): token=true, empty collector
+    // number, a " Token" name suffix — so the resolver takes its token-search
+    // ladder (degrading to colour-only) instead of a doomed cards/{set}/{number}.
+    perm('p2', card('Goblin Token', 'CMR', '', 0, ['CREATURE'],
+      { colors: ['R'], subtypes: ['Goblin'], power: '1', toughness: '1', text: [], token: true, imageNumber: 0 })),
   ],
   graveyard: [card('Lightning Bolt', 'CMR', '6', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage.'] })],
   handSize: 2, librarySize: 63,

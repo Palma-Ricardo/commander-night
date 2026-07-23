@@ -7,6 +7,7 @@
 // chase, so snap (duration 0) and burst-compression are both exact.
 
 import { Container, Graphics, Sprite, type Texture } from 'pixi.js';
+import type { Card } from '@night/core';
 import type { ActorPlacement, ActorSpace, Transform } from '../layout/types';
 import type { HighlightSpec } from '../scene/interaction';
 
@@ -41,6 +42,9 @@ export class CardActor {
 
   /** last placement, so scene() can report zone/owner/faceUp per §12 */
   placement: ActorPlacement = { x: 0, y: 0, rotation: 0, scale: 1, zone: 'battlefield', faceUp: true };
+  /** the card this actor renders (undefined = a face-down back), so the scene can
+   *  re-texture it when its Scryfall art decodes after first paint. */
+  card: Card | undefined;
   /** which coordinate space the actor currently lives in (§7.1) — the scene
    *  reparents world↔screen when this changes across a transition. */
   space: ActorSpace = 'world';

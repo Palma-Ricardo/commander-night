@@ -10,7 +10,8 @@
     "build:harness": "vite build --mode harness",
     "preview:harness": "vite preview --port 4273",
     "test": "tsc --noEmit && vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "shoot": "node scripts/shoot.mjs"
   },
   "dependencies": {
     "@night/core": "*",
@@ -20,6 +21,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

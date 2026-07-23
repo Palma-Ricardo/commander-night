@@ -13,7 +13,7 @@
 // overlay — not here — so it exists only where a game does.
 
 import { useEffect, useRef } from 'react';
-import { appStores } from '../app';
+import { appScryfall, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
 import { objectClick } from './interact';
@@ -31,7 +31,7 @@ export function TableCanvas(): React.JSX.Element {
     const unsubs: (() => void)[] = [];
     let observer: ResizeObserver | undefined;
 
-    void scene.mount(host).then(() => {
+    void scene.mount(host, appScryfall).then(() => {
       if (disposed) { scene.destroy(); return; }
 
       // Clicks route through the pending prompt's affordance, exactly as a DOM

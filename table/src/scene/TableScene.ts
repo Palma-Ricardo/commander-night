@@ -15,8 +15,8 @@
 // onto that stable key via `stackLink` (scene/keys.ts), unifying cast → resolve.
 
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { FederatedPointerEvent } from 'pixi.js';
-import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, Zone } from '@night/core';
+import type { FederatedPointerEvent, Texture } from 'pixi.js';
+import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, ScryfallResolver, Zone } from '@night/core';
 import { affordanceFor } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
@@ -45,10 +45,17 @@ const ORIGIN_PILE: Record<string, PileZone> = {
   library: 'library', graveyard: 'graveyard', exile: 'exile', command: 'command',
 };
 
+// Scryfall fetch priority by zone (§9): what you're looking at closest first.
+const IMG_PRIORITY: Partial<Record<Zone, 0 | 1 | 2>> = {
+  hand: 0, command: 0, battlefield: 1, stack: 1,
+};
+function imgPriority(zone: Zone): 0 | 1 | 2 { return IMG_PRIORITY[zone] ?? 2; }
+
 export class TableScene implements DirectorSink {
   private app!: Application;
   private textures!: CardTextures;
   private director!: Director;
+  private unsubResolver?: () => void;
   private readonly worldLayer = new Container();   // camera-transformed
   private readonly feltG = new Graphics();
   private readonly furniture = new Container();
@@ -71,14 +78,18 @@ export class TableScene implements DirectorSink {
    *  camera focus (§7.3). */
   onFocusSeat?: (display: number) => void;
 
-  async mount(parent: HTMLElement): Promise<void> {
+  async mount(parent: HTMLElement, resolver: ScryfallResolver): Promise<void> {
     this.app = new Application();
     await this.app.init({
       background: RAIL, antialias: true, resizeTo: parent,
       resolution: window.devicePixelRatio || 1, autoDensity: true,
     });
     parent.appendChild(this.app.canvas);
-    this.textures = new CardTextures(this.app.renderer);
+    this.textures = new CardTextures(this.app.renderer, resolver);
+    // A card's art resolves (store) then decodes (onArtReady), both after first
+    // paint — swap it onto the live actors when either fires (§10 image fallback).
+    this.textures.onArtReady = () => this.refreshAllTextures();
+    this.unsubResolver = resolver.store.subscribe(() => this.refreshAllTextures());
 
     this.worldLayer.addChild(this.feltG, this.furniture, this.worldActors);
     this.app.stage.addChild(this.worldLayer, this.screenActors);
@@ -179,8 +190,8 @@ export class TableScene implements DirectorSink {
   // ── actor helpers ────────────────────────────────────────────────────────────
 
   private createActor(key: string, p: PlacedActor): CardActor {
-    const tex = p.card !== undefined ? this.textures.face(p.card, 'table') : this.textures.faceDown();
-    const actor = new CardActor(key, p.objectId, tex);
+    const actor = new CardActor(key, p.objectId, this.textureFor(p));
+    actor.card = p.card;
     // Every actor is hit-testable (§10: Pixi owns the table). Clicks route through
     // the pending prompt's affordance; hover previews any face-up card.
     actor.view.eventMode = 'static';
@@ -191,7 +202,29 @@ export class TableScene implements DirectorSink {
   }
 
   private refreshTexture(actor: CardActor, p: PlacedActor): void {
-    actor.setTexture(p.card !== undefined ? this.textures.face(p.card, 'table') : this.textures.faceDown());
+    actor.card = p.card;
+    actor.setTexture(this.textureFor(p));
+  }
+
+  /** The texture for a placement: resolved art (or its text-frame placeholder) for
+   *  a visible card, else the shared back. Honours `faceUp` so a face-down card
+   *  never leaks its front, and requests art at the zone's priority (§9). */
+  private textureFor(p: PlacedActor): Texture {
+    if (p.card !== undefined && p.placement.faceUp) {
+      return this.textures.face(p.card, 'table', imgPriority(p.placement.zone));
+    }
+    return this.textures.faceDown();
+  }
+
+  /** Re-texture every live actor — the swap path for art that resolves/decodes
+   *  after first paint (resolver store change or onArtReady). Idempotent: face()
+   *  returns the same cached texture until the art is ready. */
+  private refreshAllTextures(): void {
+    for (const a of this.actors.values()) {
+      if (a.card !== undefined && a.placement.faceUp) {
+        a.setTexture(this.textures.face(a.card, 'table', imgPriority(a.placement.zone)));
+      }
+    }
   }
 
   private layerFor(space: ActorSpace): Container {
@@ -457,6 +490,7 @@ export class TableScene implements DirectorSink {
 
   destroy(): void {
     if (getActiveScene() === this) setActiveScene(null);
+    this.unsubResolver?.();
     for (const a of this.actors.values()) a.destroy();
     this.actors.clear();
     this.textures?.destroy();

@@ -4,14 +4,17 @@
 //   • TABLE  ~200×280 — everything on the board/hand/piles. 300 cards ≈ 67 MB.
 //   • DETAIL full res  — only the hover preview + focused/stack card, a handful
 //                        at a time, evicted LRU.
-// T0 renders the **text-frame** face (name + mana + P/T on a colour-identity
-// panel) into a texture — that is also the permanent fallback for an unresolved
+// The **text-frame** face (name + mana + P/T on a colour-identity panel) is
+// rendered into a texture — that is also the permanent fallback for an unresolved
 // image (§10: the text frame is rendered into a texture, never dropped), so a
-// card with no Scryfall art stays fully playable. T1 swaps Scryfall art in
-// through this same cache; the LOD structure does not change.
+// card with no Scryfall art stays fully playable. T4 finally wires the real art:
+// `face()` resolves through the shared Scryfall resolver, decodes the image with
+// crossOrigin (WebGL-safe), downscales it to the table tier, and swaps it onto
+// the actor once ready. The detail tier stays a text frame here — the full-res
+// hover preview is DOM (design §10), not drawn on the canvas.
 
 import { Container, Graphics, type Renderer, Text, TextStyle, Texture } from 'pixi.js';
-import type { Card } from '@night/core';
+import type { Card, ScryfallResolver } from '@night/core';
 
 export type Tier = 'table' | 'detail';
 
@@ -21,6 +24,7 @@ export const TIER_SIZE: Record<Tier, { w: number; h: number }> = {
 };
 
 const DETAIL_LRU_CAP = 24;   // §10: only a handful of full-res faces live at once
+const IMAGE_LRU_CAP = 400;   // decoded table-tier art textures; 400 × ~224 KB ≈ 90 MB VRAM
 
 // Colour-identity → frame fill. Single colour = its WUBRG hue, multicolour =
 // gold, artifact/colourless = steel, land = tan. Read at a glance from across
@@ -97,20 +101,44 @@ function backContainer(tier: Tier): Container {
 }
 
 export class CardTextures {
-  private readonly table = new Map<string, Texture>();   // key → table-tier face
-  private readonly detail = new Map<string, Texture>();  // key → detail-tier face (LRU)
+  private readonly frames = new Map<string, Texture>();  // key → table-tier text frame
+  private readonly detail = new Map<string, Texture>();   // key → detail-tier text frame (LRU)
+  private readonly art = new Map<string, Texture>();      // image url → decoded art texture (LRU)
+  private readonly loading = new Set<string>();           // image urls currently decoding
   private back?: Texture;
 
-  constructor(private readonly renderer: Renderer) {}
+  /** Fired when an async art texture finishes decoding, so the scene can swap it
+   *  onto the actors still showing the text-frame placeholder. */
+  onArtReady?: () => void;
 
-  /** A stable cache key: identical printings share a face (per-object counters
-   *  do not change the frame at T0). */
+  constructor(private readonly renderer: Renderer, private readonly resolver: ScryfallResolver) {}
+
+  /** A stable cache key for the text frame: identical printings share a frame
+   *  (per-object counters do not change it). */
   private key(card: Card): string {
     return `${card.set}:${card.number}:${card.name}`;
   }
 
-  face(card: Card, tier: Tier = 'table'): Texture {
-    const store = tier === 'table' ? this.table : this.detail;
+  /** The best table-tier texture for `card` *right now*: its resolved Scryfall art
+   *  once decoded, otherwise the text-frame fallback (also the permanent miss
+   *  fallback, §10). Side effects: requests resolution at `priority` and kicks off
+   *  the async decode; when the art lands, `onArtReady` fires and the scene swaps.
+   *  The detail tier is not drawn on the canvas (the hover preview is DOM), so it
+   *  stays a text frame. */
+  face(card: Card, tier: Tier = 'table', priority: 0 | 1 | 2 = 1): Texture {
+    if (tier === 'detail') return this.frameFace(card, 'detail');
+    this.resolver.resolve(card, priority);
+    const entry = this.resolver.store.getState().images[this.resolver.keyOf(card)];
+    if (entry?.status === 'ok' && entry.url !== undefined) {
+      const hit = this.art.get(entry.url);
+      if (hit !== undefined) { this.art.delete(entry.url); this.art.set(entry.url, hit); return hit; }  // LRU touch
+      this.ensureArt(entry.url);
+    }
+    return this.frameFace(card, 'table');
+  }
+
+  private frameFace(card: Card, tier: Tier): Texture {
+    const store = tier === 'detail' ? this.detail : this.frames;
     const k = this.key(card);
     const hit = store.get(k);
     if (hit !== undefined) {
@@ -119,11 +147,34 @@ export class CardTextures {
     }
     const tex = this.renderer.generateTexture(frameContainer(card, tier));
     store.set(k, tex);
-    if (tier === 'detail' && store.size > DETAIL_LRU_CAP) {
-      const oldest = store.keys().next().value as string | undefined;
-      if (oldest !== undefined) { store.get(oldest)?.destroy(true); store.delete(oldest); }
-    }
+    if (tier === 'detail' && store.size > DETAIL_LRU_CAP) this.evictOldest(store);
     return tex;
+  }
+
+  /** Load a resolved Scryfall image, downscale it to the table tier (§10 VRAM
+   *  budget), and cache it. `crossOrigin='anonymous'` keeps the WebGL upload
+   *  untainted — Scryfall serves `access-control-allow-origin: *`. */
+  private ensureArt(url: string): void {
+    if (this.art.has(url) || this.loading.has(url)) return;
+    this.loading.add(url);
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => {
+      this.loading.delete(url);
+      try {
+        const tex = tableArtTexture(image);
+        this.art.set(url, tex);
+        if (this.art.size > IMAGE_LRU_CAP) this.evictOldest(this.art);
+        this.onArtReady?.();
+      } catch { /* upload failed — the text frame stays, still fully playable */ }
+    };
+    image.onerror = () => { this.loading.delete(url); };
+    image.src = url;
+  }
+
+  private evictOldest(store: Map<string, Texture>): void {
+    const oldest = store.keys().next().value as string | undefined;
+    if (oldest !== undefined) { store.get(oldest)?.destroy(true); store.delete(oldest); }
   }
 
   faceDown(): Texture {
@@ -132,10 +183,38 @@ export class CardTextures {
   }
 
   destroy(): void {
-    for (const t of this.table.values()) t.destroy(true);
+    for (const t of this.frames.values()) t.destroy(true);
     for (const t of this.detail.values()) t.destroy(true);
+    for (const t of this.art.values()) t.destroy(true);
     this.back?.destroy(true);
-    this.table.clear();
+    this.frames.clear();
     this.detail.clear();
+    this.art.clear();
   }
+}
+
+/** Downscale a full Scryfall image into a rounded 200×280 table-tier texture
+ *  (§10: full-res would be ~1.3 MB RGBA each and blow the VRAM budget). */
+function tableArtTexture(image: HTMLImageElement): Texture {
+  const { w, h } = TIER_SIZE.table;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) throw new Error('no 2d context');
+  ctx.imageSmoothingQuality = 'high';
+  const r = 12;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.arcTo(w, 0, w, h, r);
+  ctx.arcTo(w, h, 0, h, r);
+  ctx.arcTo(0, h, 0, 0, r);
+  ctx.arcTo(0, 0, w, 0, r);
+  ctx.closePath();
+  ctx.clip();
+  const s = Math.max(w / image.width, h / image.height);   // cover-fit
+  const dw = image.width * s;
+  const dh = image.height * s;
+  ctx.drawImage(image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  return Texture.from(canvas);
 }

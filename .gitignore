@@ -5,6 +5,7 @@ target/
 # JS workspaces (npm hoists node_modules to the root; build output per package)
 node_modules/
 dist/
+table/shots/
 test-results/
 playwright-report/
 e2e/pw/artifacts/
