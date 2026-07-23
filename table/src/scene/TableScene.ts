@@ -67,9 +67,14 @@ const IMG_PRIORITY: Partial<Record<Zone, 0 | 1 | 2>> = {
 };
 function imgPriority(zone: Zone): 0 | 1 | 2 { return IMG_PRIORITY[zone] ?? 2; }
 
-// Battlefield permanents render as the T4 landscape art box; everything else stays
-// a full portrait card (the hand, the stack, the piles, the hover preview).
-function imgTier(zone: Zone): Tier { return zone === 'battlefield' ? 'artbox' : 'table'; }
+// Battlefield permanents render as the T4 landscape art box; the stack's front
+// card is drawn very large so it takes full-res `detail` art (like the hover
+// preview); the hand and piles stay small table-tier portraits.
+function imgTier(zone: Zone): Tier {
+  if (zone === 'battlefield') return 'artbox';
+  if (zone === 'stack') return 'detail';
+  return 'table';
+}
 
 // A furniture shape in world coords, drawn each frame as a projected quad so it
 // keystones with the felt (T4): the pile footprints, nameplate plates, chip boxes.

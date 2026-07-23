@@ -16,7 +16,7 @@
 // swaps it onto the actor once ready. The detail tier stays a text frame here —
 // the full-res hover preview is DOM (design §10), not drawn on the canvas.
 
-import { Container, Graphics, type Renderer, Text, TextStyle, Texture } from 'pixi.js';
+import { CanvasSource, Container, Graphics, type Renderer, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
 import backArtUrl from '../assets/cards/Back.png';
 
@@ -32,6 +32,7 @@ const ARTBOX_NAME_H = 34;    // the name bar over the art (native px), rest is a
 
 const DETAIL_LRU_CAP = 24;   // §10: only a handful of full-res faces live at once
 const IMAGE_LRU_CAP = 400;   // decoded table-tier art textures; 400 × ~224 KB ≈ 90 MB VRAM
+const DETAIL_ART_LRU_CAP = 12;   // full-res stack art (~1.3 MB each) — keep only a few live
 
 // Colour-identity → frame fill. Single colour = its WUBRG hue, multicolour =
 // gold, artifact/colourless = steel, land = tan. Read at a glance from across
@@ -135,6 +136,7 @@ export class CardTextures {
   private readonly frames = new Map<string, Texture>();    // key → table-tier text frame
   private readonly detail = new Map<string, Texture>();     // key → detail-tier text frame (LRU)
   private readonly art = new Map<string, Texture>();        // image url → decoded portrait art (LRU)
+  private readonly detailArt = new Map<string, Texture>(); // image url → full-res portrait art for the stack (LRU)
   private readonly artbox = new Map<string, Texture>();     // art_crop url → battlefield art box (LRU)
   private readonly artboxFrames = new Map<string, Texture>(); // key → art-box text fallback
   private readonly loading = new Set<string>();             // image urls currently decoding
@@ -160,10 +162,23 @@ export class CardTextures {
    *  The detail tier is not drawn on the canvas (the hover preview is DOM), so it
    *  stays a text frame. */
   face(card: Card, tier: Tier = 'table', priority: 0 | 1 | 2 = 1): Texture {
-    if (tier === 'detail') return this.frameFace(card, 'detail');
     this.resolver.resolve(card, priority);
     const entry = this.resolver.store.getState().images[this.resolver.keyOf(card)];
     const artUrl = entry?.status === 'ok' ? entry.url : undefined;
+
+    // The stack's front card is drawn very large, so it takes full-res art (like
+    // the hover preview) rather than the downscaled table texture — falling back to
+    // the high-res text frame until the image decodes.
+    if (tier === 'detail') {
+      if (artUrl !== undefined) {
+        const hit = touch(this.detailArt, artUrl);
+        if (hit !== undefined) return hit;
+        this.ensureDetailArt(artUrl);
+      }
+      // Table-logical text frame as the transient fallback: a detail-sized frame is
+      // 488×680 at resolution 1 and would render oversized until the art decodes.
+      return this.frameFace(card, 'table');
+    }
 
     if (tier === 'artbox') {
       if (artUrl !== undefined) {
@@ -220,7 +235,9 @@ export class CardTextures {
    *  and blocks it ("No 'Access-Control-Allow-Origin' header is present"). We give
    *  the CORS load its own cache key (`&night-cors`) so it can never collide with a
    *  no-cors entry and always sees the ACAO response. Scryfall ignores the param. */
-  private loadImage(url: string, into: Map<string, Texture>, build: (img: HTMLImageElement) => Texture): void {
+  private loadImage(
+    url: string, into: Map<string, Texture>, build: (img: HTMLImageElement) => Texture, cap = IMAGE_LRU_CAP,
+  ): void {
     if (into.has(url) || this.loading.has(url)) return;
     this.loading.add(url);
     const image = new Image();
@@ -229,7 +246,7 @@ export class CardTextures {
       this.loading.delete(url);
       try {
         into.set(url, build(image));
-        if (into.size > IMAGE_LRU_CAP) this.evictOldest(into);
+        if (into.size > cap) this.evictOldest(into);
         this.onArtReady?.();
       } catch { /* upload failed — the fallback frame stays, still fully playable */ }
     };
@@ -240,6 +257,12 @@ export class CardTextures {
   /** Portrait card art, downscaled to the table tier (§10 VRAM budget). */
   private ensureArt(url: string): void {
     this.loadImage(url, this.art, tableArtTexture);
+  }
+
+  /** Full-res portrait art for the stack's large front card (its own tight LRU, as
+   *  each texture is ~1.3 MB — far bigger than a table tile). */
+  private ensureDetailArt(url: string): void {
+    this.loadImage(url, this.detailArt, detailArtTexture, DETAIL_ART_LRU_CAP);
   }
 
   /** Battlefield art box: the `art_crop` illustration under an embossed name plate. */
@@ -279,7 +302,7 @@ export class CardTextures {
   }
 
   destroy(): void {
-    for (const store of [this.frames, this.detail, this.art, this.artbox, this.artboxFrames]) {
+    for (const store of [this.frames, this.detail, this.art, this.detailArt, this.artbox, this.artboxFrames]) {
       for (const t of store.values()) t.destroy(true);
       store.clear();
     }
@@ -299,19 +322,34 @@ function touch(store: Map<string, Texture>, url: string): Texture | undefined {
 /** Downscale a full Scryfall image into a rounded 200×280 table-tier texture
  *  (§10: full-res would be ~1.3 MB RGBA each and blow the VRAM budget). */
 function tableArtTexture(image: HTMLImageElement): Texture {
-  const { w, h } = TIER_SIZE.table;
+  return Texture.from(portraitArtCanvas(image, TIER_SIZE.table, 12));
+}
+
+/** The same cover-fit art at the detail tier (488×680) for the stack's big front
+ *  card. The canvas holds full-res pixels, but the texture reports a *table-logical*
+ *  size (via source resolution) so the headless layout — which scales cards against
+ *  the 200×280 tile — sizes it identically to a table card, just crisp. */
+function detailArtTexture(image: HTMLImageElement): Texture {
+  const canvas = portraitArtCanvas(image, TIER_SIZE.detail, 28);
+  const resolution = TIER_SIZE.detail.w / TIER_SIZE.table.w;   // ~2.44 px per logical unit
+  return new Texture({ source: new CanvasSource({ resource: canvas, resolution }) });
+}
+
+/** Cover-fit a Scryfall image into a rounded portrait canvas of the given size. */
+function portraitArtCanvas(image: HTMLImageElement, size: { w: number; h: number }, radius: number): HTMLCanvasElement {
+  const { w, h } = size;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (ctx === null) throw new Error('no 2d context');
   ctx.imageSmoothingQuality = 'high';
-  roundedClip(ctx, w, h, 12);
+  roundedClip(ctx, w, h, radius);
   const s = Math.max(w / image.width, h / image.height);   // cover-fit
   const dw = image.width * s;
   const dh = image.height * s;
   ctx.drawImage(image, (w - dw) / 2, (h - dh) / 2, dw, dh);
-  return Texture.from(canvas);
+  return canvas;
 }
 
 /** The battlefield art box (design T4), modelled on Arena's board cards: the card's
