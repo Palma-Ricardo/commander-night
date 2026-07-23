@@ -72,6 +72,62 @@ class CardResolverLiveTest {
         assertNotNull(r.card(), () -> String.valueOf(r.problem()));
     }
 
+    /**
+     * A literal slash in a real card name must survive. XMage's split heuristic (and
+     * so {@link CardResolver#normalize}) rewrites the bare "/" to " // ", producing the
+     * nonexistent "Summon: Choco // Mog" — XMage's own importer can't load this FIN
+     * card for that reason. The resolver retries the name as written when the split
+     * form misses, so it resolves both as a bare name and with its printing.
+     */
+    @Test
+    void literalSlashInNameResolves() {
+        CardResolver.Resolved bare = CardResolver.resolve(line("Summon: Choco/Mog", null, null));
+        assertNotNull(bare.card(), () -> String.valueOf(bare.problem()));
+        assertEquals("Summon: Choco/Mog", bare.card().getName());
+
+        CardResolver.Resolved printed = CardResolver.resolve(line("Summon: Choco/Mog", "FIN", "35"));
+        assertNotNull(printed.card(), () -> String.valueOf(printed.problem()));
+        assertEquals("Summon: Choco/Mog", printed.card().getName());
+        assertEquals("FIN", printed.card().getSetCode());
+        assertEquals("35", printed.card().getCardNumber());
+    }
+
+    /**
+     * WotC's Universes Beyond bonus sheets reprint classic cards under new flavour
+     * names/art (FF's "Through the Ages", set FCA). XMage files them under the
+     * <em>original</em> card name, so the flavour name misses — but the set code +
+     * collector number the deck carries identify the printing exactly. Resolve by
+     * printing, warn about the substitution, keep the deck importable.
+     */
+    @Test
+    void functionalReprintResolvesByPrinting() {
+        // "Zidane Tribal" (FCA 43) is XMage's "Ragavan, Nimble Pilferer".
+        CardResolver.Resolved zidane = CardResolver.resolve(line("Zidane Tribal", "FCA", "43"));
+        assertNotNull(zidane.card(), () -> String.valueOf(zidane.problem()));
+        assertEquals("Ragavan, Nimble Pilferer", zidane.card().getName());
+        assertEquals("FCA", zidane.card().getSetCode());
+        assertNotNull(zidane.warning());
+        assertTrue(zidane.warning().contains("Zidane Tribal"), zidane.warning());
+        assertTrue(zidane.warning().contains("Ragavan"), zidane.warning());
+
+        // "A Promise Fulfilled" (FCA 39) is "Light Up the Stage".
+        CardResolver.Resolved promise = CardResolver.resolve(line("A Promise Fulfilled", "FCA", "39"));
+        assertNotNull(promise.card(), () -> String.valueOf(promise.problem()));
+        assertEquals("Light Up the Stage", promise.card().getName());
+    }
+
+    /**
+     * The printing fallback must not paper over a genuinely unknown card: a bad name
+     * with a printing that does not exist stays a hard error.
+     */
+    @Test
+    void unknownNameWithUnknownPrintingStillFails() {
+        CardResolver.Resolved r = CardResolver.resolve(line("Not A Real Card", "FCA", "99999"));
+        assertNull(r.card());
+        assertNotNull(r.problem());
+        assertTrue(r.problem().contains("Not A Real Card"), r.problem());
+    }
+
     @Test
     void aMisspellingIsAHardError() {
         CardResolver.Resolved r = CardResolver.resolve(line("Sol Rong", null, null));

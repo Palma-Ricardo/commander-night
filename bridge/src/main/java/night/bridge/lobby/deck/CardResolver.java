@@ -31,18 +31,71 @@ public final class CardResolver {
 
     /**
      * Reproduces {@code TxtDeckImporter}'s normalisation so our lookups match what
-     * XMage's own importer would find.
+     * XMage's own importer would find — including its split-card heuristic, which
+     * rewrites any single {@code "/"} between two non-slash characters to
+     * {@code " // "} (deck files write "Fire/Ice" for the "Fire // Ice" printing).
      */
     public static String normalize(String rawName) {
+        return normalizeBase(rawName).replaceFirst("(?<=[^/])\\s*/\\s*(?=[^/])", " // ");
+    }
+
+    /**
+     * Unicode + {@code "//"}-spacing normalisation, <em>without</em> the single-slash
+     * split rewrite. This is the name as written, canonicalised — needed because a
+     * few real card names carry a literal slash. In 1.4.60's db {@code
+     * "Summon: Choco/Mog"} (FIN) is the only one, and XMage's own {@code
+     * TxtDeckImporter} mangles it to the nonexistent {@code "Summon: Choco // Mog"}
+     * and fails to import it. {@link #resolve} falls back to this form so we don't
+     * inherit that bug.
+     */
+    static String normalizeBase(String rawName) {
         String name = CardNameUtil.normalizeCardName(rawName);
         if (name.contains("//") && !name.contains(" // ")) {
             name = name.replace("//", " // ");
         }
-        return name.replaceFirst("(?<=[^/])\\s*/\\s*(?=[^/])", " // ");
+        return name;
     }
 
     public static Resolved resolve(DeckLine line) {
-        String name = normalize(line.name());
+        // Try the split-normalised name first: this is XMage's behaviour and covers
+        // every split card written with a bare slash. Only when that misses entirely
+        // (no such name in any printing) do we retry the name as written, which
+        // rescues real single-slash card names the split heuristic would destroy.
+        String splitName = normalize(line.name());
+        Resolved bySplit = resolveNamed(line, splitName);
+        if (bySplit.card() != null) {
+            return bySplit;
+        }
+        String rawName = normalizeBase(line.name());
+        if (!rawName.equals(splitName)) {
+            Resolved byRaw = resolveNamed(line, rawName);
+            if (byRaw.card() != null) {
+                return byRaw;
+            }
+        }
+        // No card by that name in any form — but a name-independent set+number hit
+        // rescues functional reprints XMage files under the original card's name.
+        // WotC's Universes Beyond bonus sheets (FF's "Through the Ages" FCA, and the
+        // Marvel set the user hit) reprint classics under new flavour names/art:
+        // the deck says "Zidane Tribal", XMage stores FCA:43 as "Ragavan, Nimble
+        // Pilferer". The printing is the same object, so the set code + collector
+        // number the deck carries identify it exactly. Only fires on a true name
+        // miss with an explicit printing, so it never masks a plain misspelling
+        // (those carry no set/number — see aMisspellingIsAHardError).
+        if (line.setCode() != null && line.number() != null) {
+            CardInfo byPrint = CardDb.cards().findCard(line.setCode(), line.number());
+            if (byPrint != null) {
+                return new Resolved(line, byPrint,
+                        line.name() + " — no card by that name; resolved "
+                                + byPrint.getSetCode() + ":" + byPrint.getCardNumber()
+                                + " as '" + byPrint.getName() + "' (functional reprint / alt name)",
+                        null);
+            }
+        }
+        return bySplit;
+    }
+
+    private static Resolved resolveNamed(DeckLine line, String name) {
 
         if (line.setCode() == null) {
             CardInfo preferred = CardDb.cards().findPreferredCoreExpansionCard(name);
