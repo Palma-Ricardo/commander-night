@@ -13,7 +13,7 @@ import type { ImagePriority } from '@night/core/images/scryfall';
 import type { Card, Permanent } from '@night/core/protocol/protocol';
 import { affordanceFor } from '@night/core/state/selectors';
 import { answerObject, objectClick } from './interact';
-import { hoverCard } from './hover';
+import { hoverCard, hoverCardSoon } from './hover';
 import { ManaSymbols } from './ManaSymbols';
 
 export type CardSize = 'hand' | 'bf' | 'small' | 'grid' | 'preview';
@@ -100,7 +100,7 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
         const r = e.currentTarget.getBoundingClientRect();
         hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
       }}
-      onMouseLeave={() => { hoverCard(undefined); setMenuOpen(false); }}
+      onMouseLeave={() => { hoverCardSoon(); setMenuOpen(false); }}
       role={aff !== undefined || onClickOverride !== undefined ? 'button' : undefined}
     >
       {redacted

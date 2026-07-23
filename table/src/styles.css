@@ -16,7 +16,12 @@
   --in: #9ece6a;
   --out: #e0af68;
   --error: #f7768e;
+  --brass: #c99a46;
+  --brass-hi: #f2c86c;
   --card-unit: clamp(5.6rem, min(6.2vw, 9.7vh), 9.6rem);
+  /* Screen-space gutter the right sidebar reserves (LogPanel sets it live): the
+     compass + prompt dock offset by it so they clear the log. 0 until a game. */
+  --rail-w: 0px;
 }
 
 * { box-sizing: border-box; }
@@ -83,18 +88,83 @@ button.danger { background: var(--error); color: #14161a; }
 .table-overlay > * { pointer-events: auto; }
 .hover-preview { pointer-events: none; }
 
-.table-controls {
-  position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(clamp(132px, 19vh, 240px) + 3.6rem);
-  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: center;
-  max-width: min(64rem, 94vw);
-  background: rgba(20, 16, 10, 0.55); border-radius: 10px; padding: 0.35rem 0.8rem;
-}
-.status-line { font-family: ui-monospace, monospace; color: var(--accent); font-size: 0.9rem; }
+/* ── top HUD: turn ribbon (centre), compass + camstate (right) ───────────── */
 
-.mana-pool { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ribbon {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 18;
+  pointer-events: none;
+  display: flex; align-items: center; gap: 0.5rem;
+  font-family: ui-monospace, monospace; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(11, 16, 13, 0.82); border: 1px solid var(--border); border-radius: 5px;
+  padding: 0.4rem 1rem; backdrop-filter: blur(6px);
+}
+.ribbon b { color: var(--brass); font-weight: 700; }
+.ribbon .sep { color: var(--border); }
+
+.hud-topright {
+  position: fixed; top: 12px; right: calc(var(--rail-w) + 12px); z-index: 20;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  transition: right 180ms ease;
+}
+
+.compass {
+  width: 162px; background: rgba(11, 16, 13, 0.9); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px; backdrop-filter: blur(6px);
+}
+.compass h3 {
+  margin: 0 0 6px; font-family: ui-monospace, monospace; font-size: 9px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 500;
+}
+.compass-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.cq {
+  display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 3px;
+  border: 1px solid var(--border); background: #131b16; color: var(--muted);
+  font-size: 10px; font-weight: 600; text-align: left; cursor: pointer; min-width: 0;
+}
+.cq .cq-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cq b { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.cq:hover { border-color: var(--brass); color: var(--text); }
+.cq[data-turn="1"] { color: var(--brass); }
+.cq[data-turn="1"] b { color: var(--brass-hi); }
+.cq[aria-current="true"] {
+  background: #26200f; border-color: var(--brass); color: var(--text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brass) 30%, transparent);
+}
+.cq-empty { background: none; border-style: dashed; cursor: default; }
+.cq-all {
+  grid-column: 1 / -1; margin-top: 4px; padding: 5px; text-align: center; border-radius: 3px;
+  border: 1px solid var(--border); background: #131b16; color: var(--muted);
+  font-family: ui-monospace, monospace; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer;
+}
+.cq-all:hover { border-color: var(--brass); color: var(--text); }
+.cq-all[aria-current="true"] { background: #26200f; border-color: var(--brass); color: var(--text); }
+
+.camstate {
+  position: fixed; top: 44px; left: 12px; z-index: 20;
+  display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text);
+  background: rgba(11, 16, 13, 0.85); border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 10px; backdrop-filter: blur(6px);
+}
+.camstate .dot { width: 6px; height: 6px; border-radius: 50%; background: #5e86a6; box-shadow: 0 0 8px #5e86a6; }
+.camstate b { color: var(--text); font-weight: 600; }
+.camstate .hint { color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 9px; }
+
+/* ── bottom-left: floating mana pool ─────────────────────────────────────── */
+
+.mana-pool-window {
+  position: fixed; left: 12px; bottom: 12px; z-index: 16;
+  display: flex; flex-direction: column; gap: 4px;
+  background: rgba(11, 16, 13, 0.9); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; backdrop-filter: blur(6px);
+}
+.mana-pool-window h4 {
+  margin: 0; font-family: ui-monospace, monospace; font-size: 9px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 500;
+}
+.mana-pool { display: inline-flex; align-items: center; gap: 0.35rem; min-height: 1.3rem; }
 .mana-pool-lit {
-  padding: 0.1rem 0.45rem; border-radius: 8px;
+  padding: 0.1rem 0.4rem; border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 16%, #0d1016cc);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -104,13 +174,20 @@ button.danger { background: var(--error); color: #14161a; }
 }
 .mana-pool-empty { color: var(--muted); font-size: 0.72rem; font-style: italic; letter-spacing: 0.04em; }
 
+/* ── bottom-right: prompt dock + turn controls ───────────────────────────── */
+
+.dock-corner {
+  position: fixed; right: calc(var(--rail-w) + 12px); bottom: 12px; z-index: 16;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  max-width: min(42rem, 58vw);
+  transition: right 180ms ease;
+}
+
 .prompt-dock {
-  position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(clamp(132px, 19vh, 240px) + 0.5rem);
-  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: center;
-  max-width: min(64rem, 94vw);
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end;
+  max-width: 100%;
   background: color-mix(in srgb, var(--accent) 14%, #0d1016ee);
-  border: 1px solid var(--accent); border-radius: 10px; padding: 0.55rem 0.9rem;
+  border: 1px solid var(--accent); border-radius: 10px; padding: 0.5rem 0.8rem;
   box-shadow: 0 8px 30px #000a;
 }
 .dock-msg { font-weight: 600; }
@@ -131,10 +208,11 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .stranded-target { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
 .stranded-target.card-selected { border-color: var(--accent); color: var(--accent); }
 
-.compass { display: inline-flex; gap: 0.25rem; align-items: center; }
-.compass button { padding: 0.2rem 0.55rem; font-size: 0.8rem; }
-
-.turn-controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.turn-controls {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;
+  background: rgba(11, 16, 13, 0.72); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+}
 .skip-active { border-color: var(--accent); color: var(--accent); }
 .auto-mana { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
 .concede-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-size: 0.8rem; }
@@ -165,12 +243,11 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 /* ── log / chat panel (fixed right column) ───────────────────────────────── */
 
 .log-panel {
-  position: fixed; right: 8px; top: 44px; z-index: 15;
-  bottom: calc(clamp(132px, 19vh, 240px) + 0.5rem);
-  width: clamp(18rem, 22vw, 28rem);
+  position: fixed; right: 0; top: 0; bottom: 0; z-index: 15;
+  width: clamp(18rem, 22vw, 26rem);
   display: flex; flex-direction: column; min-height: 0;
-  background: #12151bdd; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem;
-  box-shadow: 0 8px 30px #0008;
+  background: #101511f5; border-left: 1px solid var(--border); padding: 0.5rem 0.6rem;
+  box-shadow: -10px 0 30px #0006;
 }
 .log-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.3rem; align-items: center; }
 .log-collapse {
@@ -179,11 +256,12 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 }
 .log-collapse:hover { color: var(--text); border-color: var(--border); }
 .log-reopen {
-  position: fixed; right: 8px; top: 44px; z-index: 15;
-  display: inline-flex; align-items: center; gap: 0.35rem;
-  font-size: 0.8rem; padding: 0.25rem 0.7rem; color: var(--muted);
-  background: #12151bdd; border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 8px 30px #0008;
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 15;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 0.4rem;
+  writing-mode: vertical-rl;
+  font-size: 0.75rem; letter-spacing: 0.08em; padding: 0.85rem 0.35rem; color: var(--muted);
+  background: #101511f2; border: 1px solid var(--border); border-right: none;
+  border-radius: 8px 0 0 8px; box-shadow: -6px 0 20px #0006;
 }
 .log-reopen:hover { color: var(--text); border-color: var(--accent); }
 .log-tabs .tab {
@@ -337,6 +415,8 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .mana-R { background: #f9aa8f; }
 .mana-G { background: #9bd3ae; }
 .mana-C, .mana-X { background: #ccc2c0; }
+/* the bundled colour pip (disc + glyph baked in) — just sized to the text pip */
+.mana-img { width: 1.05rem; height: 1.05rem; vertical-align: middle; display: inline-block; flex: none; }
 
 /* ── modals + hover preview ──────────────────────────────────────────────── */
 
@@ -370,6 +450,9 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .hover-preview img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 10px; box-shadow: 0 8px 30px #000d; }
 .hover-preview .text-frame { aspect-ratio: 63 / 88; font-size: 0.8rem; }
 .hover-oracle {
+  /* the parent preview is click-through; the oracle re-enables events so it can
+     be scrolled (it keeps itself open on mouse-enter, hover.ts) */
+  pointer-events: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   padding: 0.4rem 0.6rem; font-size: 0.75rem; max-height: 10rem; overflow-y: auto;
 }

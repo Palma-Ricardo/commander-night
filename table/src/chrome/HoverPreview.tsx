@@ -15,7 +15,7 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from 'zustand';
 import { appScryfall } from '../app';
-import { hoverCard, hoverStore } from './hover';
+import { cancelHoverClear, hoverCard, hoverCardSoon, hoverStore } from './hover';
 import { previewPosition } from './preview-position';
 import { TextFrame } from './CardView';
 
@@ -57,7 +57,15 @@ export function HoverPreview() {
         ? <img src={image.url} alt={card.name} />
         : <TextFrame card={card} size="preview" />}
       {image?.status === 'ok' && card.text.length > 0 && (
-        <div className="hover-oracle">{card.text.map((l, i) => <p key={i}>{l}</p>)}</div>
+        // The one interactive part of the (otherwise click-through) preview: keep
+        // it alive while the pointer is on it so a long oracle box can be scrolled.
+        <div
+          className="hover-oracle"
+          onMouseEnter={cancelHoverClear}
+          onMouseLeave={hoverCardSoon}
+        >
+          {card.text.map((l, i) => <p key={i}>{l}</p>)}
+        </div>
       )}
     </div>
   );

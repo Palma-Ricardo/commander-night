@@ -56,17 +56,26 @@ function seat(id: string, name: string, human: boolean, life: number, opts: {
   graveyard?: Card[];
   handSize: number;
   librarySize: number;
+  commanderDamage?: Player['commanderDamage'];
+  manaPool?: Player['manaPool'];
 }): Player {
   return {
     id, name, human, life,
-    manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+    manaPool: opts.manaPool ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
     librarySize: opts.librarySize, handSize: opts.handSize,
     battlefield: opts.battlefield,
     graveyard: opts.graveyard ?? [],
     exile: [],
     commandZone: [opts.commander],
+    ...(opts.commanderDamage !== undefined ? { commanderDamage: opts.commanderDamage } : {}),
   };
 }
+
+// Two opponents' commanders are hoisted so You can carry commander damage from
+// them (the plate chips, T4): the *same* object must sit in the dealer's command
+// zone for the name to resolve (commanderDamageRows → objectName).
+const krenko = commander('Krenko, Mob Boss', ['R'], '{2}{R}{R}', ['3', '3']);
+const martaCmdr = commander('Marta, Relic Warden', ['W', 'B'], '{2}{W}{B}', ['3', '4']);
 
 // ── the four seats ────────────────────────────────────────────────────────────
 
@@ -85,10 +94,18 @@ const you = seat('p1', 'You', true, 34, {
   ],
   graveyard: [card('Eternal Witness', 'CMR', '5', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' })],
   handSize: 4, librarySize: 71,
+  // Mid-cast: two Forests + Sol Ring tapped for Cultivate leave floating mana, so
+  // the bottom-left pool window shows real glyph pips (T4 mana symbols).
+  manaPool: { W: 0, U: 1, B: 0, R: 0, G: 2, C: 1 },
+  // Beating on since turn 6: Krenko's swarm and Marta's warden have both connected.
+  commanderDamage: [
+    { fromCommanderId: krenko.id, amount: 9 },
+    { fromCommanderId: martaCmdr.id, amount: 4 },
+  ],
 });
 
 const ana = seat('p2', 'Ana', false, 22, {
-  commander: commander('Krenko, Mob Boss', ['R'], '{2}{R}{R}', ['3', '3']),
+  commander: krenko,
   battlefield: [
     perm('p2', land('Mountain', ['R'])),
     perm('p2', land('Mountain', ['R'])),
@@ -116,7 +133,7 @@ const tom = seat('p3', 'Tom', false, 40, {
 });
 
 const marta = seat('p4', 'Marta', false, 31, {
-  commander: commander('Marta, Relic Warden', ['W', 'B'], '{2}{W}{B}', ['3', '4']),
+  commander: martaCmdr,
   battlefield: [
     perm('p4', land('Plains', ['W']), { tapped: true }),
     perm('p4', land('Swamp', ['B'])),

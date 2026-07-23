@@ -13,8 +13,11 @@
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
-import { playerName, statusLine } from '@night/core/state/selectors';
+import type { GameState } from '@night/core/protocol/protocol';
+import { playerName, stepLabel } from '@night/core/state/selectors';
 import { getActiveScene } from '../scene/TableScene';
+import { displaySeats, seatOfPlayer } from '../layout/world';
+import { cameraHudStore } from './camera-store';
 import { PromptDock } from './PromptDock';
 import { TurnControls } from './TurnControls';
 import { LogPanel, useRematchCode } from './LogPanel';
@@ -25,7 +28,6 @@ import { startNudge } from './nudge';
 
 export function GameOverlay() {
   const game = useStore(appStores.game);
-  const pendingMessage = useStore(appStores.prompt, s => s.pending?.message);
   const conn = useStore(appStores.connection);
   useShortcuts();
 
@@ -63,56 +65,136 @@ export function GameOverlay() {
         </div>
       )}
 
-      <LogPanel state={state} />
+      <Ribbon state={state} />
+      <Camstate />
 
-      <div className="table-controls">
-        <span className="status-line">{statusLine(state, pendingMessage)}</span>
-        <ManaPool />
+      <div className="hud-topright">
         <Compass />
-        <TurnControls />
       </div>
 
-      <PromptDock />
+      <LogPanel state={state} />
+
+      <ManaPool />
+
+      <div className="dock-corner">
+        <TurnControls />
+        <PromptDock />
+      </div>
+
       <HoverPreview />
+    </div>
+  );
+}
+
+/** The turn ribbon (top-centre, §7.3): whose turn and which step. Lifted out of
+ *  the prompt dock so a pending prompt's message can never sit on top of the turn
+ *  counter — they now live in different corners. */
+function Ribbon({ state }: { state: GameState }) {
+  return (
+    <div className="ribbon">
+      <span>Turn {state.turn.n}</span>
+      <span className="sep">·</span>
+      <b>{playerName(state, state.turn.activePlayerId)}</b>
+      <span className="sep">·</span>
+      <span>{stepLabel(state.turn.step)}</span>
     </div>
   );
 }
 
 const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'] as const;
 
-/** Your floating mana pool (§9). The board nameplates show only name + life, so
- *  without this the pool was invisible — you could not watch mana accumulate while
- *  paying a cost. Reads my own player's `manaPool`; shows a pip per non-zero colour
- *  and a muted placeholder when empty, so its location on the HUD is always known. */
+/** Your floating mana pool (§9): a screen-space window pinned bottom-left, out of
+ *  the old prompt bar. The board nameplates show only name + life, so without this
+ *  the pool was invisible — you could not watch mana accumulate while paying a
+ *  cost. Reads my own player's `manaPool`; a pip per non-zero colour, a muted
+ *  placeholder when empty, so its home on the HUD is always known. */
 function ManaPool() {
   const state = useStore(appStores.game, s => s.state);
   const pool = state?.players.find(p => p.id === state.me.playerId)?.manaPool;
   if (pool === undefined) return null;
   const lit = POOL_ORDER.filter(c => pool[c] > 0);
   return (
-    <span className={lit.length > 0 ? 'mana-pool mana-pool-lit' : 'mana-pool'} title="your mana pool">
-      {lit.length === 0
-        ? <span className="mana-pool-empty">pool empty</span>
-        : lit.map(c => (
-            <span key={c} className="mana-pool-pip">{pool[c]}<ManaSymbols symbols={[c]} /></span>
-          ))}
-    </span>
+    <div className="mana-pool-window" title="your mana pool">
+      <h4>Mana pool</h4>
+      <div className={lit.length > 0 ? 'mana-pool mana-pool-lit' : 'mana-pool'}>
+        {lit.length === 0
+          ? <span className="mana-pool-empty">empty</span>
+          : lit.map(c => (
+              <span key={c} className="mana-pool-pip">{pool[c]}<ManaSymbols symbols={[c]} /></span>
+            ))}
+      </div>
+    </div>
   );
 }
 
-/** Camera compass (§7.3): jump to the whole table or a seat, or resume follow.
- *  The camera lives in the scene/director (not a store), so these just issue
- *  imperative commands; the live Following/Viewing badge is a T4 polish item. */
+// The compass 2×2 mirrors the table's quadrants (world.ts CORNER_BY_DISPLAY):
+// display 0 = you bottom-left, 1 bottom-right, 2 top-right, 3 top-left. Read in
+// grid order [TL, TR, BL, BR] that is displays [3, 2, 0, 1].
+const COMPASS_CELLS = [3, 2, 0, 1] as const;
+
+/** Camera compass (§7.3): a live 2×2 minimap of the table. Each cell is a seat
+ *  with its life; the active player lights brass (`data-turn`), the seat the lens
+ *  is holding is `aria-current`. Clicking a cell pins that seat, "Whole table"
+ *  pulls back — the imperative moves the old button row issued, but now you can
+ *  read where the camera is from the map itself. */
 function Compass() {
+  const state = useStore(appStores.game, s => s.state);
+  const view = useStore(cameraHudStore, s => s.view);
+  if (state === undefined) return null;
+  const seats = displaySeats(state);
+  const activeSeat = seatOfPlayer(state, state.turn.activePlayerId);
+  const viewedSeat = view.kind === 'seat' ? view.seat : -1;
   const scene = () => getActiveScene();
   return (
-    <span className="compass" title="camera — keys 1–4 / ` table / Esc follow">
-      <button data-cam="table" onClick={() => scene()?.showTable()}>Table</button>
-      {[1, 2, 3, 4].map(n => (
-        <button key={n} data-cam={`seat-${n - 1}`} onClick={() => scene()?.focusSeat(n - 1)}>{n}</button>
-      ))}
-      <button data-cam="follow" onClick={() => scene()?.releaseCamera()}>Follow</button>
-    </span>
+    <nav className="compass" aria-label="Move the camera — keys 1–4, ` whole table, Esc follow">
+      <h3>Viewport</h3>
+      <div className="compass-grid">
+        {COMPASS_CELLS.map(d => {
+          const p = seats[d];
+          if (p === undefined) return <span key={d} className="cq cq-empty" aria-hidden="true" />;
+          return (
+            <button
+              key={d}
+              className="cq"
+              data-cam={`seat-${d}`}
+              data-turn={d === activeSeat ? '1' : undefined}
+              aria-current={d === viewedSeat}
+              onClick={() => scene()?.focusSeat(d)}
+            >
+              <span className="cq-nm">{p.name}</span>
+              <b>{p.life}</b>
+            </button>
+          );
+        })}
+        <button
+          className="cq-all"
+          data-cam="table"
+          aria-current={view.kind === 'table'}
+          onClick={() => scene()?.showTable()}
+        >
+          Whole table
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+/** The camera override badge (§7.3): shown only when the lens is manually pinned
+ *  off its default follow. Reads the camera-store; in follow mode it renders
+ *  nothing (the compass already lights the followed seat). Esc releases it. */
+function Camstate() {
+  const state = useStore(appStores.game, s => s.state);
+  const { view, following } = useStore(cameraHudStore);
+  if (state === undefined || following) return null;
+  const target = view.kind === 'seat'
+    ? playerName(state, displaySeats(state)[view.seat]?.id)
+    : 'the whole table';
+  return (
+    <div className="camstate">
+      <span className="dot manual" />
+      <span>Viewing <b>{target}</b></span>
+      <span className="hint">Esc</span>
+    </div>
   );
 }
 

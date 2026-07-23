@@ -20,7 +20,7 @@ import type { AnswerValue, Card, Prompt } from '@night/core/protocol/protocol';
 import { parseManaCost } from '@night/core/state/mana';
 import { me, unreachableCandidates } from '@night/core/state/selectors';
 import { CardGrid, Modal } from './Modal';
-import { ManaSymbols } from './ManaSymbols';
+import { ManaSymbols, ManaText } from './ManaSymbols';
 
 const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'] as const;
 
@@ -36,7 +36,7 @@ export function PromptDock() {
 
   return (
     <div className={`prompt-dock dock-${p.kind}${busy ? ' dock-busy' : ''}`} data-prompt-kind={p.kind}>
-      <span className="dock-msg">{p.message}</span>
+      <span className="dock-msg"><ManaText text={p.message} /></span>
       <span className="dock-controls">
         <DockControls key={pid} p={p} busy={busy} answer={answer} prompt={prompt} state={state} />
       </span>
@@ -251,7 +251,7 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
         {!oneClick && (
           <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
-            Submit {k} / {range}
+            Submit {k} of {range}
           </button>
         )}
         {declinable && (
@@ -264,8 +264,12 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
   return (
     <>
       {grid}
-      {p.progress !== undefined && (
-        <span className="dock-hint">{p.progress.chosen} of {p.progress.of} chosen</span>
+      {/* The server's progress echoes the message and the Submit counter, so only
+          surface it once it carries something they don't — a running server-side
+          tally in an incremental pick (§8). At rest (a batch discard: chosen 0)
+          it stayed on screen three times over ("0 of 8" everywhere). */}
+      {p.progress !== undefined && p.progress.chosen > 0 && p.progress.chosen !== k && (
+        <span className="dock-hint">{p.progress.chosen} confirmed by the server</span>
       )}
       {stranded.length > 0 && (
         <span className="dock-list stranded-targets">
@@ -291,7 +295,7 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
         : (
           <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
-            Submit {k} / {range}
+            Submit {k} of {range}
           </button>
         )}
       {/* incremental flow (§8): once the server has ≥ min, confirm=true means done */}

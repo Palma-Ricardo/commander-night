@@ -17,7 +17,7 @@
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { FederatedPointerEvent, Texture } from 'pixi.js';
 import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, ScryfallResolver, Zone } from '@night/core';
-import { affordanceFor } from '@night/core/state/selectors';
+import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
 import { CardTextures, type Tier } from '../render/textures';
@@ -26,7 +26,7 @@ import {
   type PileZone, type SeatLayout,
 } from '../layout/world';
 import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/types';
-import { camera, worldToScreen, screenToWorld, type CameraPreset } from '../camera/camera';
+import { camera, worldToScreen, screenToWorld, type CameraPreset, type CameraView } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
 import { promptObjectIds } from './prompt-objects';
@@ -41,6 +41,10 @@ const BRASS = 0x8a6a3a;
 const BRASS_FILL = 0x3a2f1c;
 const INK = 0xe8d9b0;
 const DIM_ALPHA = 0.72;
+// Commander-damage plate chips (§6): a cold red pill per attacking commander.
+const DMG_INK = 0xf0a89a;
+const DMG_FILL = 0x2a100c;
+const DMG_EDGE = 0x5e1f16;
 
 // Zones a newly-created actor can fly *in from* — the owner's pile/fan anchor, in
 // world space. A draw comes from the library, an opponent's cast from their hand.
@@ -84,6 +88,11 @@ export class TableScene implements DirectorSink {
   /** Raised when the felt (an empty quadrant / a nameplate) is clicked — a manual
    *  camera focus (§7.3). */
   onFocusSeat?: (display: number) => void;
+  /** Raised when the camera view or its follow-state changes, so the chrome's
+   *  compass minimap + override badge (camera-store) can mirror where the lens
+   *  points (§7.3). Fired from the frame loop, deduped on an actual change. */
+  onCameraView?: (view: CameraView, following: boolean) => void;
+  private lastCamSig = '';
 
   async mount(parent: HTMLElement, resolver: ScryfallResolver): Promise<void> {
     this.app = new Application();
@@ -188,11 +197,22 @@ export class TableScene implements DirectorSink {
     // has no state transition to re-apply §7.3 dimming, so do it here).
     const key = this.cameraViewKey();
     if (key !== this.lastViewKey) { this.lastViewKey = key; this.redim(); }
+    this.emitCameraView(key);
   }
 
   private cameraViewKey(): string {
     const v = this.director.cameraView();
     return v.kind === 'table' ? 'table' : `seat:${v.seat}`;
+  }
+
+  /** Push the live camera view + follow-state to the chrome when either changes
+   *  (deduped on a combined signature — the frame loop runs every tick). */
+  private emitCameraView(viewKey: string): void {
+    const following = this.director.isFollowing();
+    const sig = `${viewKey}|${following}`;
+    if (sig === this.lastCamSig) return;
+    this.lastCamSig = sig;
+    this.onCameraView?.(this.director.cameraView(), following);
   }
 
   // ── actor helpers ────────────────────────────────────────────────────────────
@@ -431,7 +451,7 @@ export class TableScene implements DirectorSink {
     for (const seat of seatLayouts(state)) {
       this.drawLamplight(seat);
       this.drawPiles(seat);
-      this.drawNameplate(seat);
+      this.drawNameplate(seat, state);
       this.drawHandCount(seat, state.me.playerId);
     }
   }
@@ -491,7 +511,7 @@ export class TableScene implements DirectorSink {
     this.furniture.addChild(label);
   }
 
-  private drawNameplate(seat: SeatLayout): void {
+  private drawNameplate(seat: SeatLayout, state: GameState): void {
     const n = NAMEPLATE;
     const p = seat.player;
     const box = seat.nameplate;
@@ -515,7 +535,32 @@ export class TableScene implements DirectorSink {
     life.anchor.set(1, 0.5);
     life.position.set(n.w - 12, n.h / 2);
     plate.addChild(life);
+    this.drawCommanderDamage(plate, commanderDamageRows(state, p));
     this.furniture.addChild(plate);
+  }
+
+  /** Commander-damage chips (§6), one per attacking commander, in a strip to the
+   *  right of the plate — a red pill of "⚔ <commander> N" so lethal (21) creeps
+   *  up where the victim reads it, without tracing a combat arrow. */
+  private drawCommanderDamage(plate: Container, rows: { commander: string; amount: number }[]): void {
+    let x = NAMEPLATE.w + 8;
+    const h = 22;
+    for (const row of rows) {
+      const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
+      const chip = new Container();
+      const text = new Text({
+        text: `⚔ ${short} ${row.amount}`,
+        style: new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 14, fill: DMG_INK, fontWeight: '700' }),
+      });
+      const w = Math.round(text.width) + 12;
+      chip.position.set(x, NAMEPLATE.h / 2 - h / 2);
+      chip.addChild(new Graphics().roundRect(0, 0, w, h, 4).fill(DMG_FILL).stroke({ width: 1, color: DMG_EDGE }));
+      text.anchor.set(0, 0.5);
+      text.position.set(6, h / 2);
+      chip.addChild(text);
+      plate.addChild(chip);
+      x += w + 5;
+    }
   }
 
   /** §12 scene accessor — real actor positions + the live camera for the harness.

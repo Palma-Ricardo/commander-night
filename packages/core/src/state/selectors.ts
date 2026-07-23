@@ -78,6 +78,12 @@ export function statusLine(state: GameState, promptMessage?: string): string {
   return `T${state.turn.n} · ${step}${suffix}`;
 }
 
+/** The step's display label, or the pre-game mulligan window when there is no
+ *  step (protocol §6). Drives the top turn ribbon (table client). */
+export function stepLabel(step: Step | undefined): string {
+  return step === undefined ? 'Mulligans' : STEP_LABEL[step];
+}
+
 // ── commander damage (data lives on the victim, §6) ──────────────────────────
 
 export interface CommanderDamageRow { commander: string; amount: number }

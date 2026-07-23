@@ -17,7 +17,8 @@ import { appScryfall, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
 import { objectClick } from './interact';
-import { hoverCard } from './hover';
+import { hoverCard, hoverCardSoon } from './hover';
+import { setCameraHud } from './camera-store';
 
 export function TableCanvas(): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -40,10 +41,14 @@ export function TableCanvas(): React.JSX.Element {
 
       // Hover previews any face-up card, anchored beside the live actor (§9/§10).
       scene.onObjectHover = (id, anchor) => {
-        if (id === undefined) { hoverCard(undefined); return; }
+        if (id === undefined) { hoverCardSoon(); return; }   // defer so a scroll can reach the preview
         const card = findObject(appStores.game.getState().state!, id);
         if (card !== undefined) hoverCard(card, anchor);
       };
+
+      // The camera lives in the scene/director; mirror its view + follow-state
+      // into a store so the compass minimap + override badge track it (§7.3).
+      scene.onCameraView = (view, following) => setCameraHud(view, following);
 
       // The director (§6.3) diffs consecutive states itself, so hand it the
       // authoritative state + the advisory events that rode on the transition

@@ -10,6 +10,11 @@
 // Offsetting off the edges (left + width) is what actually clears the card.
 // A plain box `{ left, top, width, height }` (not a live DOMRect) keeps this
 // serializable and decoupled from whatever element produced it.
+//
+// T4 adds a grace on dismissal: leaving the hovered card (`hoverCardSoon`) defers
+// the clear a beat so the pointer can travel onto the preview and hold it open —
+// what lets you scroll a long oracle box (§9). A fresh hover, or the preview
+// itself grabbing the pointer (`cancelHoverClear`), keeps it up.
 
 import { createStore } from 'zustand/vanilla';
 import type { Card } from '@night/core/protocol/protocol';
@@ -20,5 +25,24 @@ export interface HoverState { card?: Card; anchor?: HoverAnchor }
 
 export const hoverStore = createStore<HoverState>(() => ({}));
 
-export const hoverCard = (card: Card | undefined, anchor?: HoverAnchor) =>
+let clearTimer: ReturnType<typeof setTimeout> | undefined;
+const cancelPending = (): void => {
+  if (clearTimer !== undefined) { clearTimeout(clearTimer); clearTimer = undefined; }
+};
+
+/** Show (or replace) the hovered card. Cancels any pending dismissal. */
+export const hoverCard = (card: Card | undefined, anchor?: HoverAnchor): void => {
+  cancelPending();
   hoverStore.setState({ card, anchor });
+};
+
+/** Dismiss after a short grace, so the pointer can cross the gap onto the preview
+ *  and keep it open (`cancelHoverClear`). A fresh `hoverCard` cancels it too, so
+ *  moving between two cards never flickers. */
+export const hoverCardSoon = (): void => {
+  cancelPending();
+  clearTimer = setTimeout(() => { clearTimer = undefined; hoverStore.setState({}); }, 140);
+};
+
+/** The pointer entered the preview — hold it (cancel the deferred dismissal). */
+export const cancelHoverClear = (): void => cancelPending();

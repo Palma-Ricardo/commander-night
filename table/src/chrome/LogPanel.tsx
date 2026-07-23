@@ -10,7 +10,8 @@ import { appActions, appStores } from '../app';
 import type { GameState, LogEntry } from '@night/core/protocol/protocol';
 import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
 import { getActiveScene } from '../scene/TableScene';
-import { hoverCard } from './hover';
+import { hoverCard, hoverCardSoon } from './hover';
+import { ManaText } from './ManaSymbols';
 
 const COLLAPSE_KEY = 'night.table.logCollapsed';
 const readCollapsed = (): boolean => {
@@ -31,24 +32,32 @@ export function LogPanel({ state }: { state: GameState }) {
     try { localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0'); } catch { /* private mode */ }
   };
 
-  // Tell the scene how far the log intrudes from the right edge, so the camera
-  // frames every seat clear of it (§8). Collapsed ⇒ 0 and the felt spreads back;
-  // re-measured on resize (the panel width is viewport-relative). Retries until the
-  // scene has mounted (its init is async).
+  // Two right-edge reservations, kept in step with the sidebar's open/collapsed
+  // state (§8). --rail-w is a *screen-space* gutter: the compass and prompt dock
+  // read it so they sit left of the sidebar (open → its width; collapsed → the
+  // slim reopen tab). setLogInset is the *camera* gutter, framing the felt clear
+  // of the open panel — 0 when collapsed, so the felt spreads back under the thin
+  // tab. Re-measured on resize; retries for the async scene mount.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    let raf = 0;
-    const report = (): void => {
-      const scene = getActiveScene();
-      if (scene === null) { raf = requestAnimationFrame(report); return; }
+    const root = document.documentElement;
+    const apply = (): void => {
       const el = collapsed ? null : asideRef.current;
-      scene.setLogInset(el === null ? 0 : Math.max(0, window.innerWidth - el.getBoundingClientRect().left));
+      const width = el === null ? 0 : el.getBoundingClientRect().width;
+      root.style.setProperty('--rail-w', collapsed ? '2.1rem' : `${Math.round(width)}px`);
+      getActiveScene()?.setLogInset(el === null ? 0 : Math.max(0, window.innerWidth - el.getBoundingClientRect().left));
     };
-    report();
-    window.addEventListener('resize', report);
+    let raf = 0;
+    const tick = (): void => {
+      apply();
+      if (!collapsed && getActiveScene() === null) raf = requestAnimationFrame(tick);
+    };
+    tick();
+    window.addEventListener('resize', apply);
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener('resize', report);
+      window.removeEventListener('resize', apply);
+      root.style.setProperty('--rail-w', '0px');
       getActiveScene()?.setLogInset(0);
     };
   }, [collapsed]);
@@ -141,10 +150,11 @@ export function useRematchCode(): string | undefined {
   return useStore(appStores.log, s => rematchCode(s.entries));
 }
 
-/** Wrap each ref's first occurrence in the line as a hover link (§8). */
+/** Wrap each ref's first occurrence in the line as a hover link (§8); mana tokens
+ *  in the surrounding text render as pips (ManaText), not raw "{G}". */
 function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
   const refs = entry.refs ?? [];
-  if (refs.length === 0) return <>{entry.text}</>;
+  if (refs.length === 0) return <ManaText text={entry.text} />;
 
   const marks: { start: number; end: number; objectId: string; name: string }[] = [];
   for (const r of refs) {
@@ -158,7 +168,7 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
   let pos = 0;
   for (const m of marks) {
     if (m.start < pos) continue;   // overlapping/duplicate refs
-    if (m.start > pos) nodes.push(entry.text.slice(pos, m.start));
+    if (m.start > pos) nodes.push(<ManaText key={`t${pos}`} text={entry.text.slice(pos, m.start)} />);
     const card = findObject(state, m.objectId);
     nodes.push(
       <span
@@ -168,13 +178,13 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
           const r = e.currentTarget.getBoundingClientRect();
           hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
         } : undefined}
-        onMouseLeave={card !== undefined ? () => hoverCard(undefined) : undefined}
+        onMouseLeave={card !== undefined ? () => hoverCardSoon() : undefined}
       >
         {m.name}
       </span>,
     );
     pos = m.end;
   }
-  if (pos < entry.text.length) nodes.push(entry.text.slice(pos));
+  if (pos < entry.text.length) nodes.push(<ManaText key={`t${pos}`} text={entry.text.slice(pos)} />);
   return <>{nodes}</>;
 }
