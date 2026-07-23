@@ -59,17 +59,20 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
 export function layoutKeyed(
   state: GameState, viewport: Size, links: StackLinks, rightInset = 0,
 ): Map<string, PlacedActor> {
-  const world = layoutWorld(state);
+  // World felt + the screen-space layer (hand + stack). The stack now lives in the
+  // screen layer, so adoption must span both: a cast lifts a hand actor (screen)
+  // onto the stack (screen), and unifying it onto the stable card id keeps it one
+  // continuous actor across the fan → pile → resolve chain.
+  const all = [...layoutWorld(state), ...layoutScreen(state, viewport, rightInset)];
   const offStack = new Set<string>();
-  for (const p of world) {
+  for (const p of all) {
     if (p.placement.zone !== 'stack' && p.objectId !== undefined) offStack.add(p.objectId);
   }
   const out = new Map<string, PlacedActor>();
-  for (const p of world) {
+  for (const p of all) {
     const link = links.get(p.key);
     const key = link !== undefined && !offStack.has(link) ? link : p.key;
     out.set(key, { ...p, key });
   }
-  for (const p of layoutScreen(state, viewport, rightInset)) out.set(p.key, p);   // hand keys are already stable ids
   return out;
 }

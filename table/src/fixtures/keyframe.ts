@@ -172,12 +172,19 @@ export const demoKeyframe: StateKeyframe = {
     rollbackTurnsAllowed: false,
     turn: { n: 12, phase: 'PRECOMBAT_MAIN', step: 'PRE_MAIN', activePlayerId: 'p1', priorityPlayerId: 'p1' },
     players: [you, ana, tom, marta],
+    // A 3-high stack (bottom → top): You cast Cultivate, Ana's Krenko trigger
+    // answers, and you've responded on top with Counterspell — enough to exercise
+    // the right-edge fan (a spell, a triggered ability, and the visible top item).
     stack: [
       {
         id: uuid('stk'), kind: 'spell', controllerId: 'p1', text: [],
         card: card('Cultivate', 'msc', '172', 3, ['SORCERY'],
           { manaCost: '{2}{G}', colors: ['G'], text: ['Search your library for two basic lands.'] }),
       },
+      { id: uuid('stk'), kind: 'ability', controllerId: 'p2', text: ['Create a 1/1 red Goblin creature token.'],
+        card: card('Krenko, Mob Boss', 'fdn', '204', 4, ['LEGENDARY', 'CREATURE'], { colors: ['R'], power: '3', toughness: '3' }) },
+      { id: uuid('stk'), kind: 'spell', controllerId: 'p1', text: [],
+        card: card('Counterspell', 'dsc', '114', 2, ['INSTANT'], { manaCost: '{U}{U}', colors: ['U'], text: ['Counter target spell.'] }) },
     ],
     me: {
       playerId: 'p1',

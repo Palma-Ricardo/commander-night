@@ -31,7 +31,6 @@ const CARD_TEX = { w: 200, h: 280 } as const;   // native portrait px (hand/stac
 const ARTBOX_TEX = { w: 200, h: 184 } as const;  // native battlefield art-box px
 const BOARD_SCALE = 0.62;                        // permanents on the felt
 const PILE_SCALE = 0.42;                         // piles read a touch smaller
-const STACK_SCALE = 0.74;                        // the stack looms over the seam
 // The nameplate and an opponent's held fan share the rail band, so they read as
 // one strip when they are the same height: the average of what each used to be
 // (plate 42, a 0.3-scaled back 84 → 63). 63/280 = 0.225 sizes the backs to match.
@@ -385,21 +384,10 @@ function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
   }
 }
 
-function layoutStack(state: GameState, out: PlacedActor[]): void {
-  const items = state.stack;
-  const step = 150;
-  const cx = WORLD.w / 2;
-  const cy = WORLD.h / 2;
-  items.forEach((item, i) => {
-    place(out, item.id, item.card, item.card?.id, {
-      x: cx - (items.length - 1) * (step / 2) + i * step,
-      y: cy,
-      rotation: 0, scale: STACK_SCALE, zone: 'stack', ownerId: item.controllerId, faceUp: true,
-    });
-  });
-}
-
-/** The whole felt as placed actors — pure, viewport-independent (design §6.2). */
+/** The whole felt as placed actors — pure, viewport-independent (design §6.2).
+ *  The stack is *not* here: it moved to the screen-space layer (`layoutScreen`, a
+ *  right-edge pile) so it never hides behind the felt's perspective and shares a
+ *  layer with the hand for the cast animation (T4). */
 export function layoutWorld(state: GameState): PlacedActor[] {
   const out: PlacedActor[] = [];
   const me = state.me.playerId;
@@ -413,6 +401,5 @@ export function layoutWorld(state: GameState): PlacedActor[] {
     if (seat.player.id !== me) layoutOpponentHand(seat, out);
   }
 
-  layoutStack(state, out);
   return out;
 }

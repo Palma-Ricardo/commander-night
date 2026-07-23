@@ -1,9 +1,12 @@
-// layoutScreen — the screen-space layer (design §7.1): your hand, fanned and
-// pinned to the bottom edge, visible no matter where the camera points. This is
-// the one function that sees the viewport; `layoutWorld` never does. Your hand is
-// the sole zone in screen space, but it is still a Pixi actor (§10) so a cast can
-// lift a card out of the fan and fly it into world space as one continuous actor
-// (T2). Pure and headless — no renderer, no camera, no time.
+// layoutScreen — the screen-space layer (design §7.1): the zones pinned to the
+// viewport, visible no matter where the camera points. Two live here now: your
+// hand, fanned along the bottom edge, and the **stack**, a right-edge pile (T4).
+// Everything else is on the felt (`layoutWorld`, camera-transformed); this is the
+// one function that sees the viewport. Screen actors are still Pixi actors (§10),
+// so a cast lifts a card out of the hand fan and flies it straight onto the stack
+// as one continuous actor — both endpoints now share this layer, so the hand→stack
+// motion no longer crosses the world↔screen seam (T4 cast animation). Pure and
+// headless — no renderer, no camera, no time.
 
 import type { GameState } from '@night/core';
 import type { PlacedActor, Size } from './types';
@@ -17,15 +20,22 @@ export function handBandHeight(viewport: Size): number {
   return Math.max(132, Math.min(240, Math.round(viewport.h * 0.19)));
 }
 
-/** The hand fan, in screen (CSS-pixel) coordinates, centred along the bottom.
- *  `rightInset` is the width the open log sidebar steals from the right (§8): the
- *  fan centres in the felt *left* of it (and a crowded hand stays within that
- *  width), so no card ever tucks under the panel. 0 ⇒ the whole viewport. */
+/** The hand fan + the stack pile, in screen (CSS-pixel) coordinates. `rightInset`
+ *  is the width the open log sidebar steals from the right (§8): the hand centres
+ *  in the felt *left* of it and the stack pins to that inset right edge, so nothing
+ *  ever tucks under the panel. 0 ⇒ the whole viewport. */
 export function layoutScreen(state: GameState, viewport: Size, rightInset = 0): PlacedActor[] {
   const out: PlacedActor[] = [];
+  layoutHand(state, viewport, rightInset, out);
+  layoutStack(state, viewport, rightInset, out);
+  return out;
+}
+
+/** Your hand, fanned and centred along the bottom edge. */
+function layoutHand(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
   const hand = state.me.hand;
   const n = hand.length;
-  if (n === 0) return out;
+  if (n === 0) return;
 
   const band = handBandHeight(viewport);
   const scale = (band * 0.9) / CARD_TEX.h;         // card height ≈ 90% of the band
@@ -52,6 +62,63 @@ export function layoutScreen(state: GameState, viewport: Size, rightInset = 0): 
       },
     });
   });
+}
 
-  return out;
+// ── the stack pile (design §7.1, T4) ────────────────────────────────────────────
+//
+// The stack reads as a *stack*, Arena-style: a right-edge pile where the **top of
+// the stack** — the next thing to resolve — sits fully visible in front, and every
+// item beneath it fans back to the left, showing only a sliver. New items land on
+// top (in front), so a dozen triggers cost one pile's worth of screen, not a dozen
+// cards' worth. The carousel that scrubs buried items forward is a later phase; for
+// now the top is legible and the depth reads from the fan.
+
+const STACK_MARGIN = 30;             // right edge → front card
+const STACK_SLIVER = 0.15;           // fraction of a card width each buried item shows
+const STACK_DEPTH_CAP = 8;           // buried-item falloff saturates here (deep stacks)
+
+/** Height of the stack's front card as a fraction of the play area (viewport above
+ *  the hand band), clamped to a readable pixel range. */
+function stackFrontHeight(viewport: Size): number {
+  const play = viewport.h - handBandHeight(viewport);
+  return Math.max(150, Math.min(300, Math.round(play * 0.42)));
+}
+
+function layoutStack(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
+  const items = state.stack;
+  const n = items.length;
+  if (n === 0) return;
+
+  const frontH = stackFrontHeight(viewport);
+  const scale = frontH / CARD_TEX.h;
+  const cardW = CARD_TEX.w * scale;
+  const rightEdge = viewport.w - Math.max(0, rightInset);
+  const frontX = rightEdge - STACK_MARGIN - cardW / 2;
+  // Centre the pile vertically in the play area (clear of the hand band below).
+  const frontY = (viewport.h - handBandHeight(viewport)) / 2;
+
+  // The fan steps left by a sliver per buried item, but never so far that a deep
+  // stack runs off into the centre of the table: cap the total spread at ~45% of
+  // the felt width and shrink the step to fit.
+  const baseStep = cardW * STACK_SLIVER;
+  const maxSpan = Math.min(viewport.w * 0.45, rightEdge - cardW - STACK_MARGIN);
+  const step = Math.min(baseStep, maxSpan / Math.max(1, n - 1));
+
+  items.forEach((item, i) => {
+    // depth: 0 for the top (front), growing as we descend toward the oldest item.
+    const depth = n - 1 - i;
+    const d = Math.min(depth, STACK_DEPTH_CAP);
+    out.push({
+      key: item.id, card: item.card, objectId: item.card?.id, space: 'screen',
+      placement: {
+        x: frontX - depth * step,
+        y: frontY + d * 5,                 // gentle downward-left arc, like a held fan
+        rotation: -d * 0.02,
+        scale: scale * (1 - d * 0.02),     // buried items read a touch smaller
+        zone: 'stack',
+        ownerId: item.controllerId,
+        faceUp: true,
+      },
+    });
+  });
 }

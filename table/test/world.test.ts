@@ -173,14 +173,11 @@ describe('layoutWorld', () => {
     expect(layoutWorld(mkState([bare], 'p1')).length).toBe(0);
   });
 
-  it('centres the stack on the felt seam', () => {
+  it('keeps the stack off the felt (it is a screen-space pile now)', () => {
     const state = mkState([mkPlayer('p1', 'You', { human: true })], 'p1', {
       stack: [{ id: cid('stk'), kind: 'spell', controllerId: 'p1', text: [], card: mkCard('Cultivate', ['SORCERY']) }],
     });
-    const stack = layoutWorld(state).filter(p => p.placement.zone === 'stack');
-    expect(stack.length).toBe(1);
-    expect(stack[0]!.placement.x).toBeCloseTo(WORLD.w / 2, 5);
-    expect(stack[0]!.placement.y).toBeCloseTo(WORLD.h / 2, 5);
+    expect(layoutWorld(state).some(p => p.placement.zone === 'stack')).toBe(false);
   });
 
   it('every world actor stays within the felt', () => {

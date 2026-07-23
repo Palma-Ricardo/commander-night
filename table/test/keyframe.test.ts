@@ -26,7 +26,9 @@ describe('demo keyframe', () => {
       for (const c of pl.graveyard) expect(keys.has(c.id)).toBe(true);
       for (const cmd of pl.commandZone) expect(keys.has(cmd.id)).toBe(true);
     }
-    expect(world.some(p => p.placement.zone === 'stack')).toBe(true);
+    // the stack is a screen-space right-edge pile (T4), not on the felt
+    expect(world.some(p => p.placement.zone === 'stack')).toBe(false);
+    expect(screen.some(p => p.placement.zone === 'stack' && p.space === 'screen')).toBe(true);
     // opponent hands render as face-down world backs
     expect(world.some(p => p.placement.zone === 'hand' && !p.placement.faceUp)).toBe(true);
   });

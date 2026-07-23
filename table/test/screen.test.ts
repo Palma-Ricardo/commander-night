@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { StackItem } from '@night/core';
 import { handBandHeight, layoutScreen } from '../src/layout/screen';
-import { fourSeats, mkPlayer, mkState, SUPPORTED_VIEWPORTS } from './helpers';
+import { cid, fourSeats, mkCard, mkPlayer, mkState, SUPPORTED_VIEWPORTS } from './helpers';
+
+const spell = (name: string): StackItem =>
+  ({ id: cid('stk'), kind: 'spell', controllerId: 'p1', text: [], card: mkCard(name, ['SORCERY']) });
 
 describe('handBandHeight', () => {
   it('clamps between 132 and 240 across window sizes', () => {
@@ -12,11 +16,13 @@ describe('handBandHeight', () => {
   });
 });
 
+const hand = (placed: ReturnType<typeof layoutScreen>) => placed.filter(p => p.placement.zone === 'hand');
+
 describe('layoutScreen (the hand)', () => {
   it('places one screen actor per hand card, face up, keyed by id', () => {
     const state = fourSeats();
     for (const vp of SUPPORTED_VIEWPORTS) {
-      const placed = layoutScreen(state, vp);
+      const placed = hand(layoutScreen(state, vp));
       expect(placed.length).toBe(state.me.hand.length);
       expect(placed.every(p => p.space === 'screen' && p.placement.faceUp && p.placement.zone === 'hand')).toBe(true);
       expect(new Set(placed.map(p => p.key)).size).toBe(placed.length);
@@ -27,7 +33,7 @@ describe('layoutScreen (the hand)', () => {
     const state = fourSeats();
     for (const vp of SUPPORTED_VIEWPORTS) {
       const band = handBandHeight(vp);
-      for (const p of layoutScreen(state, vp)) {
+      for (const p of hand(layoutScreen(state, vp))) {
         expect(p.placement.x).toBeGreaterThanOrEqual(0);
         expect(p.placement.x).toBeLessThanOrEqual(vp.w);
         // card centre sits inside the reserved bottom band
@@ -76,6 +82,64 @@ describe('layoutScreen (the hand)', () => {
 
   it('returns nothing for an empty hand', () => {
     const state = mkState([mkPlayer('p1', 'You', { human: true, handSize: 0 })], 'p1');
-    expect(layoutScreen(state, { w: 1920, h: 1080 })).toEqual([]);
+    expect(hand(layoutScreen(state, { w: 1920, h: 1080 }))).toEqual([]);
+  });
+});
+
+const stackOf = (placed: ReturnType<typeof layoutScreen>) => placed.filter(p => p.placement.zone === 'stack');
+
+describe('layoutScreen (the stack pile)', () => {
+  const withStack = (items: StackItem[], handSize = 4) =>
+    mkState([mkPlayer('p1', 'You', { human: true, handSize })], 'p1', { stack: items });
+
+  it('places one screen actor per stack item, face up, keyed by the stack id', () => {
+    const items = [spell('Cultivate'), spell('Counterspell'), spell('Bolt')];
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      const s = stackOf(layoutScreen(withStack(items), vp));
+      expect(s.length).toBe(items.length);
+      expect(s.every(p => p.space === 'screen' && p.placement.faceUp && p.placement.zone === 'stack')).toBe(true);
+      expect(s.map(p => p.key)).toEqual(items.map(i => i.id));   // keyed by ephemeral stack id
+    }
+  });
+
+  it('is absent when the stack is empty', () => {
+    expect(stackOf(layoutScreen(withStack([]), { w: 1920, h: 1080 }))).toEqual([]);
+  });
+
+  it('pins the pile to the right edge, top-of-stack frontmost', () => {
+    const items = [spell('bottom'), spell('middle'), spell('top')];
+    const vp = { w: 1920, h: 1080 };
+    const s = stackOf(layoutScreen(withStack(items), vp));
+    const top = s[s.length - 1]!;      // last item = top of stack = next to resolve
+    // the top card is the rightmost, largest, and untilted — the fully-visible face
+    expect(top.placement.x).toBe(Math.max(...s.map(p => p.placement.x)));
+    expect(top.placement.scale).toBe(Math.max(...s.map(p => p.placement.scale)));
+    expect(top.placement.rotation).toBeCloseTo(0, 10);
+    // the whole pile hugs the right edge, well past the midline
+    expect(top.placement.x).toBeGreaterThan(vp.w * 0.7);
+  });
+
+  it('fans older items to the left of the top card', () => {
+    const items = [spell('a'), spell('b'), spell('c'), spell('d')];
+    const vp = { w: 1920, h: 1080 };
+    const xs = stackOf(layoutScreen(withStack(items), vp)).map(p => p.placement.x);
+    // bottom → top is left → right (each newer item sits in front, to the right)
+    for (let i = 1; i < xs.length; i++) expect(xs[i]!).toBeGreaterThan(xs[i - 1]!);
+  });
+
+  it('does not overrun the felt centre even with a deep stack', () => {
+    const items = Array.from({ length: 16 }, (_, i) => spell(`t${i}`));
+    const vp = { w: 1920, h: 1080 };
+    const xs = stackOf(layoutScreen(withStack(items), vp)).map(p => p.placement.x);
+    expect(Math.min(...xs)).toBeGreaterThan(vp.w * 0.4);   // never crosses into the left half
+  });
+
+  it('shifts the pile left of the log gutter when it opens', () => {
+    const items = [spell('x')];
+    const vp = { w: 1920, h: 1080 };
+    const closed = stackOf(layoutScreen(withStack(items), vp, 0))[0]!.placement.x;
+    const open = stackOf(layoutScreen(withStack(items), vp, 400))[0]!.placement.x;
+    expect(open).toBeLessThan(closed);              // the gutter pushes it inward
+    expect(open).toBeLessThanOrEqual(vp.w - 400);   // clear of the panel
   });
 });
