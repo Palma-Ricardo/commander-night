@@ -33,9 +33,18 @@ export function TableCanvas(): React.JSX.Element {
 
     void scene.mount(host).then(() => {
       if (disposed) { scene.destroy(); return; }
+      // The director (§6.3) diffs consecutive states itself, so hand it the
+      // authoritative state + the advisory events that rode on the transition
+      // into it (game store `lastEvents`); it decides animate-vs-snap. Gate on
+      // the applied seq: the game store also fires on non-transition updates
+      // (game.over, the upstream-notice banner) that carry the same state and
+      // now-stale events — presenting those would replay the last animation.
+      let lastSeq = Number.NEGATIVE_INFINITY;
       const paint = (): void => {
-        const state = appStores.game.getState().state;
-        if (state !== undefined) scene.renderState(state);
+        const g = appStores.game.getState();
+        if (g.state === undefined || g.lastAppliedSeq === lastSeq) return;
+        lastSeq = g.lastAppliedSeq;
+        scene.present(g.state, g.lastEvents);
       };
       paint();
       unsub = appStores.game.subscribe(paint);

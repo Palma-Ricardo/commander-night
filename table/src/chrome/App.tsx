@@ -8,7 +8,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="table-root">
       <TableCanvas />
-      <div className="table-ribbon">Commander Night · Table · T1 · [1–4] seat · [`] table · [Esc] follow</div>
+      <div className="table-ribbon">Commander Night · Table · T2 · [1–4] seat · [`] table · [Esc] follow</div>
     </div>
   );
 }

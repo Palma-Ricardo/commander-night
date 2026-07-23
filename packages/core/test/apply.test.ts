@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { decode } from '../src/protocol/codec';
-import type { StateKeyframe, StatePatch } from '../src/protocol/protocol';
+import type { GameEvent, StateKeyframe, StatePatch } from '../src/protocol/protocol';
 import { applyKeyframe, applyStatePatch, type ApplyCtx } from '../src/state/apply';
 import { createStores, type Stores } from '../src/stores';
 import { memoryKV } from '../src/stores/storage';
@@ -104,6 +104,21 @@ describe('applyStatePatch', () => {
     expect(resyncs).toBe(1);
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('surfaces the transition\'s §7.1 events on the store, defaulting to empty', () => {
+    const events: GameEvent[] = [
+      { k: 'move', objectId: 'x', from: 'hand', to: 'stack', verb: 'cast' },
+      { k: 'stackLink', stackId: 's', objectId: 'x' },
+    ];
+    applyKeyframe(keyframe, ctx);
+    expect(stores.game.getState().lastEvents).toEqual([]);   // a keyframe carries none
+
+    applyStatePatch({ ...lifePatch(3, keyframe.seq, 33), events }, ctx);
+    expect(stores.game.getState().lastEvents).toEqual(events);
+
+    applyStatePatch(lifePatch(5, 3, 30), ctx);               // eventless patch clears it
+    expect(stores.game.getState().lastEvents).toEqual([]);
   });
 
   it('the store swap is atomic — the pre-patch tree is never mutated', () => {

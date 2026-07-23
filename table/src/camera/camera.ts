@@ -115,6 +115,18 @@ export function camera(view: CameraView, viewport: Size): CameraPreset {
   return preset;
 }
 
+/** Linear blend of two presets — the director tweens camera moves through this
+ *  (§7.3: camera moves are the director's, so they interpolate like any other).
+ *  tilt rides along for T4's perspective; projection ignores it. */
+export function lerpPreset(a: CameraPreset, b: CameraPreset, t: number): CameraPreset {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    scale: a.scale + (b.scale - a.scale) * t,
+    tilt: a.tilt + (b.tilt - a.tilt) * t,
+  };
+}
+
 // ── projection ───────────────────────────────────────────────────────────────
 
 export function worldToScreen(preset: CameraPreset, p: Point): Point {

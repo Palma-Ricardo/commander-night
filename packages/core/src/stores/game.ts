@@ -2,7 +2,7 @@
 // the keyframe/patch/resync flow (state/apply.ts) via route.
 
 import { createStore } from 'zustand/vanilla';
-import type { GameOver, GameState } from '../protocol/protocol';
+import type { GameEvent, GameOver, GameState } from '../protocol/protocol';
 
 /** Sync-discipline counters (design §12 debug panel; the C3 auto-player asserts
  *  resyncs and divergences stay 0 over a whole game). */
@@ -29,6 +29,12 @@ export interface GameStoreState {
   /** protocol §9 autoMana — no state echo exists, so this is the ack-confirmed
    *  last value we sent; server default is ON. */
   autoMana: boolean;
+  /** The §7.1 advisory events that rode on the transition into the current
+   *  `state`. Set on every keyframe/patch (to the message's events, or empty
+   *  when it carried none) so the table client's director always reads the
+   *  hints for exactly the transition it is about to present; the classic
+   *  client ignores it entirely. Empty (never stale) after a bare state. */
+  lastEvents: GameEvent[];
   /** Latest game.log kind:'status' line — bridge-side upstream trouble,
    *  rendered as a banner over the board until the next status line or
    *  keyframe clears it (§11). */
@@ -45,6 +51,7 @@ export const freshGame = (): GameStoreState => ({
   syncMode: 'live',
   counters: emptyCounters(),
   autoMana: true,
+  lastEvents: [],
 });
 
 export const createGameStore = () => createStore<GameStoreState>(() => freshGame());

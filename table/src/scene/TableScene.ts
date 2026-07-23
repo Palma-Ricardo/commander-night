@@ -1,21 +1,28 @@
 // TableScene — owns the single Pixi Application, the flat scene of CardActors
-// (design §6.1), and the camera rig (§7.3). T1 draws the surveyed quadrant world:
-// a world layer (camera-transformed) holding the felt, the seat furniture
-// (nameplates, lamplight, pile footprints) and every world-space actor; and a
-// screen layer (fixed) holding your hand. Cards live in one actor layer, never
-// inside a zone container, so they can move between zones later (T2). No animation
-// yet — actors snap to their layout target and the camera cuts between presets.
+// (design §6.1), the camera rig (§7.3), and the director (§6.3). T2 makes the
+// table move: instead of snapping actors to a fresh layout, the scene hands each
+// (state, events) step to the director, which drives it as a timed transition and
+// only then advances `presented`. The scene is the director's `DirectorSink` — it
+// turns a transition into actor tweens (survivors ease between layouts, new
+// actors fly in from the zone their `move` event names, cards crossing the
+// world↔screen seam are re-projected so they stay glued), and it runs the Pixi
+// ticker that advances every tween + the interpolated camera each frame.
+//
+// Actors live in one flat layer, never inside a zone container, so a card is one
+// persistent actor across hand ↔ battlefield ↔ graveyard ↔ exile (§3, §6.1): the
+// same stable key appears in the before/after layouts, so the director tweens it
+// rather than destroying and recreating it. The stack's ephemeral id is adopted
+// onto that stable key via `stackLink` (scene/keys.ts), unifying cast → resolve.
 
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { GameState, Id, NightScene, SceneActor } from '@night/core';
+import type { Card, GameEvent, GameState, Id, NightScene, SceneActor } from '@night/core';
 import { CardActor } from '../render/CardActor';
 import { CardTextures } from '../render/textures';
-import { layoutScreen } from '../layout/screen';
-import { layoutWorld, NAMEPLATE, seatLayouts, seatOfPlayer, WORLD, type SeatLayout } from '../layout/world';
-import type { PileZone } from '../layout/world';
-import type { PlacedActor, Size } from '../layout/types';
-import { camera, seatView, TABLE_VIEW } from '../camera/camera';
-import { CameraController } from '../camera/controller';
+import { NAMEPLATE, seatLayouts, WORLD, type PileZone, type SeatLayout } from '../layout/world';
+import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/types';
+import { camera, worldToScreen, screenToWorld, type CameraPreset } from '../camera/camera';
+import { Director, type DirectorSink } from './Director';
+import { layoutKeyed, type StackLinks } from './keys';
 
 const RAIL = 0x0e0b08;      // the floor the table sits on
 const FELT = 0x1f3a2e;
@@ -25,17 +32,22 @@ const BRASS_FILL = 0x3a2f1c;
 const INK = 0xe8d9b0;
 const DIM_ALPHA = 0.72;
 
-export class TableScene {
+// Zones a newly-created actor can fly *in from* — the owner's pile/fan anchor, in
+// world space. A draw comes from the library, an opponent's cast from their hand.
+const ORIGIN_PILE: Record<string, PileZone> = {
+  library: 'library', graveyard: 'graveyard', exile: 'exile', command: 'command',
+};
+
+export class TableScene implements DirectorSink {
   private app!: Application;
   private textures!: CardTextures;
+  private director!: Director;
   private readonly worldLayer = new Container();   // camera-transformed
   private readonly feltG = new Graphics();
   private readonly furniture = new Container();
   private readonly worldActors = new Container();
   private readonly screenActors = new Container();  // fixed (the hand)
   private readonly actors = new Map<string, CardActor>();
-  private readonly controller = new CameraController();
-  private state?: GameState;
 
   async mount(parent: HTMLElement): Promise<void> {
     this.app = new Application();
@@ -48,6 +60,12 @@ export class TableScene {
 
     this.worldLayer.addChild(this.feltG, this.furniture, this.worldActors);
     this.app.stage.addChild(this.worldLayer, this.screenActors);
+
+    const reducedMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    this.director = new Director(this, { viewport: this.size, reducedMotion });
+    this.app.ticker.add(t => this.director.tick(t.deltaMS));
+
     setActiveScene(this);
   }
 
@@ -55,21 +73,53 @@ export class TableScene {
     return { w: this.app.screen.width, h: this.app.screen.height };
   }
 
-  /** Diff the actor set against a fresh layout of `state`; create/place/retire,
-   *  route world vs screen actors to their layers, then draw the felt + furniture
-   *  and cut the camera to its current preset. */
-  renderState(state: GameState): void {
-    this.state = state;
-    const placed = [...layoutWorld(state), ...layoutScreen(state, this.size)];
-    const live = new Set<string>();
-    const focusedId = this.focusedPlayerId(state);
+  /** Feed a fresh authoritative state + its advisory events to the director; it
+   *  decides animate-vs-snap and drives the transition on the ticker (§6.3). */
+  present(state: GameState, events: readonly GameEvent[] = []): void {
+    this.director.present(state, events);
+  }
 
-    for (const p of placed) {
-      live.add(p.key);
-      const actor = this.ensureActor(p);
-      const layer = p.space === 'screen' ? this.screenActors : this.worldActors;
-      layer.addChild(actor.view);                  // re-parents + keeps z in list order
-      actor.place(p.placement, true);
+  // ── DirectorSink: one timed transition into `to` (§6.3) ──────────────────────
+
+  applyTransition(
+    to: GameState,
+    _from: GameState | undefined,
+    events: readonly GameEvent[],
+    duration: number,
+    links: StackLinks,
+  ): void {
+    const size = this.size;
+    const placed = layoutKeyed(to, size, links);
+    const preset = this.director.cameraPreset();          // §6.2: camera at start
+    const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
+    for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
+
+    const focusedId = this.focusedPlayerId(to);
+    const live = new Set<string>();
+
+    for (const [key, p] of placed) {
+      live.add(key);
+      let actor = this.actors.get(key);
+      if (actor === undefined) {
+        actor = this.createActor(key, p);
+        this.actors.set(key, actor);
+        this.layerFor(p.space).addChild(actor.view);
+        actor.space = p.space;
+        // Fly in from the zone the move names, else appear at the target.
+        const origin = duration > 0 ? this.entryOrigin(p, moveByObj, to, preset) : undefined;
+        actor.seedCurrent(origin ?? this.transformOf(p));
+      } else {
+        this.refreshTexture(actor, p);
+        if (actor.space !== p.space) {
+          if (duration > 0) this.reproject(actor, p.space, preset);   // keep it glued across the seam
+          this.layerFor(p.space).addChild(actor.view);
+          actor.space = p.space;
+        } else {
+          this.layerFor(p.space).addChild(actor.view);   // re-append keeps z in layout order
+        }
+      }
+      if (duration > 0) actor.animateTo(p.placement, duration);
+      else actor.snapTo(p.placement);
       actor.view.alpha = this.dimAlpha(p, focusedId);
     }
 
@@ -78,26 +128,85 @@ export class TableScene {
     }
 
     this.drawFelt();
-    this.drawFurniture(state);
-    this.controller.syncActive(seatOfPlayer(state, state.turn.activePlayerId));
-    this.applyCamera();
+    this.drawFurniture(to);
   }
 
-  private ensureActor(p: PlacedActor): CardActor {
+  frame(dtMs: number, preset: CameraPreset): void {
+    for (const a of this.actors.values()) a.update(dtMs);
+    this.worldLayer.scale.set(preset.scale);
+    this.worldLayer.position.set(preset.x, preset.y);
+    // preset.tilt is the T4 perspective concern; T2 keeps the world flat.
+  }
+
+  // ── actor helpers ────────────────────────────────────────────────────────────
+
+  private createActor(key: string, p: PlacedActor): CardActor {
     const tex = p.card !== undefined ? this.textures.face(p.card, 'table') : this.textures.faceDown();
-    let actor = this.actors.get(p.key);
-    if (actor === undefined) {
-      actor = new CardActor(p.key, p.objectId, tex);
-      this.actors.set(p.key, actor);
+    return new CardActor(key, p.objectId, tex);
+  }
+
+  private refreshTexture(actor: CardActor, p: PlacedActor): void {
+    actor.setTexture(p.card !== undefined ? this.textures.face(p.card, 'table') : this.textures.faceDown());
+  }
+
+  private layerFor(space: ActorSpace): Container {
+    return space === 'screen' ? this.screenActors : this.worldActors;
+  }
+
+  private transformOf(p: PlacedActor): Transform {
+    return { x: p.placement.x, y: p.placement.y, rotation: p.placement.rotation, scale: p.placement.scale };
+  }
+
+  /** Convert an actor's live transform into the space it is moving to, so a card
+   *  crossing the world↔screen seam (a cast lifting off the hand, a draw sliding
+   *  into it) stays visually continuous through the reparent (design §6.2). */
+  private reproject(actor: CardActor, to: ActorSpace, preset: CameraPreset): void {
+    const p = actor.pos;
+    if (to === 'world') {
+      const w = screenToWorld(preset, p);
+      actor.seedCurrent({ x: w.x, y: w.y, rotation: 0, scale: this.currentScale(actor) / preset.scale });
     } else {
-      actor.setTexture(tex);
+      const s = worldToScreen(preset, p);
+      actor.seedCurrent({ x: s.x, y: s.y, rotation: 0, scale: this.currentScale(actor) * preset.scale });
     }
-    return actor;
+  }
+
+  private currentScale(actor: CardActor): number {
+    return actor.view.scale.x;
+  }
+
+  /** Where a new actor should spawn: the owner's source-zone anchor named by its
+   *  `move` event, in the actor's destination space. Undefined ⇒ appear at target. */
+  private entryOrigin(
+    p: PlacedActor, moveByObj: Map<Id, Extract<GameEvent, { k: 'move' }>>,
+    to: GameState, preset: CameraPreset,
+  ): Transform | undefined {
+    const objId = p.objectId;
+    const mv = objId !== undefined ? moveByObj.get(objId) : undefined;
+    if (mv === undefined) return undefined;
+    const world = this.zoneAnchorWorld(mv.from, p.placement.ownerId, to);
+    if (world === undefined) return undefined;
+    if (p.space === 'screen') {
+      const s = worldToScreen(preset, world);
+      return { x: s.x, y: s.y, rotation: 0, scale: p.placement.scale };
+    }
+    return { x: world.x, y: world.y, rotation: 0, scale: p.placement.scale };
+  }
+
+  private zoneAnchorWorld(zone: string, ownerId: Id | undefined, state: GameState): Point | undefined {
+    if (ownerId === undefined) return undefined;
+    const seat = seatLayouts(state).find(s => s.player.id === ownerId);
+    if (seat === undefined) return undefined;
+    const pile = ORIGIN_PILE[zone];
+    if (pile !== undefined) return seat.piles[pile];
+    if (zone === 'hand') return seat.handFan;
+    if (zone === 'stack') return { x: WORLD.w / 2, y: WORLD.h / 2 };
+    return undefined;
   }
 
   /** The player id the camera is focused on, or undefined at the whole table. */
   private focusedPlayerId(state: GameState): Id | undefined {
-    const view = this.controller.view();
+    const view = this.director.cameraView();
     if (view.kind !== 'seat') return undefined;
     return seatLayouts(state)[view.seat]?.player.id;
   }
@@ -109,27 +218,25 @@ export class TableScene {
     return p.placement.ownerId === focusedId ? 1 : DIM_ALPHA;
   }
 
-  private applyCamera(): void {
-    const preset = camera(this.controller.view(), this.size);
-    this.worldLayer.scale.set(preset.scale);
-    this.worldLayer.position.set(preset.x, preset.y);
-    // preset.tilt is the T4 perspective concern; T1 cuts flat.
-  }
+  // ── camera controls (design §7.3), delegated to the director ──────────────────
 
-  // ── camera controls (design §7.3) ────────────────────────────────────────
-
-  focusSeat(display: number): void { this.controller.focus(seatView(display)); this.applyCamera(); }
-  showTable(): void { this.controller.focus(TABLE_VIEW); this.applyCamera(); }
-  releaseCamera(): void { this.controller.release(); this.applyCamera(); }
+  focusSeat(display: number): void { this.director.focusSeat(display); }
+  showTable(): void { this.director.showTable(); }
+  releaseCamera(): void { this.director.releaseCamera(); }
 
   /** Re-lay at the live viewport (window resize): world layout is viewport-free,
-   *  so only the hand and the camera framing change — re-running renderState is
-   *  the simplest correct path at our render envelope (design §2). */
+   *  so only the hand and the camera framing change — snap the current presented
+   *  state to the new viewport rather than enqueuing a spurious animated step. */
   resize(): void {
-    if (this.state !== undefined) this.renderState(this.state);
+    if (this.director === undefined) return;
+    this.director.setViewport(this.size);
+    const presented = this.director.presented;
+    if (presented !== undefined) {
+      this.applyTransition(presented, presented, [], 0, new Map());
+    }
   }
 
-  // ── felt + furniture ─────────────────────────────────────────────────────
+  // ── felt + furniture ─────────────────────────────────────────────────────────
 
   private drawFelt(): void {
     const g = this.feltG.clear();
@@ -195,21 +302,21 @@ export class TableScene {
     this.furniture.addChild(plate);
   }
 
-  /** §12 scene accessor — real actor positions + the live camera for the harness. */
+  /** §12 scene accessor — real actor positions + the live camera for the harness.
+   *  `animating` is the director's "board caught up" signal (§6.4). */
   scene(): NightScene {
     const actors: SceneActor[] = [];
-    let animating = false;
     for (const a of this.actors.values()) {
-      animating ||= a.animating;
       actors.push({
         key: a.key, objectId: a.objectId, zone: a.placement.zone, ownerId: a.placement.ownerId,
         x: a.pos.x, y: a.pos.y, faceUp: a.placement.faceUp, animating: a.animating,
       });
     }
-    const view = this.controller.view();
-    const preset = camera(view, this.size);
+    const view = this.director?.cameraView() ?? { kind: 'table' as const };
+    const preset = this.director?.cameraPreset() ?? camera({ kind: 'table' }, this.size);
     return {
-      actors, animating,
+      actors,
+      animating: this.director !== undefined && !this.director.settled,
       camera: {
         view: view.kind === 'table' ? 'table' : `seat:${view.seat}`,
         x: preset.x, y: preset.y, scale: preset.scale,

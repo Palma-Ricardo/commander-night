@@ -50,6 +50,7 @@ export function applyStatePatch(msg: StatePatch, ctx: ApplyCtx): void {
     state: next,
     lastAppliedSeq: msg.seq,
     lastAppliedWasPatch: true,
+    lastEvents: msg.events ?? [],
     counters: { ...g.counters, patches: g.counters.patches + 1 },
   });
 }
@@ -79,6 +80,12 @@ export function applyKeyframe(msg: StateKeyframe, ctx: ApplyCtx): void {
     state: msg.state,
     lastAppliedSeq: msg.seq,
     lastAppliedWasPatch: false,
+    // A keyframe is a baseline, not a per-transition delta: the events (if any)
+    // that reached this tree rode on the patches leading up to it, so a keyframe
+    // carries none and the director snaps to it rather than animating a jump
+    // (§6.3: presented is only ever a real state; a bare keyframe = teleport
+    // fallback, §7.1). Resync/reconnect keyframes therefore snap, which is right.
+    lastEvents: msg.events ?? [],
     syncMode: 'live',
     counters,
   });
