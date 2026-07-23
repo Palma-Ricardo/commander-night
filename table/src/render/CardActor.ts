@@ -80,7 +80,8 @@ export class CardActor {
     const h = this.sprite.texture.height;
     const pt = artbox && card.power !== undefined && card.toughness !== undefined
       ? `${card.power}/${card.toughness}` : '';
-    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}`;
+    const count = artbox ? Math.max(1, Math.round(p.count ?? 1)) : 1;
+    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${count}`;
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
@@ -89,6 +90,7 @@ export class CardActor {
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
     if (tapped) this.chrome.addChild(tapGlyph(w, h));
+    if (count > 1) this.chrome.addChild(countBadge(count, w, h));
   }
 
   /** Paint (or clear) the affordance ring (§7). Sized in the sprite's own local
@@ -212,6 +214,27 @@ function ptBadge(pt: string, w: number, h: number, edge: number): Container {
   label.position.set(0, -1);
   c.addChild(g, label);
   c.position.set(w / 2 - bw / 2 - 6, h / 2 - bh / 2 - 6);                     // bottom-right inset
+  return c;
+}
+
+/** A "×N" tally for a collapsed stack of identical permanents (basics/tokens),
+ *  pinned to the card's top-left — the corner the P/T badge (bottom-right) and the
+ *  tap glyph (centre) never reach. Cream-on-ink so it reads over any art. */
+function countBadge(n: number, w: number, h: number): Container {
+  const c = new Container();
+  const label = new Text({
+    text: `×${n}`,
+    style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 19, fill: 0xe1d9c0, fontWeight: '700' }),
+  });
+  label.anchor.set(0.5, 0.5);
+  const bw = Math.max(label.width + 14, 30), bh = label.height + 5, r = bh / 2;
+  const g = new Graphics();
+  g.roundRect(-bw / 2, -bh / 2, bw, bh, r).fill({ color: 0x24252c, alpha: 0.92 });   // ink face
+  g.roundRect(-bw / 2 + 0.9, -bh / 2 + 0.9, bw - 1.8, bh - 1.8, r)
+    .stroke({ width: 1.5, color: 0xe1d9c0, alpha: 0.5 });                            // cream edge
+  label.position.set(0, -1);
+  c.addChild(g, label);
+  c.position.set(-w / 2 + bw / 2 + 6, -h / 2 + bh / 2 + 6);                          // top-left inset
   return c;
 }
 

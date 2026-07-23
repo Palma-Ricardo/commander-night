@@ -22,6 +22,10 @@ export interface ActorPlacement extends Transform {
   /** A tapped battlefield permanent (design T4): the render layer dims the art and
    *  overlays a tap glyph; the ~30° turn rides on `rotation` from the layout. */
   tapped?: boolean;
+  /** >1 ⇒ this actor is the visible top of a collapsed stack of identical
+   *  permanents (basic lands / tokens); the render layer overlays a "×count"
+   *  tally so eight Forests read as one cell, not eight (design T4). */
+  count?: number;
 }
 
 /** Which coordinate space a placement lives in (design §7.1). World actors are

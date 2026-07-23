@@ -3,6 +3,7 @@ import {
   displaySeats, layoutWorld, seatLayouts, seatOfPlayer,
   seatQuadrantRect, WORLD,
 } from '../src/layout/world';
+import type { Card, Permanent } from '@night/core';
 import type { PlacedActor } from '../src/layout/types';
 import { cid, fourSeats, mkCard, mkCreature, mkLand, mkPerm, mkPlayer, mkState } from './helpers';
 
@@ -106,6 +107,55 @@ describe('layoutWorld', () => {
     const maxSpellY = Math.max(...spells.map(p => p.placement.y));
     const minLandY = Math.min(...lands.map(p => p.placement.y));
     expect(minLandY).toBeGreaterThan(maxSpellY);
+  });
+
+  it('pins lands to the rail row, below every non-land permanent', () => {
+    const you = mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: [mkPerm('p1', mkCreature('A')), mkPerm('p1', mkLand('L1')), mkPerm('p1', mkLand('L2'))],
+    });
+    const seat = seatLayouts(mkState([you], 'p1'))[0]!;
+    const placed = layoutWorld(mkState([you], 'p1'));
+    const lands = placed.filter(p => p.placement.zone === 'battlefield' && p.card?.types.includes('LAND'));
+    // The land row sits at the seat's rail-most land anchor, not tucked up behind
+    // the spells — so it is pinned to the bottom regardless of how few spells there are.
+    for (const l of lands) expect(l.placement.y).toBeCloseTo(seat.landRowY, 5);
+    expect(seat.landRowY).toBeGreaterThan(seat.boardTopY);   // rail is below the seam for you
+  });
+
+  it('collapses identical basic lands into one cell with a ×N tally', () => {
+    const basic = (): Card => mkCard('Forest', ['LAND'], { supertypes: ['Basic'] });
+    const you = mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: Array.from({ length: 8 }, () => mkPerm('p1', basic())),
+    });
+    const lands = layoutWorld(mkState([you], 'p1')).filter(p => p.placement.zone === 'battlefield');
+    expect(lands.length).toBe(8);                                    // every Forest keeps its actor
+    const tallied = lands.filter(p => (p.placement.count ?? 0) > 1);
+    expect(tallied.length).toBe(1);                                  // exactly one top-of-stack tally
+    expect(tallied[0]!.placement.count).toBe(8);
+    // …all in a single cell: co-located up to the depth offset (< a card apart).
+    const xs = lands.map(p => p.placement.x), ys = lands.map(p => p.placement.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(30);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(30);
+  });
+
+  it('stacks identical tokens but splits on tapped / counters / individuation', () => {
+    const tok = (o: Partial<Permanent> = {}): Permanent =>
+      ({ ...mkCard('Saproling', ['CREATURE'], { power: '1', toughness: '1', token: true }), controllerId: 'p1', tapped: false, ...o });
+    const you = mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: [
+        tok(), tok(), tok(),                              // 3 identical → one ×3 cell
+        tok({ tapped: true }),                            // tapped → its own cell
+        tok({ counters: [{ name: 'P1P1', count: 1 }] }),  // a +1/+1 counter → its own cell
+        tok({ attachedTo: 'someAura' }),                  // individuated → never stacks
+      ],
+    });
+    const toks = layoutWorld(mkState([you], 'p1')).filter(p => p.placement.zone === 'battlefield');
+    expect(toks.length).toBe(6);
+    const tallies = toks.map(p => p.placement.count).filter((n): n is number => n !== undefined);
+    expect(tallies).toEqual([3]);                         // only the identical trio collapses
   });
 
   it('handles a crowded board (20 permanents) with no collisions', () => {

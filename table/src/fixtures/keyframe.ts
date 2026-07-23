@@ -35,8 +35,14 @@ function perm(controllerId: string, c: Card, opts: { tapped?: boolean } = {}): P
   return { ...c, controllerId, tapped: opts.tapped ?? false };
 }
 
+// The basic lands — flagged Basic on the wire (mage's SuperType.BASIC), which is
+// what lets the table collapse a fistful of Forests into one ×N cell (T4).
 const land = (name: string, colors: Card['colors']): Card =>
-  card(name, 'CMR', '1', 0, ['LAND'], { colors, text: [`{T}: Add mana.`] });
+  card(name, 'CMR', '1', 0, ['LAND'], { colors, supertypes: ['Basic'], text: [`{T}: Add mana.`] });
+
+const goblin = (): Permanent =>
+  perm('p2', card('Goblin Token', 'CMR', '', 0, ['CREATURE'],
+    { colors: ['R'], subtypes: ['Goblin'], power: '1', toughness: '1', text: [], token: true, imageNumber: 0 }));
 
 const commander = (name: string, colors: Card['colors'], mc: string, pt: [string, string]): CommandObject => ({
   ...card(name, 'CMR', '2', mc.replace(/[^0-9]/g, '').length, ['LEGENDARY', 'CREATURE'],
@@ -67,9 +73,12 @@ function seat(id: string, name: string, human: boolean, life: number, opts: {
 const you = seat('p1', 'You', true, 34, {
   commander: commander("Muldrotha, the Gravetide", ['B', 'G', 'U'], '{3}{B}{G}{U}', ['6', '6']),
   battlefield: [
-    perm('p1', land('Forest', ['G']), { tapped: true }),
-    perm('p1', land('Swamp', ['B'])),
+    perm('p1', land('Forest', ['G'])),
+    perm('p1', land('Forest', ['G'])),
+    perm('p1', land('Forest', ['G']), { tapped: true }),   // tapped ⇒ splits from the untapped pair
     perm('p1', land('Island', ['U'])),
+    perm('p1', land('Island', ['U'])),
+    perm('p1', land('Swamp', ['B'])),
     perm('p1', card('Sol Ring', 'CMR', '3', 1, ['ARTIFACT'], { manaCost: '{1}', text: ['{T}: Add {C}{C}.'] })),
     perm('p1', card('Sakura-Tribe Elder', 'CMR', '4', 2, ['CREATURE'],
       { manaCost: '{1}{G}', colors: ['G'], subtypes: ['Snake', 'Shaman'], power: '1', toughness: '1' })),
@@ -81,13 +90,15 @@ const you = seat('p1', 'You', true, 34, {
 const ana = seat('p2', 'Ana', false, 22, {
   commander: commander('Krenko, Mob Boss', ['R'], '{2}{R}{R}', ['3', '3']),
   battlefield: [
-    perm('p2', land('Mountain', ['R']), { tapped: true }),
-    perm('p2', land('Mountain', ['R']), { tapped: true }),
-    // A real token as the wire sends it (scryfall.ts): token=true, empty collector
-    // number, a " Token" name suffix — so the resolver takes its token-search
-    // ladder (degrading to colour-only) instead of a doomed cards/{set}/{number}.
-    perm('p2', card('Goblin Token', 'CMR', '', 0, ['CREATURE'],
-      { colors: ['R'], subtypes: ['Goblin'], power: '1', toughness: '1', text: [], token: true, imageNumber: 0 })),
+    perm('p2', land('Mountain', ['R'])),
+    perm('p2', land('Mountain', ['R'])),
+    perm('p2', land('Mountain', ['R'])),
+    // Krenko's swarm: identical tokens as the wire sends them (scryfall.ts): token=true,
+    // empty collector number, a " Token" name suffix — so the resolver takes its
+    // token-search ladder (degrading to colour-only), and the table folds them into
+    // one ×N cell instead of five. One is tapped, so it splits off (attacked?).
+    goblin(), goblin(), goblin(), goblin(),
+    { ...goblin(), tapped: true },
   ],
   graveyard: [card('Lightning Bolt', 'CMR', '6', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage.'] })],
   handSize: 2, librarySize: 63,

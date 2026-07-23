@@ -501,16 +501,19 @@ export class TableScene implements DirectorSink {
       new Graphics().roundRect(0, 0, n.w, n.h, 7).fill(BRASS_FILL).stroke({ width: 1.5, color: BRASS }),
     );
     const dead = p.flags?.dead === true || p.flags?.left === true;
-    plate.addChild(new Text({
+    const name = new Text({
       text: `${p.name}`,
       style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
-    })).position.set(12, 9);
+    });
+    name.anchor.set(0, 0.5);                 // centre in the taller plate, not top-pinned
+    name.position.set(12, n.h / 2);
+    plate.addChild(name);
     const life = new Text({
       text: `${p.life}`,
       style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: INK, fontWeight: '700' }),
     });
-    life.anchor.set(1, 0);
-    life.position.set(n.w - 12, 9);
+    life.anchor.set(1, 0.5);
+    life.position.set(n.w - 12, n.h / 2);
     plate.addChild(life);
     this.furniture.addChild(plate);
   }

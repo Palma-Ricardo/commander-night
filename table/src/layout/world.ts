@@ -32,7 +32,10 @@ const ARTBOX_TEX = { w: 200, h: 184 } as const;  // native battlefield art-box p
 const BOARD_SCALE = 0.62;                        // permanents on the felt
 const PILE_SCALE = 0.42;                         // piles read a touch smaller
 const STACK_SCALE = 0.74;                        // the stack looms over the seam
-export const OPP_HAND_SCALE = 0.3;               // an opponent's held fan (backs)
+// The nameplate and an opponent's held fan share the rail band, so they read as
+// one strip when they are the same height: the average of what each used to be
+// (plate 42, a 0.3-scaled back 84 → 63). 63/280 = 0.225 sizes the backs to match.
+export const OPP_HAND_SCALE = 0.225;             // an opponent's held fan (backs) — 63px tall
 
 // A tapped permanent turns ~30°, not a full 90° (design T4): a landscape art box
 // tilted a little reads as "tapped" without sprawling sideways and wrecking the
@@ -42,6 +45,10 @@ const TAP_ANGLE = 28 * Math.PI / 180;
 const CARD_W = ARTBOX_TEX.w * BOARD_SCALE;       // 124 — battlefield cell width
 const CARD_H = ARTBOX_TEX.h * BOARD_SCALE;       // ~114 — battlefield cell height
 const PILE_H = CARD_TEX.h * PILE_SCALE;          // ~118
+// A tapped card is rotated TAP_ANGLE, so its lowest corner reaches further than
+// CARD_H/2 from the centre — the land row reserves this (not the upright half) so
+// a tapped land in the front row clears the nameplate instead of dipping into it.
+const CARD_TAPPED_HALF_H = (CARD_W / 2) * Math.sin(TAP_ANGLE) + (CARD_H / 2) * Math.cos(TAP_ANGLE);  // ~79
 
 const GAP = 18;                  // between cards in a battlefield row
 const ROW_GAP = 22;              // between wrapped rows
@@ -50,8 +57,9 @@ const SIDE_MARGIN = 42;          // quadrant edge → row (non-pile side)
 const EDGE_MARGIN = 30;          // outer felt edge → pile column / nameplate band
 const INNER_GAP = 20;            // pile column → board rows
 const HAND_GAP = 20;             // nameplate → opponent hand fan
+const LAND_GAP = 10;             // clear gap between the (tapped-aware) land row and the nameplate
 
-export const NAMEPLATE = { w: 214, h: 42 } as const;
+export const NAMEPLATE = { w: 214, h: 63 } as const;   // h matches the held-fan (see OPP_HAND_SCALE)
 const PILE_W = CARD_TEX.w * PILE_SCALE;          // 84
 const PILE_GAP = 16;             // vertical gap between piles in the column
 const PILE_LABEL_GAP = 24;       // pile bottom → its count label baseline
@@ -67,9 +75,10 @@ export const PILE_LABEL: Record<PileZone, string> =
 const PILE_COLUMN_NEAR: PileZone[] = ['command', 'exile', 'library', 'graveyard'];
 const LIBRARY_MAX_VISIBLE = 8;   // a library is a stack of backs, not 70 actors
 
-// The opponent's held fan advances this far per card (heavy overlap), so N backs
-// span a small, predictable width the count label can sit beside.
-const OPP_HAND_ADVANCE = OPP_HAND_SCALE * CARD_TEX.w * 0.34;
+// The opponent's held fan advances this far per card. A longer stride spreads the
+// fan wider for the same vertical rise, so the arc reads flatter — the top seats'
+// backs no longer bunch into a steep hump against the rail (reviewed 2026-07-23).
+const OPP_HAND_ADVANCE = OPP_HAND_SCALE * CARD_TEX.w * 0.5;
 
 /** Half the width a face-down opponent hand of `n` cards occupies, for placing the
  *  count glyph just past the fan (shared by layout + the furniture pass). */
@@ -98,7 +107,8 @@ export interface SeatLayout {
   corner: Corner;
   quadrant: Rect;
   out: 1 | -1;                     // sign from the seam toward the outer edge (y)
-  boardTopY: number;               // centre-y of the seam-nearest board row
+  boardTopY: number;               // centre-y of the seam-nearest permanent row
+  landRowY: number;                // centre-y of the rail-most land row (lands sit here)
   rowStartX: number;               // centre-x of the first column
   cols: number;
   bandY: number;                   // centre-y of the nameplate + pile band
@@ -160,22 +170,38 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   const rowStartX = boardLeftX + CARD_W / 2;
   const cols = Math.max(3, Math.floor((boardRightX - boardLeftX) / (CARD_W + GAP)));
 
-  // The pile column, centred over the quadrant height. Far seats mirror the near
-  // order so a zone lands at the same spot relative to whoever sits there.
+  // The pile column, anchored at the player's outer corner. Far seats mirror the
+  // near order so a zone lands at the same spot relative to whoever sits there.
   const pileColX = corner.left
     ? q.x + EDGE_MARGIN + PILE_W / 2
     : q.x + q.w - EDGE_MARGIN - PILE_W / 2;
   const columnOrder = corner.bottom ? PILE_COLUMN_NEAR : [...PILE_COLUMN_NEAR].reverse();
   const pileStep = PILE_H + PILE_LABEL_GAP + PILE_GAP;
-  const colTopY = q.y + q.h / 2 - ((columnOrder.length - 1) * pileStep) / 2;
+  // The graveyard is the rail end of the order (§7.2): pin it a fixed margin off
+  // the outer corner — a discard pile in the elbow, not floating mid-quadrant —
+  // and run the column back toward the seam from there. Centring it over the
+  // (short) 4-pile column left the corner conspicuously empty (reviewed 2026-07-23).
+  // A pile's count label sits *below* it (toward larger y); for a bottom seat the
+  // corner pile is the lowest, so its label would spill past the felt — lift the
+  // whole column by that label's height so the text clears the corner.
+  const cornerLabelRoom = corner.bottom ? PILE_LABEL_GAP : 0;
+  const cornerPileY = outerEdge - out * (EDGE_MARGIN + PILE_H / 2 + cornerLabelRoom);
+  const colTopY = corner.bottom ? cornerPileY - (columnOrder.length - 1) * pileStep : cornerPileY;
   const piles = {} as Record<PileZone, Point>;
   columnOrder.forEach((zone, i) => {
     piles[zone] = { x: pileColX, y: colTopY + i * pileStep };
   });
 
   // Nameplate + the opponent's held fan share the band at the outer vertical edge,
-  // inboard of the pile column (§7.2 ".plate"). The fan sits beside the nameplate.
-  const bandY = outerEdge - out * (EDGE_MARGIN + PILE_H / 2);
+  // inboard of the pile column (§7.2 ".plate"). It hugs the rail — a nameplate is
+  // short, so inset it by its *own* half-height, not a pile's, or the rail carries
+  // a dead band (reviewed 2026-07-23). The fan sits beside the nameplate.
+  const bandY = outerEdge - out * (EDGE_MARGIN + NAMEPLATE.h / 2);
+  // Lands are the back row of the place setting — pinned to the rail, just inboard
+  // of the nameplate band (§7.2). Permanents fill forward from the seam; lands fill
+  // back from here, so your mana sits in front of you and your threats face the
+  // contested centre. Overflow wraps toward the seam (see layoutBoard).
+  const landRowY = bandY - out * (NAMEPLATE.h / 2 + LAND_GAP + CARD_TAPPED_HALF_H);
   const nameX = corner.left ? boardLeftX : boardRightX - NAMEPLATE.w;
   const nameplate: Rect = { x: nameX, y: bandY - NAMEPLATE.h / 2, w: NAMEPLATE.w, h: NAMEPLATE.h };
   const handHalf = opponentHandHalfWidth(player.handSize);
@@ -185,7 +211,7 @@ function seatGeometry(display: number, player: Player): SeatLayout {
 
   return {
     display, player, corner, quadrant: q, out,
-    boardTopY, rowStartX, cols, bandY, nameplate,
+    boardTopY, landRowY, rowStartX, cols, bandY, nameplate,
     lamplight: { x: q.x + q.w / 2, y: q.y + q.h / 2, r: Math.min(q.w, q.h) * 0.62 },
     piles, handFan,
   };
@@ -205,32 +231,88 @@ function place(
   out.push({ key, card, objectId, space: 'world', placement: p });
 }
 
-function placeGrid(seat: SeatLayout, perms: readonly Permanent[], startRow: number, out: PlacedActor[]): void {
-  perms.forEach((perm, i) => {
-    const col = i % seat.cols;
-    const row = startRow + Math.floor(i / seat.cols);
+// A permanent's stack key: permanents sharing one collapse into a single grid cell
+// (a "×N" tally, drawn by CardActor). Only basics and tokens ever stack — eight
+// Forests or eight Saprolings are interchangeable, eight distinct nonbasics are
+// not — and even then never across a difference the board must show: tapped, sick,
+// counters, or P/T all split the stack, and any individuated permanent (attached,
+// damaged, morphed, flipped, a copy) refuses to stack at all. undefined ⇒ singleton.
+function stackKey(p: Permanent): string | undefined {
+  const basicLand = p.types.includes('LAND') && p.supertypes.includes('Basic');
+  if (!basicLand && p.token !== true) return undefined;
+  if ((p.attachments?.length ?? 0) > 0 || p.attachedTo !== undefined) return undefined;
+  if ((p.damage ?? 0) > 0 || p.morph !== undefined || p.flipped === true
+    || p.transformed === true || p.copy === true || (p.faceDown ?? false)) return undefined;
+  const counters = (p.counters ?? []).map(c => `${c.name}=${c.count}`).sort().join(',');
+  return [
+    p.token === true ? 'tok' : 'basic', p.name,
+    p.tapped ? 'T' : 'U', p.summoningSick === true ? 'S' : '_',
+    p.power ?? '', p.toughness ?? '', counters,
+  ].join('|');
+}
+
+/** Fold a row of permanents into cells, preserving first-seen order: each key's
+ *  cell takes the slot where it first appears, later duplicates pile onto it. */
+function groupCells(perms: readonly Permanent[]): Permanent[][] {
+  const cells: Permanent[][] = [];
+  const byKey = new Map<string, Permanent[]>();
+  for (const p of perms) {
+    const key = stackKey(p);
+    if (key === undefined) { cells.push([p]); continue; }
+    const cell = byKey.get(key);
+    if (cell === undefined) { const fresh = [p]; byKey.set(key, fresh); cells.push(fresh); }
+    else cell.push(p);
+  }
+  return cells;
+}
+
+/** One grid slot: every member is placed (so each keeps its own actor, hit-test
+ *  and affordance ring), co-located under a small depth offset so the cell reads
+ *  as a tidy pile; only the topmost (last, so it renders over the rest) carries
+ *  the "×N" tally. */
+function placeCell(seat: SeatLayout, cell: readonly Permanent[], cx: number, cy: number, out: PlacedActor[]): void {
+  const n = cell.length;
+  cell.forEach((perm, i) => {
+    const d = Math.min(i, 6);
     place(out, perm.id, perm, perm.id, {
-      x: seat.rowStartX + col * (CARD_W + GAP),
-      y: seat.boardTopY + seat.out * row * (CARD_H + ROW_GAP),
+      x: cx + d * 2,
+      y: cy - d * 3,
       rotation: perm.tapped ? TAP_ANGLE : 0,
       scale: BOARD_SCALE,
       zone: 'battlefield',
       ownerId: seat.player.id,
       faceUp: !(perm.faceDown ?? false),
       tapped: perm.tapped,
+      count: n > 1 && i === n - 1 ? n : undefined,
     });
   });
 }
 
+/** Lay a list of cells as a grid anchored at (rowStartX, anchorY), rows advancing
+ *  in `rowStep` (toward the rail for permanents, toward the seam for lands). */
+function placeCells(seat: SeatLayout, cells: readonly Permanent[][], anchorY: number, rowStep: 1 | -1, out: PlacedActor[]): void {
+  cells.forEach((cell, i) => {
+    const col = i % seat.cols;
+    const row = Math.floor(i / seat.cols);
+    placeCell(
+      seat, cell,
+      seat.rowStartX + col * (CARD_W + GAP),
+      anchorY + rowStep * row * (CARD_H + ROW_GAP),
+      out,
+    );
+  });
+}
+
 function layoutBoard(seat: SeatLayout, out: PlacedActor[]): void {
-  // Spells face the seam, lands sit strictly behind them (§7.2): non-lands fill
-  // the seam-nearest rows, lands begin on the first row past them (never beside).
+  // The place setting (§7.2): non-land permanents are rows pinned to the seam and
+  // grow toward the rail; lands are their own row pinned to the rail and grow back
+  // toward the seam. Both fold identical basics/tokens into single cells first, so
+  // eight Forests cost one slot — the board's answer to overflow (T4).
   const bf = seat.player.battlefield;
-  const nonlands = bf.filter(p => !p.types.includes('LAND'));
-  const lands = bf.filter(p => p.types.includes('LAND'));
-  const spellRows = Math.ceil(nonlands.length / seat.cols);
-  placeGrid(seat, nonlands, 0, out);
-  placeGrid(seat, lands, spellRows, out);
+  const nonlands = groupCells(bf.filter(p => !p.types.includes('LAND')));
+  const lands = groupCells(bf.filter(p => p.types.includes('LAND')));
+  placeCells(seat, nonlands, seat.boardTopY, seat.out, out);
+  placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, out);
 }
 
 function layoutPile(
@@ -278,8 +360,8 @@ function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
       // are not (§7.2). The middle rides highest (smaller y) so the arc's interior
       // is on the bottom, like a hand held from below — the same for every seat.
       x: seat.handFan.x + t * OPP_HAND_ADVANCE,
-      y: seat.handFan.y + Math.abs(t) * 4,
-      rotation: t * 0.05,
+      y: seat.handFan.y + Math.abs(t) * 3,
+      rotation: t * 0.045,
       scale: OPP_HAND_SCALE, zone: 'hand', ownerId: seat.player.id, faceUp: false,
     });
   }
