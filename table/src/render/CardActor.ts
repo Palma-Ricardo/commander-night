@@ -5,12 +5,22 @@
 // duration per step and advances its own clock in lockstep, so an actor's motion
 // completes exactly when the director advances `presented` — no exponential
 // chase, so snap (duration 0) and burst-compression are both exact.
+//
+// Perspective (T4): the card face is a PerspectiveMesh, not a Sprite. The actor's
+// transform (x, y, rotation, scale) still lives in its own *space* (world for the
+// felt, screen for the hand) — the tween, `pos`, and the §12 harness all read it
+// unchanged. Rendering is a separate per-frame step: `render(proj)` takes the
+// scene's projector, maps the card's four space-corners to the screen, and sets
+// them on the mesh, so a world card keystones with the tilted felt while the hand
+// (an identity projector) stays an upright rectangle. The affordance ring
+// keystones with the face; the P/T / tap / count chrome billboards upright at the
+// projected centre so it stays legible on a leaned card.
 
-import { Container, Graphics, GraphicsPath, Sprite, Text, TextStyle, type Texture } from 'pixi.js';
+import { Container, Graphics, GraphicsPath, PerspectiveMesh, Text, TextStyle, type Texture } from 'pixi.js';
 import type { Card } from '@night/core';
 import { identityColor } from './textures';
-import type { ActorPlacement, ActorSpace, Transform } from '../layout/types';
-import type { HighlightSpec } from '../scene/interaction';
+import type { ActorPlacement, ActorSpace, Point, Transform } from '../layout/types';
+import type { HighlightSpec, Projector, ScreenAnchor } from '../scene/interaction';
 
 // Re-exported for existing importers; the definitions live in the Pixi-free
 // layout/types (and scene/interaction) so those tiers stay headless.
@@ -18,6 +28,8 @@ export type { ActorPlacement, Transform } from '../layout/types';
 export type { HighlightSpec } from '../scene/interaction';
 
 const TWO_PI = Math.PI * 2;
+const FACE_VERTS = 8;          // mesh grid per axis — smooth keystone, cheap at card size
+const RING_PAD = 0.06;         // affordance ring inset outside the face, in native-tex fractions
 
 /** ease-out cubic — cards decelerate into place (overshoot/spring is T4). */
 const ease = (t: number): number => 1 - (1 - t) ** 3;
@@ -32,16 +44,19 @@ function angleDelta(a: number, b: number): number {
 
 export class CardActor {
   readonly view = new Container();
-  private readonly highlight = new Graphics();   // affordance ring, behind the sprite
-  private readonly sprite: Sprite;
-  private readonly chrome = new Container();      // P/T badge + tap glyph, above the sprite
+  private readonly highlight = new Graphics();      // affordance ring, behind the face
+  private readonly face: PerspectiveMesh;           // the card, keystoned per frame
+  private readonly chrome = new Container();         // P/T badge + tap glyph, above the face
   private highlightSpec: HighlightSpec | undefined;
-  private chromeSig = '';                         // guards chrome rebuilds (like highlight)
+  private chromeSig = '';                            // guards chrome rebuilds (like highlight)
   private readonly from: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly current: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly target: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private elapsed = 0;
   private duration = 0;        // ms; 0 ⇒ settled
+  // The face's four screen corners from the last render (TL, TR, BR, BL), so the
+  // scene can anchor a DOM hover preview to the actual projected quad (§10).
+  private readonly corners: Point[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
 
   /** last placement, so scene() can report zone/owner/faceUp per §12 */
   placement: ActorPlacement = { x: 0, y: 0, rotation: 0, scale: 1, zone: 'battlefield', faceUp: true };
@@ -57,27 +72,30 @@ export class CardActor {
     readonly objectId: string | undefined,
     texture: Texture,
   ) {
-    this.sprite = new Sprite(texture);
-    this.sprite.anchor.set(0.5);
-    this.view.addChild(this.highlight, this.sprite, this.chrome);   // ring behind, chrome above
+    this.face = new PerspectiveMesh({ texture, verticesX: FACE_VERTS, verticesY: FACE_VERTS });
+    this.view.addChild(this.highlight, this.face, this.chrome);   // ring behind, chrome above
   }
 
   setTexture(texture: Texture): void {
-    this.sprite.texture = texture;
-    this.refreshChrome();   // texture size drives badge placement; card may have changed
+    this.face.texture = texture;   // rebuilds geometry to the new tex dims; render() re-corners it
+    this.refreshChrome();          // texture size drives badge placement; card may have changed
   }
+
+  /** The card's native texture size (portrait table tier or the shorter art box). */
+  private get texW(): number { return this.face.texture.width; }
+  private get texH(): number { return this.face.texture.height; }
 
   /** Paint the battlefield art-box overlays (design T4): a P/T badge for creatures,
    *  a dim + tap glyph when tapped. Only battlefield, face-up cards get chrome; the
-   *  hand, stack and piles stay bare full-card sprites. Guarded by a signature so
+   *  hand, stack and piles stay bare full-card faces. Guarded by a signature so
    *  the common no-change transition is a cheap string compare. */
   private refreshChrome(): void {
     const p = this.placement;
     const card = this.card;
     const artbox = p.zone === 'battlefield' && p.faceUp && card !== undefined;
     const tapped = artbox && p.tapped === true;
-    const w = this.sprite.texture.width;
-    const h = this.sprite.texture.height;
+    const w = this.texW;
+    const h = this.texH;
     const pt = artbox && card.power !== undefined && card.toughness !== undefined
       ? `${card.power}/${card.toughness}` : '';
     const count = artbox ? Math.max(1, Math.round(p.count ?? 1)) : 1;
@@ -85,7 +103,7 @@ export class CardActor {
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
-    this.sprite.tint = tapped ? TAP_DIM : 0xffffff;
+    this.face.tint = tapped ? TAP_DIM : 0xffffff;
     for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
@@ -93,26 +111,21 @@ export class CardActor {
     if (count > 1) this.chrome.addChild(countBadge(count, w, h));
   }
 
-  /** Paint (or clear) the affordance ring (§7). Sized in the sprite's own local
-   *  coords so it scales with the card; the ring sits just outside the face. */
+  /** Store (or clear) the affordance ring spec (§7). The ring geometry keystones
+   *  with the face, so it is *drawn* in `render` from the live projected corners;
+   *  here we only latch the spec and note a change. */
   setHighlight(spec: HighlightSpec | undefined): void {
     if (sameHighlight(this.highlightSpec, spec)) return;
     this.highlightSpec = spec;
-    const g = this.highlight.clear();
-    if (spec === undefined) return;
-    const w = this.sprite.texture.width;
-    const h = this.sprite.texture.height;
-    const pad = Math.round(w * 0.06);
-    if (spec.selected === true) {
-      g.roundRect(-w / 2 - pad, -h / 2 - pad, w + 2 * pad, h + 2 * pad, 12)
-        .fill({ color: spec.color, alpha: 0.22 });
-    }
-    g.roundRect(-w / 2 - pad, -h / 2 - pad, w + 2 * pad, h + 2 * pad, 12)
-      .stroke({ width: Math.max(4, Math.round(w * 0.035)), color: spec.color, alpha: spec.dim === true ? 0.4 : 1 });
+    if (spec === undefined) this.highlight.clear();
   }
 
   /** Whether this actor currently offers a click affordance (drives the cursor). */
   get highlighted(): boolean { return this.highlightSpec !== undefined; }
+
+  /** The actor's current scale in its own space — the scene reads it when
+   *  re-projecting a card across the world↔screen seam (§6.2). */
+  get scaleNow(): number { return this.current.scale; }
 
   /** Jump instantly to `p` — first sight, snap steps, or the reduced-motion cut. */
   snapTo(p: ActorPlacement): void {
@@ -121,7 +134,6 @@ export class CardActor {
     Object.assign(this.current, this.target);
     this.duration = 0;
     this.elapsed = 0;
-    this.apply();
     this.refreshChrome();
   }
 
@@ -143,10 +155,10 @@ export class CardActor {
   seedCurrent(t: Transform): void {
     Object.assign(this.current, t);
     Object.assign(this.from, t);
-    this.apply();
   }
 
-  /** Advance the tween by `dtMs`; returns true while still animating. */
+  /** Advance the tween by `dtMs`; returns true while still animating. Painting is a
+   *  separate step (`render`), driven every frame by the scene's projector. */
   update(dtMs: number): boolean {
     if (this.duration <= 0) return false;
     this.elapsed += dtMs;
@@ -155,15 +167,64 @@ export class CardActor {
     this.current.y = this.from.y + (this.target.y - this.from.y) * t;
     this.current.scale = this.from.scale + (this.target.scale - this.from.scale) * t;
     this.current.rotation = this.from.rotation + angleDelta(this.from.rotation, this.target.rotation) * t;
-    this.apply();
     if (this.elapsed >= this.duration) { this.duration = 0; return false; }
     return true;
   }
 
-  private apply(): void {
-    this.view.position.set(this.current.x, this.current.y);
-    this.view.rotation = this.current.rotation;
-    this.view.scale.set(this.current.scale);
+  /** Project the card through `proj` and paint it: the face's four corners
+   *  (keystoned in world space, an upright rect on the hand), the affordance ring
+   *  around them, and the chrome billboarded upright at the projected centre. */
+  render(proj: Projector): void {
+    const hw = (this.texW * this.current.scale) / 2;
+    const hh = (this.texH * this.current.scale) / 2;
+    const cos = Math.cos(this.current.rotation);
+    const sin = Math.sin(this.current.rotation);
+    // a space-corner from unit signs (sx, sy) ∈ {−1, +1}, then rotated + placed
+    const at = (sx: number, sy: number, padX = 0, padY = 0): Point => {
+      const lx = sx * (hw + padX);
+      const ly = sy * (hh + padY);
+      return { x: this.current.x + lx * cos - ly * sin, y: this.current.y + lx * sin + ly * cos };
+    };
+    const tl = proj.toScreen(at(-1, -1));
+    const tr = proj.toScreen(at(1, -1));
+    const br = proj.toScreen(at(1, 1));
+    const bl = proj.toScreen(at(-1, 1));
+    this.face.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
+    this.corners[0] = tl; this.corners[1] = tr; this.corners[2] = br; this.corners[3] = bl;
+
+    const centre = { x: this.current.x, y: this.current.y };
+    const screenScale = this.current.scale * proj.scaleAt(centre);
+
+    // affordance ring: a keystoned quad just outside the face
+    const spec = this.highlightSpec;
+    this.highlight.clear();
+    if (spec !== undefined) {
+      const padX = RING_PAD * this.texW * this.current.scale;
+      const padY = RING_PAD * this.texH * this.current.scale;
+      const r0 = proj.toScreen(at(-1, -1, padX, padY));
+      const r1 = proj.toScreen(at(1, -1, padX, padY));
+      const r2 = proj.toScreen(at(1, 1, padX, padY));
+      const r3 = proj.toScreen(at(-1, 1, padX, padY));
+      const poly = [r0.x, r0.y, r1.x, r1.y, r2.x, r2.y, r3.x, r3.y];
+      if (spec.selected === true) this.highlight.poly(poly).fill({ color: spec.color, alpha: 0.22 });
+      const width = Math.max(2, this.texW * 0.035 * screenScale);
+      this.highlight.poly(poly).stroke({ width, color: spec.color, alpha: spec.dim === true ? 0.4 : 1 });
+    }
+
+    // chrome: billboard upright at the projected centre, sized + turned with the card
+    const c = proj.toScreen(centre);
+    this.chrome.position.set(c.x, c.y);
+    this.chrome.rotation = this.current.rotation;
+    this.chrome.scale.set(screenScale);
+  }
+
+  /** The on-screen bounding box of the projected face, for anchoring a DOM hover
+   *  preview (§10). Read from the last `render`'s corners. */
+  bounds(): ScreenAnchor {
+    const xs = this.corners.map(p => p.x);
+    const ys = this.corners.map(p => p.y);
+    const left = Math.min(...xs), top = Math.min(...ys);
+    return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
   }
 
   get pos(): { x: number; y: number } {
@@ -190,7 +251,7 @@ function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefine
 
 // ── battlefield art-box chrome (design T4) ────────────────────────────────────
 
-const TAP_DIM = 0x8b8b8b;   // sprite tint for a tapped permanent (~55% brightness)
+const TAP_DIM = 0x8b8b8b;   // face tint for a tapped permanent (~55% brightness)
 
 /** A P/T badge pinned to the card's bottom-right corner — the same embossed cream
  *  plate as the name plate, with the colour-identity edge. Text-driven so anthem/

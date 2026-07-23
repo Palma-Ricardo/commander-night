@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  camera, rectVisible, safeArea, seatView, TABLE_VIEW, worldToScreen, screenToWorld,
+  camera, rectVisible, safeArea, seatFocusRect, seatView, TABLE_VIEW, worldToScreen, screenToWorld,
 } from '../src/camera/camera';
 import { CameraController } from '../src/camera/controller';
 import { seatQuadrantRect, WORLD } from '../src/layout/world';
@@ -30,19 +30,26 @@ describe('camera framing', () => {
     }
   });
 
-  it('frames a focused seat against the middle: its outer corner pins to the safe-area corner', () => {
+  it('frames a focused seat against the middle: the outer side sits flush to the safe area', () => {
     const vp = { w: 1920, h: 1080 };
     const area = safeArea(vp);
-    // display 0 = bottom-left → outer world corner (0, H) → safe-area bottom-left
+    // display 0 = bottom-left, a NEAR seat → its outer corner (0, H) is the warped
+    // extreme, so it pins exactly to the safe-area bottom-left corner.
     const p0 = camera(seatView(0), vp);
     const bl = worldToScreen(p0, { x: 0, y: WORLD.h });
     expect(bl.x).toBeCloseTo(area.x, 3);
     expect(bl.y).toBeCloseTo(area.y + area.h, 3);
-    // display 2 = top-right → outer world corner (W, 0) → safe-area top-right
+    // display 2 = top-right, a FAR seat → the top edge is flush to the area top
+    // (its y still pins exactly), but the receded outer corner (W, 0) insets from
+    // the right under perspective — the seat's near edge is the widest point, so
+    // *that* is what sits flush to the area's right side.
     const p2 = camera(seatView(2), vp);
     const tr = worldToScreen(p2, { x: WORLD.w, y: 0 });
-    expect(tr.x).toBeCloseTo(area.x + area.w, 3);
     expect(tr.y).toBeCloseTo(area.y, 3);
+    expect(tr.x).toBeLessThanOrEqual(area.x + area.w + 1e-6);
+    const focus2 = seatFocusRect(2);
+    const flush = worldToScreen(p2, { x: focus2.x + focus2.w, y: focus2.y + focus2.h });
+    expect(flush.x).toBeCloseTo(area.x + area.w, 3);
   });
 
   it('leaves neighbours bleeding in — a seat never fills the window', () => {

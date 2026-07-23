@@ -16,6 +16,17 @@ export interface HighlightSpec { color: number; selected?: boolean; dim?: boolea
  *  HoverAnchor — kept here so the scene never imports the React chrome. */
 export interface ScreenAnchor { left: number; top: number; width: number; height: number }
 
+/** How the render layer maps an actor's own space to the screen for the current
+ *  frame (T4 perspective). `toScreen` warps + places a point (identity for the
+ *  screen-space hand); `scaleAt` is the linear screen-scale factor there
+ *  (`preset.scale × depth` for a world actor, 1 for a screen actor) — used to size
+ *  a card's chrome and affordance ring, which billboard rather than keystone. Pixi
+ *  free, so CardActor and the tests share one contract. */
+export interface Projector {
+  toScreen(p: Point): Point;
+  scaleAt(p: Point): number;
+}
+
 // Highlight ring colours (§7), mirroring the classic client's CSS
 // (--in / --accent / --out / --error).
 export const HL_ACTION = 0x9ece6a;

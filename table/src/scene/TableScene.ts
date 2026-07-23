@@ -14,8 +14,8 @@
 // rather than destroying and recreating it. The stack's ephemeral id is adopted
 // onto that stable key via `stackLink` (scene/keys.ts), unifying cast → resolve.
 
-import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { FederatedPointerEvent, Texture } from 'pixi.js';
+import { Application, Container, Graphics, PerspectiveMesh, Rectangle, Text, Texture, TextStyle } from 'pixi.js';
+import type { FederatedPointerEvent } from 'pixi.js';
 import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, ScryfallResolver, Zone } from '@night/core';
 import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
@@ -25,14 +25,16 @@ import {
   NAMEPLATE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
   type PileZone, type SeatLayout,
 } from '../layout/world';
-import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/types';
-import { camera, worldToScreen, screenToWorld, type CameraPreset, type CameraView } from '../camera/camera';
+import type { ActorSpace, PlacedActor, Point, Rect, Size, Transform } from '../layout/types';
+import {
+  camera, worldToScreen, screenToWorld, depthScaleAt, type CameraPreset, type CameraView,
+} from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
 import { layoutScreen } from '../layout/screen';
 import { promptObjectIds } from './prompt-objects';
 import {
-  highlightForAffordance, isClickable, rectContains, screenAnchor, type ScreenAnchor,
+  highlightForAffordance, isClickable, rectContains, type Projector, type ScreenAnchor,
 } from './interaction';
 
 const RAIL = 0x0e0b08;      // the floor the table sits on
@@ -64,14 +66,32 @@ function imgPriority(zone: Zone): 0 | 1 | 2 { return IMG_PRIORITY[zone] ?? 2; }
 // a full portrait card (the hand, the stack, the piles, the hover preview).
 function imgTier(zone: Zone): Tier { return zone === 'battlefield' ? 'artbox' : 'table'; }
 
+// A furniture shape in world coords, drawn each frame as a projected quad so it
+// keystones with the felt (T4): the pile footprints, nameplate plates, chip boxes.
+interface FurnitureShape {
+  rect: Rect;
+  fill?: { color: number; alpha: number };
+  stroke?: { width: number; color: number; alpha: number };
+}
+
 export class TableScene implements DirectorSink {
   private app!: Application;
   private textures!: CardTextures;
   private director!: Director;
   private unsubResolver?: () => void;
-  private readonly worldLayer = new Container();   // camera-transformed
-  private readonly feltG = new Graphics();
-  private readonly furniture = new Container();
+  private readonly worldLayer = new Container();   // identity: children are placed in screen space
+  private feltMesh!: PerspectiveMesh;               // the felt surface, keystoned per frame (T4)
+  private feltTex?: Texture;                        // baked felt base (rect + folds + lamplight)
+  private feltSig = '';                             // rebuilds the felt tex only when the layout moves
+  // Furniture keystones geometrically (§7): the footprint / nameplate / chip
+  // *shapes* are drawn as projected quads into one Graphics every frame, so they
+  // lean with the felt; their text labels billboard upright at the projected anchor
+  // (the same pattern as a card's P/T chrome) so they stay legible. The specs are
+  // rebuilt only on a state transition; the projection runs each frame.
+  private readonly furnitureShapes = new Graphics();
+  private readonly furnitureText = new Container();
+  private shapeSpecs: FurnitureShape[] = [];
+  private textItems: { node: Text; anchor: Point }[] = [];
   private readonly worldActors = new Container();
   private readonly screenActors = new Container();  // fixed (the hand)
   private readonly actors = new Map<string, CardActor>();
@@ -117,14 +137,22 @@ export class TableScene implements DirectorSink {
     // paint rather than the procedural back that would pop a frame later.
     await this.textures.loadCardBack();
 
-    this.worldLayer.addChild(this.feltG, this.furniture, this.worldActors);
+    // The felt is a PerspectiveMesh: a baked felt texture mapped onto the four
+    // projected world corners each frame, so the whole surface keystones (T4). A
+    // fine vertex grid keeps the felt's gradients smooth under the projection.
+    this.feltMesh = new PerspectiveMesh({ texture: Texture.WHITE, verticesX: 20, verticesY: 20 });
+    // Furniture shapes + text draw above the felt, below the cards; neither eats
+    // pointer events so a tap on bare felt still reaches the felt mesh below.
+    this.furnitureShapes.eventMode = 'none';
+    this.furnitureText.eventMode = 'none';
+    this.worldLayer.addChild(this.feltMesh, this.furnitureShapes, this.furnitureText, this.worldActors);
     this.app.stage.addChild(this.worldLayer, this.screenActors);
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
     // tap on bare cloth (or a nameplate, which falls through) reaches here.
-    this.feltG.eventMode = 'static';
-    this.feltG.on('pointertap', (e: FederatedPointerEvent) => this.handleFeltTap(e));
+    this.feltMesh.eventMode = 'static';
+    this.feltMesh.on('pointertap', (e: FederatedPointerEvent) => this.handleFeltTap(e));
 
     const reducedMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
@@ -192,22 +220,70 @@ export class TableScene implements DirectorSink {
       if (!live.has(key)) { actor.destroy(); this.actors.delete(key); }
     }
 
-    this.drawFelt();
+    this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
+    this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
 
   frame(dtMs: number, preset: CameraPreset): void {
     for (const a of this.actors.values()) a.update(dtMs);
-    this.worldLayer.scale.set(preset.scale);
-    this.worldLayer.position.set(preset.x, preset.y);
-    // preset.tilt is the presentational lean (§7.3) — deferred: an affine container
-    // squash distorts cards without reading as tilt; real perspective is the fix.
+    this.paint(preset);
     // Re-dim only when the focused seat actually changed (a manual camera move
     // has no state transition to re-apply §7.3 dimming, so do it here).
     const key = this.cameraViewKey();
     if (key !== this.lastViewKey) { this.lastViewKey = key; this.redim(); }
     this.emitCameraView(key);
+  }
+
+  /** Project everything to the screen for `preset` (T4): the felt mesh, the
+   *  furniture (shapes as projected quads + text billboards), and every actor. The
+   *  world has no container transform now — the perspective warp lives in the
+   *  projection, so each object is re-placed per frame (worldLayer stays identity). */
+  private paint(preset: CameraPreset): void {
+    const world: Projector = {
+      toScreen: p => worldToScreen(preset, p),
+      scaleAt: p => preset.scale * depthScaleAt(preset, p),
+    };
+    const screen: Projector = { toScreen: p => p, scaleAt: () => 1 };
+    this.updateFeltMesh(preset);
+    this.projectFurniture(preset);
+    for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
+  }
+
+  /** Map the felt texture onto the four projected world corners — the trapezoid
+   *  that makes the table read as leaning back (T4). */
+  private updateFeltMesh(preset: CameraPreset): void {
+    const tl = worldToScreen(preset, { x: 0, y: 0 });
+    const tr = worldToScreen(preset, { x: WORLD.w, y: 0 });
+    const br = worldToScreen(preset, { x: WORLD.w, y: WORLD.h });
+    const bl = worldToScreen(preset, { x: 0, y: WORLD.h });
+    this.feltMesh.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
+  }
+
+  /** Redraw every furniture shape as a projected quad (so it keystones with the
+   *  felt) and billboard each text label upright at its projected anchor, depth-
+   *  scaled so far seats read smaller. Runs every frame — cheap over a few dozen
+   *  shapes/labels. */
+  private projectFurniture(preset: CameraPreset): void {
+    const g = this.furnitureShapes.clear();
+    for (const s of this.shapeSpecs) {
+      const { x, y, w, h } = s.rect;
+      const a = worldToScreen(preset, { x, y });
+      const b = worldToScreen(preset, { x: x + w, y });
+      const c = worldToScreen(preset, { x: x + w, y: y + h });
+      const d = worldToScreen(preset, { x, y: y + h });
+      const poly = [a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y];
+      if (s.fill !== undefined) g.poly(poly).fill(s.fill);
+      if (s.stroke !== undefined) {
+        g.poly(poly).stroke({ ...s.stroke, width: Math.max(1, s.stroke.width * preset.scale) });
+      }
+    }
+    for (const t of this.textItems) {
+      const sp = worldToScreen(preset, t.anchor);
+      t.node.position.set(sp.x, sp.y);
+      t.node.scale.set(preset.scale * depthScaleAt(preset, t.anchor));
+    }
   }
 
   private cameraViewKey(): string {
@@ -282,15 +358,13 @@ export class TableScene implements DirectorSink {
     const p = actor.pos;
     if (to === 'world') {
       const w = screenToWorld(preset, p);
-      actor.seedCurrent({ x: w.x, y: w.y, rotation: 0, scale: this.currentScale(actor) / preset.scale });
+      const f = preset.scale * depthScaleAt(preset, w);   // screen px per world unit here
+      actor.seedCurrent({ x: w.x, y: w.y, rotation: 0, scale: actor.scaleNow / f });
     } else {
       const s = worldToScreen(preset, p);
-      actor.seedCurrent({ x: s.x, y: s.y, rotation: 0, scale: this.currentScale(actor) * preset.scale });
+      const f = preset.scale * depthScaleAt(preset, p);
+      actor.seedCurrent({ x: s.x, y: s.y, rotation: 0, scale: actor.scaleNow * f });
     }
-  }
-
-  private currentScale(actor: CardActor): number {
-    return actor.view.scale.x;
   }
 
   /** Where a new actor should spawn: the owner's source-zone anchor named by its
@@ -396,13 +470,15 @@ export class TableScene implements DirectorSink {
    *  preview (§10 sceneToScreen). Composes layout with the live camera preset;
    *  world actors project through it, the screen-space hand does not. */
   private actorAnchor(actor: CardActor): ScreenAnchor {
-    return screenAnchor(actor.space, actor.pos, actor.placement.scale, this.director.cameraPreset());
+    return actor.bounds();   // the projected face's on-screen bbox from the last frame
   }
 
   private handleFeltTap(e: FederatedPointerEvent): void {
     const state = this.director.presented;
     if (state === undefined) return;
-    const local = e.getLocalPosition(this.worldLayer);   // world coords
+    // worldLayer is identity now — the tap arrives in screen space; unproject it
+    // through the live camera (perspective included) to hit-test the quadrants.
+    const local = screenToWorld(this.director.cameraPreset(), { x: e.global.x, y: e.global.y });
     const seat = seatLayouts(state).findIndex(s => rectContains(s.quadrant, local));
     if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
   }
@@ -466,35 +542,62 @@ export class TableScene implements DirectorSink {
 
   // ── felt + furniture ─────────────────────────────────────────────────────────
 
-  private drawFelt(): void {
-    const g = this.feltG.clear();
+  /** Bake the static felt surface (rail-inset cloth, edge, quarter folds, and each
+   *  seat's pool of lamplight) into a world-sized texture, then hand it to the felt
+   *  mesh. The lamplight rides the felt so it keystones with the surface for free.
+   *  Rebuilt only when the seat layout moves (guarded by a signature) — the mesh's
+   *  four corners are re-projected every frame regardless. */
+  private rebuildFelt(state: GameState): void {
+    const seats = seatLayouts(state);
+    const sig = seats.map(s => `${Math.round(s.lamplight.x)},${Math.round(s.lamplight.y)},${Math.round(s.lamplight.r)}`).join('|');
+    if (sig === this.feltSig && this.feltTex !== undefined) return;
+    this.feltSig = sig;
+    const g = new Graphics();
     g.roundRect(0, 0, WORLD.w, WORLD.h, 36).fill(FELT);
     g.roundRect(6, 6, WORLD.w - 12, WORLD.h - 12, 30).stroke({ width: 10, color: FELT_EDGE, alpha: 0.9 });
     // quarter folds, stopping short of the edges (§7.2)
     g.moveTo(WORLD.w / 2, WORLD.h * 0.06).lineTo(WORLD.w / 2, WORLD.h * 0.94)
       .moveTo(WORLD.w * 0.06, WORLD.h / 2).lineTo(WORLD.w * 0.94, WORLD.h / 2)
       .stroke({ width: 2, color: 0x000000, alpha: 0.16 });
+    for (const seat of seats) {
+      const { x, y, r } = seat.lamplight;
+      g.circle(x, y, r).fill({ color: 0xffe6ad, alpha: 0.05 });
+    }
+    const tex = this.app.renderer.generateTexture({ target: g, frame: new Rectangle(0, 0, WORLD.w, WORLD.h), resolution: 1 });
+    this.feltMesh.texture = tex;
+    this.feltTex?.destroy(true);
+    this.feltTex = tex;
+    g.destroy();
   }
 
+  /** Rebuild the furniture model for a new state: shape specs (drawn as projected
+   *  quads each frame, so they keystone) plus text labels (billboarded upright).
+   *  Cheap — no render textures. */
   private drawFurniture(state: GameState): void {
-    this.furniture.removeChildren();
+    for (const c of this.furnitureText.removeChildren()) c.destroy();
+    this.shapeSpecs = [];
+    this.textItems = [];
     for (const seat of seatLayouts(state)) {
-      this.drawLamplight(seat);
       this.drawPiles(seat);
       this.drawNameplate(seat, state);
       this.drawHandCount(seat, state.me.playerId);
     }
   }
 
-  private drawLamplight(seat: SeatLayout): void {
-    const { x, y, r } = seat.lamplight;
-    this.furniture.addChild(new Graphics().circle(x, y, r).fill({ color: 0xffe6ad, alpha: 0.05 }));
+  /** A billboarded furniture label: created here, then positioned + depth-scaled at
+   *  its world `anchor` every frame by `projectFurniture`. Returned for measurement. */
+  private addFurnitureText(content: string, style: TextStyle, ax: number, ay: number, anchor: Point): Text {
+    const node = new Text({ text: content, style });
+    node.anchor.set(ax, ay);
+    this.furnitureText.addChild(node);
+    this.textItems.push({ node, anchor });
+    return node;
   }
 
-  /** Each seat's pile column (§7.2 ".zones"): a footprint under the real card
-   *  stack plus a count label, so a 1-card graveyard reads apart from an 18-card
-   *  one. Empty zones are a faint outline (not a solid block that mimics a card);
-   *  exile stays cold so "gone" never reads as "dead" (§8). */
+  /** Each seat's pile column (§7.2 ".zones"): a footprint quad (keystoned) under the
+   *  real card stack plus a count label, so a 1-card graveyard reads apart from an
+   *   18-card one. Empty zones are a faint outline (not a solid block that mimics a
+   *  card); exile stays cold so "gone" never reads as "dead" (§8). */
   private drawPiles(seat: SeatLayout): void {
     const { w, h } = PILE_FOOTPRINT;
     const p = seat.player;
@@ -506,23 +609,20 @@ export class TableScene implements DirectorSink {
       const a = seat.piles[zone];
       const count = counts[zone];
       const cold = zone === 'exile';
-      const g = new Graphics().roundRect(a.x - w / 2, a.y - h / 2, w, h, 6);
-      if (count === 0) g.stroke({ width: 1.5, color: cold ? 0x486070 : 0x000000, alpha: 0.3 });
-      else g.fill({ color: cold ? 0x121d24 : 0x000000, alpha: cold ? 0.42 : 0.3 });
-      this.furniture.addChild(g);
+      const rect: Rect = { x: a.x - w / 2, y: a.y - h / 2, w, h };
+      if (count === 0) this.shapeSpecs.push({ rect, stroke: { width: 1.5, color: cold ? 0x486070 : 0x000000, alpha: 0.3 } });
+      else this.shapeSpecs.push({ rect, fill: { color: cold ? 0x121d24 : 0x000000, alpha: cold ? 0.42 : 0.3 } });
 
       // The command zone is always 1–2 (the commander), so a count there is noise —
       // the zone tag alone. Every other pile carries its size.
-      const label = new Text({
-        text: zone === 'command' ? PILE_LABEL[zone] : `${PILE_LABEL[zone]} ${count}`,
-        style: new TextStyle({
+      this.addFurnitureText(
+        zone === 'command' ? PILE_LABEL[zone] : `${PILE_LABEL[zone]} ${count}`,
+        new TextStyle({
           fontFamily: 'ui-monospace, monospace', fontSize: 15, letterSpacing: 1,
           fill: count === 0 ? 0x6c7871 : 0xa6b0a9, fontWeight: '600',
         }),
-      });
-      label.anchor.set(0.5, 0);
-      label.position.set(a.x, a.y + h / 2 + 6);
-      this.furniture.addChild(label);
+        0.5, 0, { x: a.x, y: a.y + h / 2 + 6 },
+      );
     }
   }
 
@@ -532,63 +632,57 @@ export class TableScene implements DirectorSink {
     const p = seat.player;
     if (p.id === meId || p.handSize === 0) return;
     const side = seat.corner.left ? 1 : -1;   // the glyph sits inboard of the fan
-    const label = new Text({
-      text: `${p.handSize}`,
-      style: new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 16, fill: 0x8b95a0, fontWeight: '700' }),
-    });
-    label.anchor.set(side === 1 ? 0 : 1, 0.5);
-    label.position.set(seat.handFan.x + side * (opponentHandHalfWidth(p.handSize) + 10), seat.handFan.y);
-    this.furniture.addChild(label);
+    this.addFurnitureText(
+      `${p.handSize}`,
+      new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 16, fill: 0x8b95a0, fontWeight: '700' }),
+      side === 1 ? 0 : 1, 0.5,
+      { x: seat.handFan.x + side * (opponentHandHalfWidth(p.handSize) + 10), y: seat.handFan.y },
+    );
   }
 
   private drawNameplate(seat: SeatLayout, state: GameState): void {
     const n = NAMEPLATE;
     const p = seat.player;
     const box = seat.nameplate;
-    const plate = new Container();
-    plate.position.set(box.x, box.y);
-    plate.addChild(
-      new Graphics().roundRect(0, 0, n.w, n.h, 7).fill(BRASS_FILL).stroke({ width: 1.5, color: BRASS }),
-    );
+    this.shapeSpecs.push({
+      rect: { x: box.x, y: box.y, w: n.w, h: n.h },
+      fill: { color: BRASS_FILL, alpha: 1 },
+      stroke: { width: 1.5, color: BRASS, alpha: 1 },
+    });
     const dead = p.flags?.dead === true || p.flags?.left === true;
-    const name = new Text({
-      text: `${p.name}`,
-      style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
-    });
-    name.anchor.set(0, 0.5);                 // centre in the taller plate, not top-pinned
-    name.position.set(12, n.h / 2);
-    plate.addChild(name);
-    const life = new Text({
-      text: `${p.life}`,
-      style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: INK, fontWeight: '700' }),
-    });
-    life.anchor.set(1, 0.5);
-    life.position.set(n.w - 12, n.h / 2);
-    plate.addChild(life);
-    this.drawCommanderDamage(plate, commanderDamageRows(state, p));
-    this.furniture.addChild(plate);
+    this.addFurnitureText(
+      `${p.name}`,
+      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
+      0, 0.5, { x: box.x + 12, y: box.y + n.h / 2 },     // left-pinned, vertically centred
+    );
+    this.addFurnitureText(
+      `${p.life}`,
+      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: INK, fontWeight: '700' }),
+      1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
+    );
+    this.drawCommanderDamage(box.x, box.y, commanderDamageRows(state, p));
   }
 
   /** Commander-damage chips (§6), one per attacking commander, in a strip to the
-   *  right of the plate — a red pill of "⚔ <commander> N" so lethal (21) creeps
-   *  up where the victim reads it, without tracing a combat arrow. */
-  private drawCommanderDamage(plate: Container, rows: { commander: string; amount: number }[]): void {
+   *  right of the plate — a red pill of "⚔ <commander> N" so lethal (21) creeps up
+   *  where the victim reads it, without tracing a combat arrow. Chip boxes keystone;
+   *  their text billboards. */
+  private drawCommanderDamage(bx: number, by: number, rows: { commander: string; amount: number }[]): void {
     let x = NAMEPLATE.w + 8;
     const h = 22;
     for (const row of rows) {
       const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
-      const chip = new Container();
-      const text = new Text({
-        text: `⚔ ${short} ${row.amount}`,
-        style: new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 14, fill: DMG_INK, fontWeight: '700' }),
+      const style = new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 14, fill: DMG_INK, fontWeight: '700' });
+      const node = new Text({ text: `⚔ ${short} ${row.amount}`, style });
+      const w = Math.round(node.width) + 12;
+      this.shapeSpecs.push({
+        rect: { x: bx + x, y: by + NAMEPLATE.h / 2 - h / 2, w, h },
+        fill: { color: DMG_FILL, alpha: 1 },
+        stroke: { width: 1, color: DMG_EDGE, alpha: 1 },
       });
-      const w = Math.round(text.width) + 12;
-      chip.position.set(x, NAMEPLATE.h / 2 - h / 2);
-      chip.addChild(new Graphics().roundRect(0, 0, w, h, 4).fill(DMG_FILL).stroke({ width: 1, color: DMG_EDGE }));
-      text.anchor.set(0, 0.5);
-      text.position.set(6, h / 2);
-      chip.addChild(text);
-      plate.addChild(chip);
+      node.anchor.set(0, 0.5);
+      this.furnitureText.addChild(node);
+      this.textItems.push({ node, anchor: { x: bx + x + 6, y: by + NAMEPLATE.h / 2 } });
       x += w + 5;
     }
   }
@@ -620,6 +714,7 @@ export class TableScene implements DirectorSink {
     this.unsubResolver?.();
     for (const a of this.actors.values()) a.destroy();
     this.actors.clear();
+    this.feltTex?.destroy(true);
     this.textures?.destroy();
     this.app?.destroy(true, { children: true });
   }
