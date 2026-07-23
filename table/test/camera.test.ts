@@ -58,6 +58,19 @@ describe('camera framing', () => {
     const vp = { w: 1920, h: 1080 };
     expect(camera(seatView(0), vp).scale).toBeGreaterThan(camera(TABLE_VIEW, vp).scale);
   });
+
+  it('zooms in HARD enough that following reads as a move (≥1.6× the table)', () => {
+    // A gentle seat zoom makes a re-frame look like nothing happened and leaves
+    // opposite seats indistinguishable (reviewed 2026-07-23). Assert a real jump
+    // at every supported window size, for every seat.
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      const table = camera(TABLE_VIEW, vp).scale;
+      for (let seat = 0; seat < 4; seat++) {
+        const ratio = camera(seatView(seat), vp).scale / table;
+        expect(ratio, `seat ${seat} @ ${vp.w}x${vp.h}`).toBeGreaterThan(1.6);
+      }
+    }
+  });
 });
 
 describe('projection round-trip', () => {

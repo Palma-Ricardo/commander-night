@@ -11,12 +11,23 @@ import type { GameState, LogEntry } from '@night/core/protocol/protocol';
 import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
 import { hoverCard } from './hover';
 
+const COLLAPSE_KEY = 'night.table.logCollapsed';
+const readCollapsed = (): boolean => {
+  try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
+};
+
 export function LogPanel({ state }: { state: GameState }) {
   const entries = useStore(appStores.log, s => s.entries);
   const unread = useStore(appStores.log, s => s.unreadChat);
   const [tab, setTab] = useState<'log' | 'chat'>('log');
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const listRef = useRef<HTMLOListElement>(null);
   const stickBottom = useRef(true);
+
+  const setCollapsedPersist = (v: boolean): void => {
+    setCollapsed(v);
+    try { localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0'); } catch { /* private mode */ }
+  };
 
   const shown = tab === 'log' ? entries : entries.filter(e => e.kind === 'chat');
 
@@ -34,6 +45,17 @@ export function LogPanel({ state }: { state: GameState }) {
     if (el !== null) stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
+  // Collapsed: the panel covered the right of the board, so it folds to a small
+  // handle that keeps the unread-chat badge visible (§8 — never miss a chat line).
+  if (collapsed) {
+    return (
+      <button className="log-reopen" title="show log / chat" onClick={() => setCollapsedPersist(false)}>
+        Log
+        {unread > 0 && <span className="chat-unread">{unread}</span>}
+      </button>
+    );
+  }
+
   return (
     <aside className="log-panel">
       <div className="log-tabs">
@@ -43,6 +65,9 @@ export function LogPanel({ state }: { state: GameState }) {
         <button className={tab === 'chat' ? 'tab tab-active' : 'tab'} onClick={() => setTab('chat')}>
           Chat
           {unread > 0 && <span className="chat-unread">{unread}</span>}
+        </button>
+        <button className="log-collapse" title="hide (frees the board)" onClick={() => setCollapsedPersist(true)}>
+          ›
         </button>
       </div>
       <ol ref={listRef} onScroll={onScroll} className="log-entries">

@@ -19,6 +19,7 @@ import { PromptDock } from './PromptDock';
 import { TurnControls } from './TurnControls';
 import { LogPanel, useRematchCode } from './LogPanel';
 import { HoverPreview } from './HoverPreview';
+import { ManaSymbols } from './ManaSymbols';
 import { useShortcuts } from './shortcuts';
 import { startNudge } from './nudge';
 
@@ -66,6 +67,7 @@ export function GameOverlay() {
 
       <div className="table-controls">
         <span className="status-line">{statusLine(state, pendingMessage)}</span>
+        <ManaPool />
         <Compass />
         <TurnControls />
       </div>
@@ -73,6 +75,28 @@ export function GameOverlay() {
       <PromptDock />
       <HoverPreview />
     </div>
+  );
+}
+
+const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'] as const;
+
+/** Your floating mana pool (§9). The board nameplates show only name + life, so
+ *  without this the pool was invisible — you could not watch mana accumulate while
+ *  paying a cost. Reads my own player's `manaPool`; shows a pip per non-zero colour
+ *  and a muted placeholder when empty, so its location on the HUD is always known. */
+function ManaPool() {
+  const state = useStore(appStores.game, s => s.state);
+  const pool = state?.players.find(p => p.id === state.me.playerId)?.manaPool;
+  if (pool === undefined) return null;
+  const lit = POOL_ORDER.filter(c => pool[c] > 0);
+  return (
+    <span className={lit.length > 0 ? 'mana-pool mana-pool-lit' : 'mana-pool'} title="your mana pool">
+      {lit.length === 0
+        ? <span className="mana-pool-empty">pool empty</span>
+        : lit.map(c => (
+            <span key={c} className="mana-pool-pip">{pool[c]}<ManaSymbols symbols={[c]} /></span>
+          ))}
+    </span>
   );
 }
 

@@ -23,7 +23,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const TABLE_ROOT = resolve(HERE, '..');
 
 function parseArgs(argv) {
-  const a = { url: 'http://localhost:5273/?demo', out: null, sizes: ['1600x900'], label: '', settle: 1200, waitActors: true };
+  const a = { url: 'http://localhost:5273/?demo', out: null, sizes: ['1600x900'], label: '', settle: 1200, waitActors: true, seat: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i], v = argv[i + 1];
     if (k === '--url') { a.url = v; i++; }
@@ -31,6 +31,7 @@ function parseArgs(argv) {
     else if (k === '--size') { a.sizes = v.split(',').map(s => s.trim()).filter(Boolean); i++; }
     else if (k === '--label') { a.label = v; i++; }
     else if (k === '--settle') { a.settle = Number(v); i++; }
+    else if (k === '--seat') { a.seat = Number(v); i++; }   // focus a seat (0=you..3) before shooting
     else if (k === '--no-wait') { a.waitActors = false; }
     else if (k === '--help' || k === '-h') { a.help = true; }
   }
@@ -98,6 +99,16 @@ for (const size of args.sizes) {
       .catch(() => console.warn('[shoot] timed out waiting for actors — shooting anyway'));
   }
   await page.waitForTimeout(args.settle);
+
+  // Optionally drive the camera to a seat (the 1–4 shortcut → scene.focusSeat),
+  // so seat framings can be reviewed headless. Demo is a single static keyframe,
+  // so follow never fires on its own — this is the only way to see a seat view.
+  if (args.seat !== null && args.seat >= 0 && args.seat <= 3) {
+    await page.evaluate((seat) => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: String(seat + 1), bubbles: true }));
+    }, args.seat);
+    await page.waitForTimeout(700);   // let the manual-camera tween settle (CAMERA_MANUAL_MS)
+  }
 
   const info = await page.evaluate(() => {
     const s = globalThis.__night?.scene?.();

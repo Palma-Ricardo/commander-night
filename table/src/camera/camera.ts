@@ -22,15 +22,26 @@ export const TABLE_VIEW: CameraView = { kind: 'table' };
 export const seatView = (seat: number): CameraView => ({ kind: 'seat', seat });
 
 /** The world→screen transform plus the presentational tilt (§7.3). `scale`, `x`,
- *  `y` place the world container; `tilt` eases flatter as the lens comes in and is
- *  applied as a perspective effect by the renderer (T4) — projection ignores it. */
+ *  `y` place the world container; `tilt` eases flatter as the lens comes in (~15°
+ *  whole-table, ~8° on a seat) and is meant to lean the felt back like a real
+ *  table. It rides through `lerpPreset` so a camera move interpolates it, but the
+ *  renderer does not yet consume it: an affine container squash distorts the cards
+ *  without reading as tilt (a symmetric felt carries no perspective cue), so a real
+ *  perspective projection is the pending fix (T4). */
 export interface CameraPreset { x: number; y: number; scale: number; tilt: number }
 
 const SAFE_MARGIN = 16;          // inset from the window edges
 const TABLE_FILL = 0.98;         // whole-table zoom leaves a thin rail
 const SEAT_FILL = 0.98;
-const BLEED_X = 380;             // how far a seat view reaches past centre (world)
-const BLEED_Y = 300;
+// How far a seat view reaches past the felt centre (world px). The framing is
+// height-limited, so BLEED_Y sets the zoom: it must be small enough that a seat
+// fills the frame — otherwise a re-frame barely changes the picture and follow
+// reads as "nothing moved", with neighbouring seats indistinguishable (reviewed
+// 2026-07-23). BLEED_X stays generous (it never limits the fit) so the contested
+// centre and the horizontal neighbour still bleed in. Net seat zoom ≈ 1.7× the
+// whole-table view, under the ~2× ceiling where the whole quadrant stops fitting.
+const BLEED_X = 380;
+const BLEED_Y = 120;
 const TILT_TABLE = 15 * Math.PI / 180;
 const TILT_SEAT = 8 * Math.PI / 180;
 

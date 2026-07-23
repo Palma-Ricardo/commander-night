@@ -92,6 +92,18 @@ button.danger { background: var(--error); color: #14161a; }
 }
 .status-line { font-family: ui-monospace, monospace; color: var(--accent); font-size: 0.9rem; }
 
+.mana-pool { display: inline-flex; align-items: center; gap: 0.35rem; }
+.mana-pool-lit {
+  padding: 0.1rem 0.45rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 16%, #0d1016cc);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.mana-pool-pip {
+  display: inline-flex; align-items: center; gap: 2px;
+  font-family: ui-monospace, monospace; font-weight: 700; font-size: 0.9rem; color: var(--text);
+}
+.mana-pool-empty { color: var(--muted); font-size: 0.72rem; font-style: italic; letter-spacing: 0.04em; }
+
 .prompt-dock {
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(clamp(132px, 19vh, 240px) + 0.5rem);
@@ -160,7 +172,20 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   background: #12151bdd; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem;
   box-shadow: 0 8px 30px #0008;
 }
-.log-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.3rem; }
+.log-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.3rem; align-items: center; }
+.log-collapse {
+  margin-left: auto; padding: 0.1rem 0.5rem; font-size: 1rem; line-height: 1;
+  color: var(--muted); background: none; border: 1px solid transparent; border-radius: 4px;
+}
+.log-collapse:hover { color: var(--text); border-color: var(--border); }
+.log-reopen {
+  position: fixed; right: 8px; top: 44px; z-index: 15;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  font-size: 0.8rem; padding: 0.25rem 0.7rem; color: var(--muted);
+  background: #12151bdd; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 30px #0008;
+}
+.log-reopen:hover { color: var(--text); border-color: var(--accent); }
 .log-tabs .tab {
   font-size: 0.8rem; padding: 0.15rem 0.6rem; color: var(--muted);
   background: none; border: 1px solid transparent; border-radius: 4px;

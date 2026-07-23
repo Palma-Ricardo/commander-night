@@ -179,7 +179,8 @@ export class TableScene implements DirectorSink {
     for (const a of this.actors.values()) a.update(dtMs);
     this.worldLayer.scale.set(preset.scale);
     this.worldLayer.position.set(preset.x, preset.y);
-    // preset.tilt is the T4 perspective concern; T2 keeps the world flat.
+    // preset.tilt is the presentational lean (§7.3) — deferred: an affine container
+    // squash distorts cards without reading as tilt; real perspective is the fix.
     // Re-dim only when the focused seat actually changed (a manual camera move
     // has no state transition to re-apply §7.3 dimming, so do it here).
     const key = this.cameraViewKey();
