@@ -16,11 +16,14 @@
 
 import { Application, Container, Graphics, PerspectiveMesh, Rectangle, Text, Texture, TextStyle } from 'pixi.js';
 import type { FederatedPointerEvent } from 'pixi.js';
-import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, ScryfallResolver, Zone } from '@night/core';
+import type {
+  Card, GameEvent, GameState, Id, NightScene, Phase, SceneActor, ScryfallResolver, Step, Verb, Zone,
+} from '@night/core';
 import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
-import { CardTextures, type Tier } from '../render/textures';
+import { CardTextures, identityColor, type Tier } from '../render/textures';
+import { Effects } from '../render/Effects';
 import {
   NAMEPLATE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
   type PileZone, type SeatLayout,
@@ -34,7 +37,7 @@ import { layoutKeyed, type StackLinks } from './keys';
 import { layoutScreen } from '../layout/screen';
 import { promptObjectIds } from './prompt-objects';
 import {
-  highlightForAffordance, isClickable, rectContains, type Projector, type ScreenAnchor,
+  highlightForAffordance, HL_COMBAT, isClickable, rectContains, type Projector, type ScreenAnchor,
 } from './interaction';
 
 const RAIL = 0x0e0b08;      // the floor the table sits on
@@ -95,6 +98,12 @@ export class TableScene implements DirectorSink {
   private readonly worldActors = new Container();
   private readonly screenActors = new Container();  // fixed (the hand)
   private readonly actors = new Map<string, CardActor>();
+  // §9 transient effects (dust, damage, arrows, ribbons, ghosts, vignette, shake).
+  private readonly effects = new Effects();
+  // Delayed one-shots (landing squash/dust fire on arrival, not takeoff): advanced
+  // in the frame loop, re-resolving actors by id so a replaced actor is a no-op.
+  private timers: { left: number; fn: () => void }[] = [];
+  private reducedMotion = false;
 
   // ── interaction (T3) ─────────────────────────────────────────────────────────
   /** The pending prompt + selection scratch, so the scene can derive board
@@ -145,8 +154,11 @@ export class TableScene implements DirectorSink {
     // pointer events so a tap on bare felt still reaches the felt mesh below.
     this.furnitureShapes.eventMode = 'none';
     this.furnitureText.eventMode = 'none';
-    this.worldLayer.addChild(this.feltMesh, this.furnitureShapes, this.furnitureText, this.worldActors);
-    this.app.stage.addChild(this.worldLayer, this.screenActors);
+    // Effects: worldFx keystones among the actors (it self-projects), screenFx is a
+    // fixed overlay on top of everything (vignette, phase ribbon).
+    this.worldLayer.addChild(this.feltMesh, this.furnitureShapes, this.furnitureText,
+      this.worldActors, this.effects.worldFx);
+    this.app.stage.addChild(this.worldLayer, this.screenActors, this.effects.screenFx);
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
@@ -156,6 +168,7 @@ export class TableScene implements DirectorSink {
 
     const reducedMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    this.reducedMotion = reducedMotion;
     this.director = new Director(this, { viewport: this.size, reducedMotion });
     this.app.ticker.add(t => this.director.tick(t.deltaMS));
 
@@ -211,8 +224,12 @@ export class TableScene implements DirectorSink {
           this.layerFor(p.space).addChild(actor.view);   // re-append keeps z in layout order
         }
       }
-      if (duration > 0) actor.animateTo(p.placement, duration);
-      else actor.snapTo(p.placement);
+      if (duration > 0) {
+        const mv = p.objectId !== undefined ? moveByObj.get(p.objectId) : undefined;
+        actor.animateTo(p.placement, duration, arcForMove(mv?.verb, p.space));
+      } else {
+        actor.snapTo(p.placement);
+      }
       actor.view.alpha = this.dimAlpha(p.space, p.placement.zone, p.placement.ownerId, focusedId);
     }
 
@@ -223,11 +240,16 @@ export class TableScene implements DirectorSink {
     this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
+    if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration);
     this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
 
   frame(dtMs: number, preset: CameraPreset): void {
     for (const a of this.actors.values()) a.update(dtMs);
+    this.advanceTimers(dtMs);
+    this.effects.update(dtMs);
+    const shake = this.effects.shakeOffset();
+    this.app.stage.position.set(shake.x, shake.y);
     this.paint(preset);
     // Re-dim only when the focused seat actually changed (a manual camera move
     // has no state transition to re-apply §7.3 dimming, so do it here).
@@ -249,6 +271,7 @@ export class TableScene implements DirectorSink {
     this.updateFeltMesh(preset);
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
+    this.effects.render(world);   // effects live in world space (they self-project)
   }
 
   /** Map the felt texture onto the four projected world corners — the trapezoid
@@ -299,6 +322,177 @@ export class TableScene implements DirectorSink {
     if (sig === this.lastCamSig) return;
     this.lastCamSig = sig;
     this.onCameraView?.(this.director.cameraView(), following);
+  }
+
+  // ── §9 animation catalogue: events → juice ───────────────────────────────────
+
+  /** Turn the advisory §7.1 events for this transition into motion + particles
+   *  (design §9). Only called for an animated step (duration > 0, motion enabled) —
+   *  a snap/first-paint/reduced-motion cut plays no juice, matching the director's
+   *  "dropping animation is always legal". Card-attached juice (glow/flash/tip)
+   *  rides the actor so it follows the card mid-flight; landing effects are delayed
+   *  to arrival; particles are spawned into the effects layer at world anchors. */
+  private playJuice(to: GameState, events: readonly GameEvent[], duration: number): void {
+    const me = to.me?.playerId;
+    const stack = { x: WORLD.w / 2, y: WORLD.h / 2 };
+    let untapIdx = 0;
+    for (const e of events) {
+      switch (e.k) {
+        case 'move': this.moveJuice(e, duration); break;
+        case 'tap': {
+          const actor = this.actorByObject(e.objectId);
+          actor?.overshoot(0.14);
+          if (e.forMana === true) {
+            const from = this.worldPointOf(e.objectId);
+            const pool = this.seatPoint(actor?.placement.ownerId, to);
+            if (from !== undefined && pool !== undefined) {
+              this.effects.manaPip(from, pool, actor?.card !== undefined ? identityColor(actor.card) : 0xffe6ad);
+            }
+          }
+          break;
+        }
+        case 'untap': {
+          const id = e.objectId;
+          this.after(untapIdx++ * 45, () => this.actorByObject(id)?.overshoot(-0.14));   // ripple (§9)
+          break;
+        }
+        case 'attack': {
+          const target = this.seatPoint(e.defenderId, to) ?? this.worldPointOf(e.defenderId);
+          for (const aid of e.attackerIds) {
+            const from = this.worldPointOf(aid);
+            if (from !== undefined && target !== undefined) this.effects.attackArrow(from, target);
+          }
+          break;
+        }
+        case 'block': {
+          this.actorByObject(e.attackerId)?.sparkGlow(HL_COMBAT);
+          for (const bid of e.blockerIds) this.actorByObject(bid)?.sparkGlow(HL_COMBAT);
+          break;
+        }
+        case 'damage': {
+          const p = this.worldPointOf(e.targetId) ?? this.seatPoint(e.targetId, to);
+          if (p !== undefined) {
+            this.effects.damageNumber(p, e.amount, e.combat);
+            this.effects.impactFlash(p);
+          }
+          this.actorByObject(e.targetId)?.sparkFlash();
+          if (e.combat) this.effects.addShake(Math.min(18, 3 + e.amount * 1.4));
+          break;
+        }
+        case 'life': {
+          const p = this.seatPoint(e.playerId, to);
+          const delta = e.to - e.from;
+          if (p !== undefined && delta !== 0) {
+            this.effects.pip(p, `${delta > 0 ? '+' : ''}${delta}`, delta >= 0 ? 0x7bd88f : 0xff8a6a);
+          }
+          if (e.playerId === me && delta <= -5) this.effects.vignette(this.size, Math.min(1, -delta / 15));
+          break;
+        }
+        case 'counters': {
+          const p = this.worldPointOf(e.objectId);
+          const d = e.to - e.from;
+          if (p !== undefined && d !== 0) this.effects.pip(p, `${d > 0 ? '+' : ''}${d}`, 0xd9c98a);
+          break;
+        }
+        case 'trigger': {
+          const src = this.actorByObject(e.sourceId);
+          const from = this.worldPointOf(e.sourceId);
+          if (src !== undefined && from !== undefined) {
+            const col = src.card !== undefined ? identityColor(src.card) : 0xffe6ad;
+            src.sparkGlow(col);
+            this.effects.triggerRibbon(from, stack, col);
+            if (src.card !== undefined) {
+              this.effects.ghost(this.textures.face(src.card, 'table', 1), from, stack, src.placement.scale * 0.9);
+            }
+          }
+          break;
+        }
+        case 'step': {
+          if (e.phase !== undefined) this.effects.phaseRibbon(phaseLabel(e.phase, e.step), this.size);
+          break;
+        }
+        default: break;   // hidden / stackLink / reveal / shuffle / scry / search: no §9 motion
+      }
+    }
+  }
+
+  /** The per-verb read of a zone move (design §9 catalogue rows). */
+  private moveJuice(e: Extract<GameEvent, { k: 'move' }>, duration: number): void {
+    const actor = this.actorByObject(e.objectId);
+    const card = actor?.card;
+    const land = this.worldPointOf(e.objectId);
+    switch (e.verb) {
+      case 'cast':
+        if (actor !== undefined && card !== undefined) actor.sparkGlow(identityColor(card));
+        break;
+      case 'resolve':
+        if (land !== undefined) this.after(duration, () => {
+          this.actorByObject(e.objectId)?.land(1);
+          this.effects.dustRing(land, 1);
+        });
+        break;
+      case 'play':
+        if (land !== undefined) this.after(duration, () => {
+          this.actorByObject(e.objectId)?.land(0.6);
+          this.effects.dustRing(land, 0.7);
+        });
+        break;
+      case 'destroy':
+        actor?.die();
+        break;
+      case 'sacrifice':
+        actor?.die();
+        actor?.sparkFlash();
+        break;
+      case 'exile':
+        actor?.sparkGlow(0x5b7f9c);   // cold-toned "gone" read (§8/§9)
+        break;
+      case 'counter':                 // countered spell shatters instead of resolving
+        actor?.sparkFlash();
+        actor?.overshoot(0.5);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private after(ms: number, fn: () => void): void {
+    this.timers.push({ left: ms, fn });
+  }
+
+  private advanceTimers(dtMs: number): void {
+    if (this.timers.length === 0) return;
+    const due: (() => void)[] = [];
+    this.timers = this.timers.filter(t => {
+      t.left -= dtMs;
+      if (t.left <= 0) { due.push(t.fn); return false; }
+      return true;
+    });
+    for (const fn of due) fn();
+  }
+
+  /** The live actor carrying object `id` (juice targets objects, not layout keys). */
+  private actorByObject(id: Id | undefined): CardActor | undefined {
+    if (id === undefined) return undefined;
+    for (const a of this.actors.values()) if (a.objectId === id) return a;
+    return undefined;
+  }
+
+  /** An object's world anchor (its target placement), or undefined for a hand card
+   *  in screen space / an unknown id — juice on those has no felt point. */
+  private worldPointOf(id: Id | undefined): Point | undefined {
+    const a = this.actorByObject(id);
+    if (a === undefined || a.space === 'screen') return undefined;
+    return { x: a.placement.x, y: a.placement.y };
+  }
+
+  /** A seat's world anchor (its nameplate centre) — the target for life/damage
+   *  numbers, mana pips, and combat arrows aimed at a player. */
+  private seatPoint(playerId: Id | undefined, state: GameState): Point | undefined {
+    if (playerId === undefined) return undefined;
+    const seat = seatLayouts(state).find(s => s.player.id === playerId);
+    if (seat === undefined) return undefined;
+    return { x: seat.nameplate.x + NAMEPLATE.w / 2, y: seat.nameplate.y + NAMEPLATE.h / 2 };
   }
 
   // ── actor helpers ────────────────────────────────────────────────────────────
@@ -712,12 +906,39 @@ export class TableScene implements DirectorSink {
   destroy(): void {
     if (getActiveScene() === this) setActiveScene(null);
     this.unsubResolver?.();
+    this.effects.clear();
+    this.timers = [];
     for (const a of this.actors.values()) a.destroy();
     this.actors.clear();
     this.feltTex?.destroy(true);
     this.textures?.destroy();
     this.app?.destroy(true, { children: true });
   }
+}
+
+/** The upward bow of a move's path (design §9), in the actor's own-space units
+ *  (screen px for the hand, world px on the felt). A cast lifts high, a draw and a
+ *  bounce arc, a resolve/land drops nearly straight. */
+function arcForMove(verb: Verb | undefined, space: ActorSpace): number {
+  const base = space === 'screen' ? 120 : 90;
+  switch (verb) {
+    case 'cast': return base;
+    case 'draw': return base * 0.7;
+    case 'bounce': case 'tutor': return base * 0.8;
+    case 'resolve': return space === 'screen' ? 0 : 40;
+    case 'play': return 30;
+    default: return 0;
+  }
+}
+
+const PHASE_LABEL: Record<Phase, string> = {
+  BEGINNING: 'Beginning', PRECOMBAT_MAIN: 'Main Phase', COMBAT: 'Combat',
+  POSTCOMBAT_MAIN: 'Second Main', END: 'End Step',
+};
+
+/** The banner text for a phase ribbon (design §9 `step`). */
+function phaseLabel(phase: Phase, _step: Step | undefined): string {
+  return PHASE_LABEL[phase] ?? String(phase);
 }
 
 // Module-level handle so the composition root's harness scene() can read the

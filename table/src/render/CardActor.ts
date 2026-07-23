@@ -44,8 +44,10 @@ function angleDelta(a: number, b: number): number {
 
 export class CardActor {
   readonly view = new Container();
+  private readonly glowG = new Graphics();          // colour-identity glow, behind everything (§9 cast)
   private readonly highlight = new Graphics();      // affordance ring, behind the face
   private readonly face: PerspectiveMesh;           // the card, keystoned per frame
+  private readonly flashG = new Graphics();         // white impact overlay, above the face (§9 damage)
   private readonly chrome = new Container();         // P/T badge + tap glyph, above the face
   private highlightSpec: HighlightSpec | undefined;
   private chromeSig = '';                            // guards chrome rebuilds (like highlight)
@@ -54,6 +56,16 @@ export class CardActor {
   private readonly target: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private elapsed = 0;
   private duration = 0;        // ms; 0 ⇒ settled
+  // ── §9 juice channels: each decays to 0 on its own, advanced every frame ──
+  private arc = 0;             // upward bow of the current tween's path (own-space units)
+  private lastT = 1;           // last eased tween progress, for the arc sample
+  private squash = 0;          // 0..1 landing squash (vertical compress + horizontal spread)
+  private spin = 0;            // radians of rotation overshoot (tap/untap), decays
+  private flashAmt = 0;        // 0..1 white impact flash
+  private glowAmt = 0;         // 0..1 cast/colour glow
+  private glowColor = 0xffffff;
+  private dying = false;       // destroy/sacrifice → ramp `mortis` toward 1
+  private mortis = 0;          // 0..1 death desaturation + tip-over
   // The face's four screen corners from the last render (TL, TR, BR, BL), so the
   // scene can anchor a DOM hover preview to the actual projected quad (§10).
   private readonly corners: Point[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
@@ -73,7 +85,8 @@ export class CardActor {
     texture: Texture,
   ) {
     this.face = new PerspectiveMesh({ texture, verticesX: FACE_VERTS, verticesY: FACE_VERTS });
-    this.view.addChild(this.highlight, this.face, this.chrome);   // ring behind, chrome above
+    // glow behind the ring; flash over the face but under the P/T/tap chrome.
+    this.view.addChild(this.glowG, this.highlight, this.face, this.flashG, this.chrome);
   }
 
   setTexture(texture: Texture): void {
@@ -103,7 +116,8 @@ export class CardActor {
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
-    this.face.tint = tapped ? TAP_DIM : 0xffffff;
+    // (face tint is applied per-frame in render — it blends the tap dim with the
+    //  death ramp, so it can't be baked here.)
     for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
@@ -134,21 +148,46 @@ export class CardActor {
     Object.assign(this.current, this.target);
     this.duration = 0;
     this.elapsed = 0;
+    this.arc = 0;
+    this.lastT = 1;
     this.refreshChrome();
   }
 
   /** Tween from the current transform to `p` over `durationMs` (0 ⇒ snap). The
    *  from-point is wherever the actor is *now*, so a tween interrupted mid-flight
-   *  by the next step continues smoothly from its live position (§6.3). */
-  animateTo(p: ActorPlacement, durationMs: number): void {
+   *  by the next step continues smoothly from its live position (§6.3). `arc` bows
+   *  the path upward (§9 cast/draw), in the actor's own-space units. */
+  animateTo(p: ActorPlacement, durationMs: number, arc = 0): void {
     this.placement = p;
     Object.assign(this.target, transformOf(p));
     if (durationMs <= 0) { this.snapTo(p); return; }
     Object.assign(this.from, this.current);
     this.duration = durationMs;
     this.elapsed = 0;
+    this.arc = arc;
+    this.lastT = 0;
     this.refreshChrome();   // chrome doesn't tween — it belongs to the whole card
   }
+
+  // ── §9 juice — one-shot impulses the scene fires off the event stream ─────────
+
+  /** A landing squash on arrival (resolve/play): compress vertically, spread
+   *  horizontally, spring back. `strength` 0..1 scales the depth of the squash. */
+  land(strength = 1): void { this.squash = Math.max(this.squash, Math.min(1, strength)); }
+
+  /** A rotation overshoot (tap/untap): the card turns a touch past its target and
+   *  settles back — the §9 "overshoot ease" without disturbing the tween's target. */
+  overshoot(rad: number): void { this.spin = rad; }
+
+  /** A cast/colour-identity glow that blooms then fades (§9 cast). */
+  sparkGlow(color: number): void { this.glowColor = color; this.glowAmt = 1; }
+
+  /** A white impact flash (§9 combat damage). */
+  sparkFlash(): void { this.flashAmt = 1; }
+
+  /** Begin the death read (§9 destroy/sacrifice): desaturate + tip over as the card
+   *  falls to the graveyard. Persists (ramps to full) until the actor is replaced. */
+  die(): void { this.dying = true; }
 
   /** Place the actor's *current* position without touching its target — used to
    *  seed a freshly-created actor at its entry origin before animating it in. */
@@ -158,11 +197,14 @@ export class CardActor {
   }
 
   /** Advance the tween by `dtMs`; returns true while still animating. Painting is a
-   *  separate step (`render`), driven every frame by the scene's projector. */
+   *  separate step (`render`), driven every frame by the scene's projector. The
+   *  §9 juice channels decay every frame whether or not the position tween runs. */
   update(dtMs: number): boolean {
+    this.decayJuice(dtMs);
     if (this.duration <= 0) return false;
     this.elapsed += dtMs;
     const t = this.elapsed >= this.duration ? 1 : ease(this.elapsed / this.duration);
+    this.lastT = t;
     this.current.x = this.from.x + (this.target.x - this.from.x) * t;
     this.current.y = this.from.y + (this.target.y - this.from.y) * t;
     this.current.scale = this.from.scale + (this.target.scale - this.from.scale) * t;
@@ -171,19 +213,37 @@ export class CardActor {
     return true;
   }
 
+  /** Decay the transient juice channels toward rest (frame-rate independent). */
+  private decayJuice(dtMs: number): void {
+    this.squash = Math.max(0, this.squash - dtMs / 260);
+    this.flashAmt = Math.max(0, this.flashAmt - dtMs / 240);
+    this.glowAmt = Math.max(0, this.glowAmt - dtMs / 520);
+    this.spin *= Math.exp(-dtMs / 110);
+    if (Math.abs(this.spin) < 0.001) this.spin = 0;
+    if (this.dying) this.mortis = Math.min(1, this.mortis + dtMs / 320);
+  }
+
   /** Project the card through `proj` and paint it: the face's four corners
    *  (keystoned in world space, an upright rect on the hand), the affordance ring
    *  around them, and the chrome billboarded upright at the projected centre. */
   render(proj: Projector): void {
-    const hw = (this.texW * this.current.scale) / 2;
-    const hh = (this.texH * this.current.scale) / 2;
-    const cos = Math.cos(this.current.rotation);
-    const sin = Math.sin(this.current.rotation);
+    // §9 juice folded into the geometry: `arc` bows the path up mid-tween, `squash`
+    // compresses the face vertically on landing, `spin` + death `mortis` add to the
+    // turn. None of these touch the settled transform — they vanish as the channels
+    // decay, so `pos`, hit-testing, and the §12 harness stay on the true position.
+    const sq = this.squash;
+    const hw = (this.texW * this.current.scale * (1 + 0.16 * sq)) / 2;
+    const hh = (this.texH * this.current.scale * (1 - 0.26 * sq)) / 2;
+    const rot = this.current.rotation + this.spin + this.mortis * DEATH_TIP;
+    const cx = this.current.x;
+    const cy = this.current.y - Math.sin(Math.PI * this.lastT) * this.arc;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
     // a space-corner from unit signs (sx, sy) ∈ {−1, +1}, then rotated + placed
     const at = (sx: number, sy: number, padX = 0, padY = 0): Point => {
       const lx = sx * (hw + padX);
       const ly = sy * (hh + padY);
-      return { x: this.current.x + lx * cos - ly * sin, y: this.current.y + lx * sin + ly * cos };
+      return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos };
     };
     const tl = proj.toScreen(at(-1, -1));
     const tr = proj.toScreen(at(1, -1));
@@ -192,8 +252,33 @@ export class CardActor {
     this.face.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
     this.corners[0] = tl; this.corners[1] = tr; this.corners[2] = br; this.corners[3] = bl;
 
-    const centre = { x: this.current.x, y: this.current.y };
+    // face tint: the tap dim, deepened toward grave-grey as death ramps.
+    const base = this.placement.tapped === true && this.placement.zone === 'battlefield' ? TAP_DIM : 0xffffff;
+    this.face.tint = this.mortis > 0 ? mixColor(base, DEATH_TINT, this.mortis) : base;
+
+    const centre = { x: cx, y: cy };
     const screenScale = this.current.scale * proj.scaleAt(centre);
+
+    // cast/colour glow: a soft bloom just outside the face, behind everything.
+    this.glowG.clear();
+    if (this.glowAmt > 0) {
+      const gx = 0.14 * this.texW * this.current.scale;
+      const gy = 0.14 * this.texH * this.current.scale;
+      const g0 = proj.toScreen(at(-1, -1, gx, gy));
+      const g1 = proj.toScreen(at(1, -1, gx, gy));
+      const g2 = proj.toScreen(at(1, 1, gx, gy));
+      const g3 = proj.toScreen(at(-1, 1, gx, gy));
+      const gpoly = [g0.x, g0.y, g1.x, g1.y, g2.x, g2.y, g3.x, g3.y];
+      this.glowG.poly(gpoly).fill({ color: this.glowColor, alpha: 0.28 * this.glowAmt });
+      this.glowG.poly(gpoly).stroke({ width: Math.max(3, 10 * screenScale), color: this.glowColor, alpha: 0.5 * this.glowAmt });
+    }
+
+    // impact flash: a white wash over the face.
+    this.flashG.clear();
+    if (this.flashAmt > 0) {
+      this.flashG.poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
+        .fill({ color: 0xffffff, alpha: 0.7 * this.flashAmt });
+    }
 
     // affordance ring: a keystoned quad just outside the face
     const spec = this.highlightSpec;
@@ -214,7 +299,7 @@ export class CardActor {
     // chrome: billboard upright at the projected centre, sized + turned with the card
     const c = proj.toScreen(centre);
     this.chrome.position.set(c.x, c.y);
-    this.chrome.rotation = this.current.rotation;
+    this.chrome.rotation = rot;
     this.chrome.scale.set(screenScale);
   }
 
@@ -252,6 +337,18 @@ function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefine
 // ── battlefield art-box chrome (design T4) ────────────────────────────────────
 
 const TAP_DIM = 0x8b8b8b;   // face tint for a tapped permanent (~55% brightness)
+const DEATH_TINT = 0x4a4640;   // grave-grey the face desaturates toward as it dies (§9)
+const DEATH_TIP = 0.42;        // radians a dying card tips over as it falls to the pile
+
+/** Blend two packed 0xRRGGBB colours, `t` 0 ⇒ a, 1 ⇒ b (per-channel linear). */
+function mixColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
 
 /** A P/T badge pinned to the card's bottom-right corner — the same embossed cream
  *  plate as the name plate, with the colour-identity edge. Text-driven so anthem/

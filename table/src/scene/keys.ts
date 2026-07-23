@@ -46,12 +46,30 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
 
 /** `layoutWorld` + `layoutScreen` with stack-actor keys canonicalized onto their
  *  stable object id, indexed by that key. The single source of truth for both
- *  the director's diff and the continuity assertions. */
+ *  the director's diff and the continuity assertions.
+ *
+ *  Adoption is conditional (design §9, T4 trigger ghosts): a `stackLink` is
+ *  adopted only when its target object is **not** already on the board off the
+ *  stack. A cast's source has left its origin zone, so it is absent and the stack
+ *  actor adopts it — unifying cast → resolve onto one actor. An **ability**'s
+ *  `stackLink` points at a permanent that is still on the battlefield; adopting it
+ *  would drag that permanent onto the stack (one permanent can even stack several
+ *  abilities at once), so the stack item keeps its own ephemeral key and the
+ *  source stays put — the scene flies an ephemeral ghost toward the stack instead. */
 export function layoutKeyed(
   state: GameState, viewport: Size, links: StackLinks, rightInset = 0,
 ): Map<string, PlacedActor> {
+  const world = layoutWorld(state);
+  const offStack = new Set<string>();
+  for (const p of world) {
+    if (p.placement.zone !== 'stack' && p.objectId !== undefined) offStack.add(p.objectId);
+  }
   const out = new Map<string, PlacedActor>();
-  for (const p of layoutWorld(state)) out.set(canonicalKey(p.key, links), { ...p, key: canonicalKey(p.key, links) });
+  for (const p of world) {
+    const link = links.get(p.key);
+    const key = link !== undefined && !offStack.has(link) ? link : p.key;
+    out.set(key, { ...p, key });
+  }
   for (const p of layoutScreen(state, viewport, rightInset)) out.set(p.key, p);   // hand keys are already stable ids
   return out;
 }

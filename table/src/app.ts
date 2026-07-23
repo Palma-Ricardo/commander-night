@@ -12,6 +12,7 @@ import { applyKeyframe } from '@night/core/state/apply';
 import { createStores } from '@night/core/stores';
 import { browserKV } from '@night/core/stores/storage';
 import { demoKeyframe } from './fixtures/keyframe';
+import { runJuiceDemo } from './fixtures/juice-demo';
 import { getActiveScene } from './scene/TableScene';
 
 function bridgeUrl(): string {
@@ -45,7 +46,13 @@ export function bootApp(): void {
   // like the classic client. `?demo` still seeds the offline demo table (visual
   // dev + the headless boot smoke); a live keyframe overwrites it, and if no
   // bridge answers the demo simply stays on screen.
-  if (typeof location !== 'undefined' && location.search.includes('demo')) seedDemo();
+  if (typeof location !== 'undefined' && location.search.includes('demo')) {
+    seedDemo();
+    // `?demo=juice`: play the scripted §9 animation reel over the seeded table
+    // (dev-only review loop — see fixtures/juice-demo.ts). A short delay lets the
+    // first paint settle before the first beat animates.
+    if (location.search.includes('juice')) setTimeout(() => runJuiceDemo(appStores), 900);
+  }
   appManager.connect();
 }
 

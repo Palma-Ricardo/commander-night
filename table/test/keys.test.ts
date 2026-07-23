@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { Card } from '@night/core';
 import {
   accumulateStackLinks, canonicalKey, layoutKeyed, pruneStackLinks, type StackLinks,
 } from '../src/scene/keys';
-import { demoSession, SPELL, STK } from './session-fixture';
+import { demoSession, SPELL, STK, VICTIM } from './session-fixture';
 
 const VP = { w: 1600, h: 900 };
 
@@ -39,6 +40,29 @@ describe('stackLink canonicalization (§3, §6.1)', () => {
     expect(keyed.has(SPELL)).toBe(true);
     expect(keyed.has(STK)).toBe(false);
     expect(keyed.get(SPELL)!.placement.zone).toBe('stack');
+  });
+
+  it('does NOT adopt a permanent onto the stack for an ability trigger (T4 ghost)', () => {
+    // An ability from VICTIM — still on the battlefield — goes on the stack, its
+    // source card carrying the permanent's id, and a stackLink binds them. Adopting
+    // it would drag the permanent onto the stack; instead the permanent stays put
+    // and the ability keeps its own ephemeral key (the scene flies a ghost).
+    const s = structuredClone(demoSession().initial);
+    const ABIL = 'stk-ability';
+    const srcCard: Card = {
+      id: VICTIM, name: 'Grizzly Bears', set: 'X', number: '1', manaValue: 0,
+      types: ['CREATURE'], subtypes: [], supertypes: [], colors: [], text: [],
+    };
+    s.stack.push({ id: ABIL, kind: 'ability', controllerId: 'p1', card: srcCard, text: [] });
+
+    const links: StackLinks = new Map([[ABIL, VICTIM]]);
+    const keyed = layoutKeyed(s, VP, links);
+    expect(keyed.get(VICTIM)?.placement.zone).toBe('battlefield');   // permanent stays put
+    expect(keyed.has(ABIL)).toBe(true);                              // ability keeps its ephemeral key
+
+    // Contrast: a cast (SPELL absent off-stack) still adopts, unifying cast → resolve.
+    const cast = demoSession().steps.find(st => st.label === 'cast')!.state;
+    expect(layoutKeyed(cast, VP, new Map([[STK, SPELL]])).has(SPELL)).toBe(true);
   });
 
   it('prunes a link once its spell has left the stack', () => {
