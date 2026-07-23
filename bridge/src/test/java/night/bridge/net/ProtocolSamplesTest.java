@@ -27,12 +27,24 @@ import night.bridge.proto.ServerMsg;
 import night.bridge.proto.StateKeyframe;
 import night.bridge.proto.StatePatch;
 import night.bridge.proto.Welcome;
+import night.bridge.proto.event.AttackEvent;
+import night.bridge.proto.event.BlockEvent;
 import night.bridge.proto.event.Cause;
+import night.bridge.proto.event.CountersEvent;
+import night.bridge.proto.event.DamageEvent;
 import night.bridge.proto.event.GameEvent;
 import night.bridge.proto.event.HiddenEvent;
+import night.bridge.proto.event.LifeEvent;
 import night.bridge.proto.event.MoveEvent;
+import night.bridge.proto.event.RevealEvent;
+import night.bridge.proto.event.ScryEvent;
+import night.bridge.proto.event.SearchEvent;
+import night.bridge.proto.event.ShuffleEvent;
 import night.bridge.proto.event.StackLinkEvent;
 import night.bridge.proto.event.StepEvent;
+import night.bridge.proto.event.TapEvent;
+import night.bridge.proto.event.TriggerEvent;
+import night.bridge.proto.event.UntapEvent;
 import night.bridge.proto.event.Verb;
 import night.bridge.proto.event.Zone;
 import night.bridge.proto.state.Card;
@@ -298,7 +310,8 @@ class ProtocolSamplesTest {
     @Test
     void gamePatchWithEventsIsReproducible() throws Exception {
         // ops ride verbatim; the events array is the shape under test — one of each
-        // M6 kind, in emit order, exercising the optional-field omission (NON_NULL).
+        // §7.1 kind, in array order, exercising the optional-field omission (NON_NULL):
+        // tap.forMana present but untap's absent, life/counters carry no cause.
         JsonNode ops = sample("game.patch.events.json").get("ops");
         List<GameEvent> events = List.of(
                 new MoveEvent("sdt-1", Zone.HAND, Zone.STACK, Verb.CAST),
@@ -306,6 +319,18 @@ class ProtocolSamplesTest {
                 new MoveEvent("eng-2", Zone.BATTLEFIELD, Zone.GRAVEYARD, Verb.DESTROY,
                         new Cause("swords-3", "Swords to Plowshares", null), null),
                 new HiddenEvent("p3", Zone.LIBRARY, Zone.HAND, 1, Verb.DRAW),
+                new TapEvent("sol-4", Boolean.TRUE),
+                new UntapEvent("forest-5"),
+                new AttackEvent(List.of("krenko-6"), "p1"),
+                new BlockEvent("krenko-6", List.of("wall-7")),
+                new DamageEvent("p1", 3, true, new Cause("krenko-6", "Krenko, Mob Boss", null)),
+                new LifeEvent("p1", 34, 31),
+                new CountersEvent("walker-8", "+1/+1", 2, 3),
+                new TriggerEvent("solemn-9", "ab-10"),
+                new RevealEvent(List.of("top-11"), "p1"),
+                new ShuffleEvent("p1"),
+                new ScryEvent("p1"),
+                new SearchEvent("p1"),
                 new StepEvent(null, null, "p2"));
         assertProduces("game.patch.events.json", new StatePatch(902, "g1", 900, ops, events));
     }

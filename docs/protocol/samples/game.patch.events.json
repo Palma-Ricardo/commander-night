@@ -20,7 +20,8 @@
                  "manaCost": "{4}", "manaValue": 4, "types": ["ARTIFACT", "CREATURE"],
                  "subtypes": ["Golem"], "supertypes": [], "colors": [],
                  "text": ["When Solemn Simulacrum enters, search your library for a basic land card."],
-                 "power": "2", "toughness": "2" } }
+                 "power": "2", "toughness": "2" } },
+    { "op": "replace", "path": "/players/0/life", "value": 31 }
   ],
   "events": [
     { "k": "move", "objectId": "sdt-1", "from": "hand", "to": "stack", "verb": "cast" },
@@ -28,6 +29,19 @@
     { "k": "move", "objectId": "eng-2", "from": "battlefield", "to": "graveyard", "verb": "destroy",
       "cause": { "objectId": "swords-3", "name": "Swords to Plowshares" } },
     { "k": "hidden", "playerId": "p3", "from": "library", "to": "hand", "count": 1, "verb": "draw" },
+    { "k": "tap", "objectId": "sol-4", "forMana": true },
+    { "k": "untap", "objectId": "forest-5" },
+    { "k": "attack", "attackerIds": ["krenko-6"], "defenderId": "p1" },
+    { "k": "block", "attackerId": "krenko-6", "blockerIds": ["wall-7"] },
+    { "k": "damage", "targetId": "p1", "amount": 3, "combat": true,
+      "cause": { "objectId": "krenko-6", "name": "Krenko, Mob Boss" } },
+    { "k": "life", "playerId": "p1", "from": 34, "to": 31 },
+    { "k": "counters", "objectId": "walker-8", "name": "+1/+1", "from": 2, "to": 3 },
+    { "k": "trigger", "sourceId": "solemn-9", "stackId": "ab-10" },
+    { "k": "reveal", "objectIds": ["top-11"], "playerId": "p1" },
+    { "k": "shuffle", "playerId": "p1" },
+    { "k": "scry", "playerId": "p1" },
+    { "k": "search", "playerId": "p1" },
     { "k": "step", "activePlayerId": "p2" }
   ]
 }

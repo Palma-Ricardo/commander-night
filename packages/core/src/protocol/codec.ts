@@ -254,7 +254,8 @@ const verbC = strEnum('cast', 'play', 'resolve', 'counter', 'destroy', 'sacrific
                       'mill', 'bounce', 'draw', 'tutor', 'put', 'token', 'attach', 'detach');
 const causeC = obj({ req: {}, opt: { objectId: idc, name: str, playerId: idc } });
 
-// The four kinds M6 emits (mirrors the bridge's GameEvent `permits`).
+// Every §7.1 kind (mirrors the bridge's GameEvent `permits`): the M6 zone-motion
+// core + step, plus the T4 choreography kinds.
 const eventKindChecks: Record<string, Check> = {
   move: obj({
     req: { k: lit('move'), objectId: idc, from: zoneC, to: zoneC, verb: verbC },
@@ -264,6 +265,24 @@ const eventKindChecks: Record<string, Check> = {
     req: { k: lit('hidden'), playerId: idc, from: zoneC, to: zoneC, count: num, verb: verbC },
   }),
   stackLink: obj({ req: { k: lit('stackLink'), stackId: idc, objectId: idc } }),
+  tap: obj({ req: { k: lit('tap'), objectId: idc }, opt: { forMana: bool } }),
+  untap: obj({ req: { k: lit('untap'), objectId: idc }, opt: { forMana: bool } }),
+  attack: obj({ req: { k: lit('attack'), attackerIds: arr(idc), defenderId: idc } }),
+  block: obj({ req: { k: lit('block'), attackerId: idc, blockerIds: arr(idc) } }),
+  damage: obj({
+    req: { k: lit('damage'), targetId: idc, amount: num, combat: bool },
+    opt: { cause: causeC },
+  }),
+  life: obj({
+    req: { k: lit('life'), playerId: idc, from: num, to: num },
+    opt: { cause: causeC },
+  }),
+  counters: obj({ req: { k: lit('counters'), objectId: idc, name: str, from: num, to: num } }),
+  trigger: obj({ req: { k: lit('trigger'), sourceId: idc }, opt: { stackId: idc } }),
+  reveal: obj({ req: { k: lit('reveal'), objectIds: arr(idc) }, opt: { playerId: idc } }),
+  shuffle: obj({ req: { k: lit('shuffle'), playerId: idc } }),
+  scry: obj({ req: { k: lit('scry'), playerId: idc } }),
+  search: obj({ req: { k: lit('search'), playerId: idc } }),
   step: obj({ req: { k: lit('step') }, opt: { phase: phaseC, step: stepC, activePlayerId: idc } }),
 };
 

@@ -199,11 +199,12 @@ export interface Resync        { t:'game.resync'; id: string; gameId: Id }   // 
 // is ignored (§3 forward-compat), never an error. Absent (never `[]`) when a
 // transition carries none.
 //
-// This is the subset M6 emits — the zone-motion core (move/hidden/stackLink) plus
-// step — mirroring the bridge's `GameEvent permits` clause. Further kinds
-// (tap, attack, block, damage, life, counters, trigger, reveal, shuffle/scry/
-// search) are frozen in v1.md §7.1 for the table client's T4 choreography and gain
-// variants here when the bridge starts emitting them.
+// The zone-motion core (move/hidden/stackLink) plus step shipped at M6; the T4
+// choreography kinds (tap/untap, attack/block, damage, life, counters, trigger,
+// reveal, shuffle/scry/search) are derived alongside them for the table client.
+// All mirror the bridge's `GameEvent permits` clause and v1.md §7.1. An absent
+// kind reads to a client exactly like an older bridge — no animation for that
+// facet, never a correctness change (§7.1: events are advisory).
 
 export type Zone = 'hand'|'battlefield'|'graveyard'|'exile'|'library'|'stack'|'command';
 
@@ -221,6 +222,23 @@ export type GameEvent =
   | { k:'hidden'; playerId: Id; from: Zone; to: Zone; count: number; verb: Verb }
   // Binds an ephemeral stack id to the stable card/source it came from (§3).
   | { k:'stackLink'; stackId: Id; objectId: Id }
+  // A permanent turned sideways/upright; `forMana` sparks a pip toward the pool.
+  | { k:'tap'|'untap'; objectId: Id; forMana?: boolean }
+  // Combat declarations, one per attacking group / per attacker's blockers.
+  | { k:'attack'; attackerIds: Id[]; defenderId: Id }
+  | { k:'block'; attackerId: Id; blockerIds: Id[] }
+  // Impact: marked damage on a permanent, or a player's combat life loss.
+  | { k:'damage'; targetId: Id; amount: number; combat: boolean; cause?: Cause }
+  // Life total moved; the client tumbles the number, pulses on a large loss.
+  | { k:'life'; playerId: Id; from: number; to: number; cause?: Cause }
+  // A named counter kind on a card moved from→to (pip pop / peel).
+  | { k:'counters'; objectId: Id; name: string; from: number; to: number }
+  // An ability from `sourceId` went on the stack — spawn an ephemeral ghost.
+  | { k:'trigger'; sourceId: Id; stackId?: Id }
+  // Cards shown to the table (a shared reveal window).
+  | { k:'reveal'; objectIds: Id[]; playerId?: Id }
+  // Library flourishes — no zone delta, so log-derived and best-effort.
+  | { k:'shuffle'|'scry'|'search'; playerId: Id }
   // Phase/step advance; a changed activePlayerId re-frames the camera (T2).
   | { k:'step'; phase?: Phase; step?: Step; activePlayerId?: Id };
 
