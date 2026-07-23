@@ -1,0 +1,136 @@
+import { describe, expect, it } from 'vitest';
+import {
+  camera, rectVisible, safeArea, seatView, TABLE_VIEW, worldToScreen, screenToWorld,
+} from '../src/camera/camera';
+import { CameraController } from '../src/camera/controller';
+import { seatQuadrantRect, WORLD } from '../src/layout/world';
+import { handBandHeight } from '../src/layout/screen';
+import { SUPPORTED_VIEWPORTS } from './helpers';
+
+const WORLD_RECT = { x: 0, y: 0, w: WORLD.w, h: WORLD.h };
+
+describe('camera framing', () => {
+  it('table view fits the whole felt clear of the hand at every window size', () => {
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      const preset = camera(TABLE_VIEW, vp);
+      expect(rectVisible(preset, WORLD_RECT, vp)).toBe(true);
+    }
+  });
+
+  it('EXIT CRITERION: every seat preset frames that seat fully in view and clear of the hand', () => {
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      for (let seat = 0; seat < 4; seat++) {
+        const preset = camera(seatView(seat), vp);
+        const quad = seatQuadrantRect(seat);
+        expect(rectVisible(preset, quad, vp), `seat ${seat} @ ${vp.w}x${vp.h}`).toBe(true);
+        // and strictly above the hand band (clear, not merely inside the window)
+        const bottom = worldToScreen(preset, { x: quad.x, y: quad.y + quad.h });
+        expect(bottom.y).toBeLessThanOrEqual(vp.h - handBandHeight(vp) + 0.001);
+      }
+    }
+  });
+
+  it('frames a focused seat against the middle: its outer corner pins to the safe-area corner', () => {
+    const vp = { w: 1920, h: 1080 };
+    const area = safeArea(vp);
+    // display 0 = bottom-left → outer world corner (0, H) → safe-area bottom-left
+    const p0 = camera(seatView(0), vp);
+    const bl = worldToScreen(p0, { x: 0, y: WORLD.h });
+    expect(bl.x).toBeCloseTo(area.x, 3);
+    expect(bl.y).toBeCloseTo(area.y + area.h, 3);
+    // display 2 = top-right → outer world corner (W, 0) → safe-area top-right
+    const p2 = camera(seatView(2), vp);
+    const tr = worldToScreen(p2, { x: WORLD.w, y: 0 });
+    expect(tr.x).toBeCloseTo(area.x + area.w, 3);
+    expect(tr.y).toBeCloseTo(area.y, 3);
+  });
+
+  it('leaves neighbours bleeding in — a seat never fills the window', () => {
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      const preset = camera(seatView(1), vp);
+      const quad = seatQuadrantRect(1);
+      const w = quad.w * preset.scale;
+      expect(w).toBeLessThan(vp.w);      // room on the sides for the next board
+    }
+  });
+
+  it('zooms in on a seat relative to the whole table', () => {
+    const vp = { w: 1920, h: 1080 };
+    expect(camera(seatView(0), vp).scale).toBeGreaterThan(camera(TABLE_VIEW, vp).scale);
+  });
+});
+
+describe('projection round-trip', () => {
+  it('screenToWorld ∘ worldToScreen is identity for every preset', () => {
+    const views = [TABLE_VIEW, seatView(0), seatView(1), seatView(2), seatView(3)];
+    const pts = [{ x: 0, y: 0 }, { x: 1200, y: 760 }, { x: 2400, y: 1520 }, { x: 137, y: 902 }];
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      for (const v of views) {
+        const preset = camera(v, vp);
+        for (const p of pts) {
+          const back = screenToWorld(preset, worldToScreen(preset, p));
+          expect(back.x).toBeCloseTo(p.x, 6);
+          expect(back.y).toBeCloseTo(p.y, 6);
+        }
+      }
+    }
+  });
+});
+
+describe('CameraController follow / override policy', () => {
+  it('starts on the whole table, following', () => {
+    const c = new CameraController();
+    expect(c.view()).toEqual(TABLE_VIEW);
+    expect(c.isFollowing()).toBe(true);
+  });
+
+  it('stays on the table on first sight of an active player, then follows turn changes', () => {
+    const c = new CameraController();
+    c.syncActive(0);                       // baseline — no move on initial load
+    expect(c.view()).toEqual(TABLE_VIEW);
+    c.syncActive(2);                       // a real turn change → follow
+    expect(c.view()).toEqual(seatView(2));
+    c.syncActive(2);                       // same seat → no-op
+    expect(c.view()).toEqual(seatView(2));
+  });
+
+  it('ignores an unknown active seat (mulligan window)', () => {
+    const c = new CameraController();
+    c.syncActive(1);
+    c.syncActive(-1);                      // unknown → no change to baseline
+    c.syncActive(3);
+    expect(c.view()).toEqual(seatView(3));
+  });
+
+  it('a manual override is sticky against follow until released', () => {
+    const c = new CameraController();
+    c.syncActive(0);
+    c.syncActive(1);                       // following → seat 1
+    c.focus(seatView(3));                  // user pins seat 3
+    expect(c.isFollowing()).toBe(false);
+    c.syncActive(2);                       // turn moves — camera stays pinned
+    expect(c.view()).toEqual(seatView(3));
+    c.release();                           // Esc → resume follow, snap to active
+    expect(c.isFollowing()).toBe(true);
+    expect(c.view()).toEqual(seatView(2));
+  });
+
+  it('§14: a prompt naming an off-screen object pulls back to the whole table', () => {
+    const vp = { w: 1920, h: 1080 };
+    const c = new CameraController();
+    c.focus(seatView(0));                  // pinned bottom-left
+    // a point deep in the opposite (top-right) quadrant is off-screen here
+    const moved = c.ensureVisible([{ x: 2200, y: 200 }], vp);
+    expect(moved).toBe(true);
+    expect(c.view()).toEqual(TABLE_VIEW);
+  });
+
+  it('§14: does not move when the named object is already visible', () => {
+    const vp = { w: 1920, h: 1080 };
+    const c = new CameraController();
+    c.focus(seatView(0));
+    const moved = c.ensureVisible([{ x: 120, y: 1400 }], vp);  // inside the focused quadrant
+    expect(moved).toBe(false);
+    expect(c.view()).toEqual(seatView(0));
+  });
+});

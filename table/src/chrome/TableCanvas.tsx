@@ -20,6 +20,17 @@ export function TableCanvas(): React.JSX.Element {
     let unsub: (() => void) | undefined;
     let observer: ResizeObserver | undefined;
 
+    // Camera rig (design §7.3): 1–4 pin a seat, ` frames the whole table, Esc
+    // releases back to following the active player. Suspended while typing (T3
+    // adds chat) — no text inputs exist yet, so guard on the target tag now.
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement | null;
+      if (el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+      if (e.key >= '1' && e.key <= '4') scene.focusSeat(Number(e.key) - 1);
+      else if (e.key === '`' || e.key === '0') scene.showTable();
+      else if (e.key === 'Escape') scene.releaseCamera();
+    };
+
     void scene.mount(host).then(() => {
       if (disposed) { scene.destroy(); return; }
       const paint = (): void => {
@@ -30,12 +41,14 @@ export function TableCanvas(): React.JSX.Element {
       unsub = appStores.game.subscribe(paint);
       observer = new ResizeObserver(() => scene.resize());
       observer.observe(host);
+      window.addEventListener('keydown', onKey);
     });
 
     return () => {
       disposed = true;
       unsub?.();
       observer?.disconnect();
+      window.removeEventListener('keydown', onKey);
       scene.destroy();
     };
   }, []);

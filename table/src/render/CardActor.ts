@@ -6,15 +6,12 @@
 // stream and `update(dt)` becomes the interpolation.
 
 import { Container, Sprite, type Texture } from 'pixi.js';
-import type { Id, Zone } from '@night/core';
+import type { Id } from '@night/core';
+import type { ActorPlacement, Transform } from '../layout/types';
 
-export interface Transform { x: number; y: number; rotation: number; scale: number }
-
-export interface ActorPlacement extends Transform {
-  zone: Zone;
-  ownerId?: Id;
-  faceUp: boolean;
-}
+// Re-exported for existing importers; the definitions live in the Pixi-free
+// layout/types so the whole layout tier stays headless.
+export type { ActorPlacement, Transform } from '../layout/types';
 
 export class CardActor {
   readonly view = new Container();
