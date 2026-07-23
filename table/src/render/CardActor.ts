@@ -6,8 +6,9 @@
 // completes exactly when the director advances `presented` — no exponential
 // chase, so snap (duration 0) and burst-compression are both exact.
 
-import { Container, Graphics, Sprite, type Texture } from 'pixi.js';
+import { Container, Graphics, GraphicsPath, Sprite, Text, TextStyle, type Texture } from 'pixi.js';
 import type { Card } from '@night/core';
+import { identityColor } from './textures';
 import type { ActorPlacement, ActorSpace, Transform } from '../layout/types';
 import type { HighlightSpec } from '../scene/interaction';
 
@@ -33,7 +34,9 @@ export class CardActor {
   readonly view = new Container();
   private readonly highlight = new Graphics();   // affordance ring, behind the sprite
   private readonly sprite: Sprite;
+  private readonly chrome = new Container();      // P/T badge + tap glyph, above the sprite
   private highlightSpec: HighlightSpec | undefined;
+  private chromeSig = '';                         // guards chrome rebuilds (like highlight)
   private readonly from: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly current: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
   private readonly target: Transform = { x: 0, y: 0, rotation: 0, scale: 1 };
@@ -56,11 +59,36 @@ export class CardActor {
   ) {
     this.sprite = new Sprite(texture);
     this.sprite.anchor.set(0.5);
-    this.view.addChild(this.highlight, this.sprite);   // ring behind the face
+    this.view.addChild(this.highlight, this.sprite, this.chrome);   // ring behind, chrome above
   }
 
   setTexture(texture: Texture): void {
     this.sprite.texture = texture;
+    this.refreshChrome();   // texture size drives badge placement; card may have changed
+  }
+
+  /** Paint the battlefield art-box overlays (design T4): a P/T badge for creatures,
+   *  a dim + tap glyph when tapped. Only battlefield, face-up cards get chrome; the
+   *  hand, stack and piles stay bare full-card sprites. Guarded by a signature so
+   *  the common no-change transition is a cheap string compare. */
+  private refreshChrome(): void {
+    const p = this.placement;
+    const card = this.card;
+    const artbox = p.zone === 'battlefield' && p.faceUp && card !== undefined;
+    const tapped = artbox && p.tapped === true;
+    const w = this.sprite.texture.width;
+    const h = this.sprite.texture.height;
+    const pt = artbox && card.power !== undefined && card.toughness !== undefined
+      ? `${card.power}/${card.toughness}` : '';
+    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}`;
+    if (sig === this.chromeSig) return;
+    this.chromeSig = sig;
+
+    this.sprite.tint = tapped ? TAP_DIM : 0xffffff;
+    for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
+    if (!artbox) return;
+    if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
+    if (tapped) this.chrome.addChild(tapGlyph(w, h));
   }
 
   /** Paint (or clear) the affordance ring (§7). Sized in the sprite's own local
@@ -92,6 +120,7 @@ export class CardActor {
     this.duration = 0;
     this.elapsed = 0;
     this.apply();
+    this.refreshChrome();
   }
 
   /** Tween from the current transform to `p` over `durationMs` (0 ⇒ snap). The
@@ -104,6 +133,7 @@ export class CardActor {
     Object.assign(this.from, this.current);
     this.duration = durationMs;
     this.elapsed = 0;
+    this.refreshChrome();   // chrome doesn't tween — it belongs to the whole card
   }
 
   /** Place the actor's *current* position without touching its target — used to
@@ -154,4 +184,53 @@ function transformOf(p: ActorPlacement): Transform {
 function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   return a.color === b.color && a.selected === b.selected && a.dim === b.dim;
+}
+
+// ── battlefield art-box chrome (design T4) ────────────────────────────────────
+
+const TAP_DIM = 0x8b8b8b;   // sprite tint for a tapped permanent (~55% brightness)
+
+/** A P/T badge pinned to the card's bottom-right corner — the same embossed cream
+ *  plate as the name plate, with the colour-identity edge. Text-driven so anthem/
+ *  counter swings re-render from the live card (never baked into the texture). */
+function ptBadge(pt: string, w: number, h: number, edge: number): Container {
+  const c = new Container();
+  const label = new Text({
+    text: pt,
+    style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 20, fill: 0x24252c, fontWeight: '700' }),
+  });
+  label.anchor.set(0.5, 0.5);
+  const bw = Math.max(label.width + 18, 38), bh = label.height + 6, r = bh / 2;
+  const g = new Graphics();
+  g.roundRect(-bw / 2, -bh / 2, bw, bh, r).fill(0xe1d9c0);                    // cream face
+  g.moveTo(-bw / 2 + r, -bh / 2 + 1.5).lineTo(bw / 2 - r, -bh / 2 + 1.5)
+    .stroke({ width: 1.5, color: 0xffffff, alpha: 0.7 });                    // top highlight
+  g.moveTo(-bw / 2 + r, bh / 2 - 1.5).lineTo(bw / 2 - r, bh / 2 - 1.5)
+    .stroke({ width: 1.5, color: 0x8a7f63, alpha: 0.5 });                    // bottom shadow
+  g.roundRect(-bw / 2 + 0.9, -bh / 2 + 0.9, bw - 1.8, bh - 1.8, r)
+    .stroke({ width: 1.75, color: edge, alpha: 1 });                         // identity edge
+  label.position.set(0, -1);
+  c.addChild(g, label);
+  c.position.set(w / 2 - bw / 2 - 6, h / 2 - bh / 2 - 6);                     // bottom-right inset
+  return c;
+}
+
+// The {T} tap mark, straight from render/assets/tap.svg (authored in a 600×600
+// box). We draw only its glyph path — tinted to the felt ink and set on a dim disc
+// so it reads over any card art — dropping the source's background circle. As a
+// vector path it stays crisp and recolourable at any zoom.
+const TAP_PATH = 'm512 353.5-216 0 79.1-56.3c-29.4-23.3-63.4-35-101.9-35-19.3 0-32.5 3.7-39.5 11-7.1 7.4-10.7 20.7-10.7 39.9 0 53.2 27.4 110 82.2 170.4l-62.3 63.1c-72.5-88.2-108.8-167.1-108.8-236.5 0-41.6 12.5-74.7 37.6-99.3 25.1-24.6 58.5-36.9 100-36.9 50.7 0 106 19.3 165.9 57.8l46.4-79.1 28.2 200.8';
+
+/** The tap glyph: the T.svg arrow, centred on the art over a dim disc. */
+function tapGlyph(w: number, h: number): Container {
+  const c = new Container();
+  const R = Math.min(w, h) * 0.28;
+  c.addChild(new Graphics().circle(0, 0, R).fill({ color: 0x000000, alpha: 0.42 }));
+
+  const arrow = new Graphics().path(new GraphicsPath(TAP_PATH)).fill({ color: 0xf4efe2, alpha: 0.98 });
+  const b = arrow.getLocalBounds();
+  arrow.pivot.set(b.x + b.width / 2, b.y + b.height / 2);   // centre the glyph's bbox
+  arrow.scale.set((R * 1.35) / Math.max(b.width, b.height));
+  c.addChild(arrow);
+  return c;
 }

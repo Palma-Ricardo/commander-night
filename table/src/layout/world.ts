@@ -23,14 +23,24 @@ import type { ActorPlacement, PlacedActor, Point, Rect } from './types';
  *  player count: short lobbies are AI-filled, so the world is always four seats. */
 export const WORLD = { w: 2400, h: 1520 } as const;
 
-const CARD_TEX = { w: 200, h: 280 } as const;   // native table-tier texture px
+const CARD_TEX = { w: 200, h: 280 } as const;   // native portrait px (hand/stack/piles/hover)
+// Battlefield permanents render as a landscape "art box" — a name bar over the art
+// with the rules text trimmed off (design T4). Its native aspect is wider and
+// shorter than a full card, so the board cell has its own size; the piles, the
+// stack, the opponent hand and the hover preview all stay full portrait cards.
+const ARTBOX_TEX = { w: 200, h: 184 } as const;  // native battlefield art-box px
 const BOARD_SCALE = 0.62;                        // permanents on the felt
 const PILE_SCALE = 0.5;                          // piles read a touch smaller
 const STACK_SCALE = 0.74;                        // the stack looms over the seam
 const OPP_HAND_SCALE = 0.34;
 
-const CARD_W = CARD_TEX.w * BOARD_SCALE;         // 124
-const CARD_H = CARD_TEX.h * BOARD_SCALE;         // 173.6
+// A tapped permanent turns ~30°, not a full 90° (design T4): a landscape art box
+// tilted a little reads as "tapped" without sprawling sideways and wrecking the
+// grid. The dim + tap glyph (CardActor) carry the rest of the signal.
+const TAP_ANGLE = 28 * Math.PI / 180;
+
+const CARD_W = ARTBOX_TEX.w * BOARD_SCALE;       // 124 — battlefield cell width
+const CARD_H = ARTBOX_TEX.h * BOARD_SCALE;       // ~114 — battlefield cell height
 const PILE_H = CARD_TEX.h * PILE_SCALE;          // 140
 
 const GAP = 18;                  // between cards in a battlefield row
@@ -188,11 +198,12 @@ function placeGrid(seat: SeatLayout, perms: readonly Permanent[], startRow: numb
     place(out, perm.id, perm, perm.id, {
       x: seat.rowStartX + col * (CARD_W + GAP),
       y: seat.boardTopY + seat.out * row * (CARD_H + ROW_GAP),
-      rotation: perm.tapped ? Math.PI / 2 : 0,
+      rotation: perm.tapped ? TAP_ANGLE : 0,
       scale: BOARD_SCALE,
       zone: 'battlefield',
       ownerId: seat.player.id,
       faceUp: !(perm.faceDown ?? false),
+      tapped: perm.tapped,
     });
   });
 }

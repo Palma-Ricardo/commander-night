@@ -19,6 +19,9 @@ export interface ActorPlacement extends Transform {
   zone: Zone;
   ownerId?: Id;
   faceUp: boolean;
+  /** A tapped battlefield permanent (design T4): the render layer dims the art and
+   *  overlays a tap glyph; the ~30° turn rides on `rotation` from the layout. */
+  tapped?: boolean;
 }
 
 /** Which coordinate space a placement lives in (design §7.1). World actors are

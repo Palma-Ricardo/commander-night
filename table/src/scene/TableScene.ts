@@ -20,7 +20,7 @@ import type { Card, GameEvent, GameState, Id, NightScene, SceneActor, ScryfallRe
 import { affordanceFor } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
-import { CardTextures } from '../render/textures';
+import { CardTextures, type Tier } from '../render/textures';
 import { NAMEPLATE, seatLayouts, WORLD, type PileZone, type SeatLayout } from '../layout/world';
 import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/types';
 import { camera, worldToScreen, screenToWorld, type CameraPreset } from '../camera/camera';
@@ -50,6 +50,10 @@ const IMG_PRIORITY: Partial<Record<Zone, 0 | 1 | 2>> = {
   hand: 0, command: 0, battlefield: 1, stack: 1,
 };
 function imgPriority(zone: Zone): 0 | 1 | 2 { return IMG_PRIORITY[zone] ?? 2; }
+
+// Battlefield permanents render as the T4 landscape art box; everything else stays
+// a full portrait card (the hand, the stack, the piles, the hover preview).
+function imgTier(zone: Zone): Tier { return zone === 'battlefield' ? 'artbox' : 'table'; }
 
 export class TableScene implements DirectorSink {
   private app!: Application;
@@ -211,7 +215,8 @@ export class TableScene implements DirectorSink {
    *  never leaks its front, and requests art at the zone's priority (§9). */
   private textureFor(p: PlacedActor): Texture {
     if (p.card !== undefined && p.placement.faceUp) {
-      return this.textures.face(p.card, 'table', imgPriority(p.placement.zone));
+      const zone = p.placement.zone;
+      return this.textures.face(p.card, imgTier(zone), imgPriority(zone));
     }
     return this.textures.faceDown();
   }
@@ -222,7 +227,8 @@ export class TableScene implements DirectorSink {
   private refreshAllTextures(): void {
     for (const a of this.actors.values()) {
       if (a.card !== undefined && a.placement.faceUp) {
-        a.setTexture(this.textures.face(a.card, 'table', imgPriority(a.placement.zone)));
+        const zone = a.placement.zone;
+        a.setTexture(this.textures.face(a.card, imgTier(zone), imgPriority(zone)));
       }
     }
   }
