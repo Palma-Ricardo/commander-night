@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   camera, rectVisible, safeArea, seatFocusRect, seatView, TABLE_VIEW, worldToScreen, screenToWorld,
+  HUD_RIGHT_OVERHANG,
 } from '../src/camera/camera';
 import { CameraController } from '../src/camera/controller';
 import { seatQuadrantRect, WORLD } from '../src/layout/world';
@@ -43,13 +44,31 @@ describe('camera framing', () => {
     // (its y still pins exactly), but the receded outer corner (W, 0) insets from
     // the right under perspective — the seat's near edge is the widest point, so
     // *that* is what sits flush to the area's right side.
+    // display 2 is right-column, so it insets from the right by the compass reserve.
+    const area2 = safeArea(vp, HUD_RIGHT_OVERHANG);
     const p2 = camera(seatView(2), vp);
     const tr = worldToScreen(p2, { x: WORLD.w, y: 0 });
-    expect(tr.y).toBeCloseTo(area.y, 3);
-    expect(tr.x).toBeLessThanOrEqual(area.x + area.w + 1e-6);
+    expect(tr.y).toBeCloseTo(area2.y, 3);
+    expect(tr.x).toBeLessThanOrEqual(area2.x + area2.w + 1e-6);
     const focus2 = seatFocusRect(2);
     const flush = worldToScreen(p2, { x: focus2.x + focus2.w, y: focus2.y + focus2.h });
-    expect(flush.x).toBeCloseTo(area.x + area.w, 3);
+    expect(flush.x).toBeCloseTo(area2.x + area2.w, 3);
+  });
+
+  it('reserves the compass for right seats only — the whole-table view stays centred', () => {
+    const vp = { w: 1920, h: 1080 };
+    const a = safeArea(vp);
+    // Whole table: the warped world sits with equal gaps left and right of the safe
+    // area — no compass shove (that reserve is scoped to right-column seats).
+    const pt = camera(TABLE_VIEW, vp);
+    const xs = [[0, 0], [WORLD.w, 0], [WORLD.w, WORLD.h], [0, WORLD.h]]
+      .map(([x, y]) => worldToScreen(pt, { x: x!, y: y! }).x);
+    expect(Math.min(...xs) - a.x).toBeCloseTo(a.x + a.w - Math.max(...xs), 1);
+    // A right-column seat (display 1, bottom-right) frames a compass-overhang short
+    // of the full width, so its pile column clears the HUD.
+    const p1 = camera(seatView(1), vp);
+    const outer1 = worldToScreen(p1, { x: WORLD.w, y: WORLD.h }).x;
+    expect(outer1).toBeLessThan(a.x + a.w - HUD_RIGHT_OVERHANG + 1);
   });
 
   it('leaves neighbours bleeding in — a seat never fills the window', () => {

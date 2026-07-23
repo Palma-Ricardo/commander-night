@@ -43,11 +43,12 @@ export interface CameraPreset { x: number; y: number; scale: number; tilt: numbe
 const SAFE_MARGIN = 16;          // inset from the window edges
 // The top-right compass HUD sits over the felt (styles.css: 162px wide, 12px in),
 // anchored *left of* the log rail (`right: var(--rail-w) + 12px`), so it always
-// overhangs the log gutter by a fixed amount into the felt — collapsed or open.
-// Reserve that overhang on top of the log inset so the framing nudges left and the
-// felt clears the compass in every log state (additive, not max: the compass never
-// tucks inside the log — it rides just left of it).
-const HUD_RIGHT_OVERHANG = 180;  // compass width + its margin + a small gap
+// overhangs the log gutter by a fixed amount into the felt. It only *covers* a
+// board, though, when a right-column seat is zoomed in — its pile column runs up
+// the outer-right edge, straight under the compass. Reserve the overhang only for
+// those views (see camera()); the whole-table view and the left seats keep the
+// full felt width, where the compass merely clips an empty far corner.
+export const HUD_RIGHT_OVERHANG = 180;  // compass width + its margin + a small gap
 const TABLE_FILL = 0.98;         // whole-table zoom leaves a thin rail
 const SEAT_FILL = 0.98;
 // How far a seat view reaches past the felt centre (world px). The framing is
@@ -123,11 +124,10 @@ function warpedBounds(rect: Rect, tilt: number): Rect {
  *  and the log side by side); a collapsed log reports 0 and the felt spreads back. */
 export function safeArea(viewport: Size, rightInset = 0): Rect {
   const band = handBandHeight(viewport);
-  const reserve = Math.max(0, rightInset) + HUD_RIGHT_OVERHANG;   // log gutter + the compass that overhangs it
   return {
     x: SAFE_MARGIN,
     y: SAFE_MARGIN,
-    w: Math.max(1, viewport.w - 2 * SAFE_MARGIN - reserve),
+    w: Math.max(1, viewport.w - 2 * SAFE_MARGIN - Math.max(0, rightInset)),
     h: Math.max(1, viewport.h - band - SAFE_MARGIN),
   };
 }
@@ -171,7 +171,10 @@ export function seatFocusRect(seat: number): Rect {
  *  fit is against the *warped* bounds and the pin is on the *warped* anchor, so the
  *  perspective bulge of the near edge stays inside the safe area (T4). */
 export function camera(view: CameraView, viewport: Size, rightInset = 0): CameraPreset {
-  const area = safeArea(viewport, rightInset);
+  // Reserve the compass overhang only for a right-column seat, whose pile column
+  // runs under it; the whole-table view and left seats keep the full felt width.
+  const clearCompass = view.kind === 'seat' && !seatCorner(view.seat).left;
+  const area = safeArea(viewport, rightInset + (clearCompass ? HUD_RIGHT_OVERHANG : 0));
   if (view.kind === 'table') {
     // Whole world, warped, centred in the safe area.
     const b = warpedBounds({ x: 0, y: 0, w: WORLD.w, h: WORLD.h }, TILT_TABLE);
