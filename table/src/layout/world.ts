@@ -63,6 +63,16 @@ export const NAMEPLATE = { w: 214, h: 63 } as const;   // h matches the held-fan
 const PILE_W = CARD_TEX.w * PILE_SCALE;          // 84
 const PILE_GAP = 16;             // vertical gap between piles in the column
 const PILE_LABEL_GAP = 24;       // pile bottom → its count label baseline
+// Per-card thickness step for a stacked pile. The vertical step is toward the far
+// (top, small-y) edge — "away from the camera" — so under the perspective warp the
+// stack recedes into height. The lateral step points *outward*, toward the pile's
+// own corner (its sign flips with the seat side), so each card peeks out on the
+// away-and-outward side the way the warp leans it. A single fixed +x only lined up
+// at the top-right corner and skewed the other three; pure -y killed the peek and
+// read flat. Outward-per-corner gives every pile the top-right's convincing lean.
+const PILE_STEP_AWAY = 2.2;      // world px per card toward the far edge (recession)
+const PILE_STEP_OUT = 1.6;       // world px per card outward (the visible thickness peek)
+const PILE_DEPTH_MAX = 7;        // cards past this share the top slot (label carries true size)
 
 export type PileZone = 'library' | 'graveyard' | 'exile' | 'command';
 export const PILE_FOOTPRINT = { w: PILE_W, h: CARD_TEX.h * PILE_SCALE } as const;
@@ -319,14 +329,16 @@ function layoutPile(
   seat: SeatLayout, zone: PileZone, cards: readonly Card[], out: PlacedActor[],
 ): void {
   const anchor = seat.piles[zone];
-  // Newest last renders on top (added later); a small fixed depth offset reads as
-  // thickness and stays square — no scatter, so the stack is tidy. The offset caps
-  // so a deep pile can't climb into the zone above (the label carries true size).
+  const outward = seat.corner.left ? -1 : 1;   // toward this pile's own outer corner
+  // Newest last renders on top (added later); each card steps away from the camera
+  // (toward the far edge) and outward toward its corner, so the warp reads the stack
+  // as height and each card peeks out on the away-and-outward side. The step caps so
+  // a deep pile can't climb into the zone above (the label carries true size).
   cards.forEach((card, i) => {
-    const d = Math.min(i, 7);
+    const d = Math.min(i, PILE_DEPTH_MAX);
     place(out, card.id, card, card.id, {
-      x: anchor.x + d * 1.6,
-      y: anchor.y - d * 2.2,
+      x: anchor.x + outward * d * PILE_STEP_OUT,
+      y: anchor.y - d * PILE_STEP_AWAY,
       rotation: 0,
       scale: PILE_SCALE,
       zone: zone === 'command' ? 'command' : zone,
@@ -340,11 +352,12 @@ function layoutLibrary(seat: SeatLayout, out: PlacedActor[]): void {
   // A stack of face-down backs conveying depth — not one actor per card. Synthetic
   // keys (library cards carry no id on the wire); T2 draws from the top.
   const anchor = seat.piles.library;
+  const outward = seat.corner.left ? -1 : 1;   // toward this pile's own outer corner
   const n = Math.min(seat.player.librarySize, LIBRARY_MAX_VISIBLE);
   for (let i = 0; i < n; i++) {
     place(out, `${seat.player.id}:library:${i}`, undefined, undefined, {
-      x: anchor.x + i * 1.6,
-      y: anchor.y - i * 2.2,
+      x: anchor.x + outward * i * PILE_STEP_OUT,
+      y: anchor.y - i * PILE_STEP_AWAY,
       rotation: 0, scale: PILE_SCALE, zone: 'library', ownerId: seat.player.id, faceUp: false,
     });
   }

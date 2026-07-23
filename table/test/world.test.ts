@@ -211,17 +211,20 @@ describe('seatLayouts furniture', () => {
 });
 
 describe('piles are tidy', () => {
-  it('stacks each pile square — no per-card scatter or rotation', () => {
-    // A graveyard of several cards: every actor shares the anchor x/y up to the
-    // fixed depth step, and none is rotated (design: tidy stacks, no jitter).
+  it('stacks each pile away-and-outward — a fixed step, no scatter or rotation', () => {
+    // A graveyard of several cards: each card steps a fixed amount toward the far
+    // edge (away from the camera, -y) and outward toward its corner (-x for a
+    // left seat), and none is rotated (design: tidy stacks that read as height).
     const gy = Array.from({ length: 5 }, (_, i) => mkCard(`G${i}`, ['CREATURE']));
-    const you = mkPlayer('p1', 'You', { human: true, graveyard: gy });
+    const you = mkPlayer('p1', 'You', { human: true, graveyard: gy });   // bottom-left seat
     const pile = layoutWorld(mkState([you], 'p1')).filter(p => p.placement.zone === 'graveyard');
     expect(pile.length).toBe(5);
     const anchorX = pile[0]!.placement.x;
+    const anchorY = pile[0]!.placement.y;
     pile.forEach((p, i) => {
       expect(p.placement.rotation).toBe(0);
-      expect(p.placement.x).toBeCloseTo(anchorX + i * 1.6, 5);   // exact step, no jitter
+      expect(p.placement.x).toBeCloseTo(anchorX - i * 1.6, 5);   // outward (left seat), exact step
+      expect(p.placement.y).toBeCloseTo(anchorY - i * 2.2, 5);   // away from the camera, exact step
     });
   });
 });
