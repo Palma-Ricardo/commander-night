@@ -30,9 +30,9 @@ const CARD_TEX = { w: 200, h: 280 } as const;   // native portrait px (hand/stac
 // stack, the opponent hand and the hover preview all stay full portrait cards.
 const ARTBOX_TEX = { w: 200, h: 184 } as const;  // native battlefield art-box px
 const BOARD_SCALE = 0.62;                        // permanents on the felt
-const PILE_SCALE = 0.5;                          // piles read a touch smaller
+const PILE_SCALE = 0.42;                         // piles read a touch smaller
 const STACK_SCALE = 0.74;                        // the stack looms over the seam
-const OPP_HAND_SCALE = 0.34;
+export const OPP_HAND_SCALE = 0.3;               // an opponent's held fan (backs)
 
 // A tapped permanent turns ~30°, not a full 90° (design T4): a landscape art box
 // tilted a little reads as "tapped" without sprawling sideways and wrecking the
@@ -41,21 +41,42 @@ const TAP_ANGLE = 28 * Math.PI / 180;
 
 const CARD_W = ARTBOX_TEX.w * BOARD_SCALE;       // 124 — battlefield cell width
 const CARD_H = ARTBOX_TEX.h * BOARD_SCALE;       // ~114 — battlefield cell height
-const PILE_H = CARD_TEX.h * PILE_SCALE;          // 140
+const PILE_H = CARD_TEX.h * PILE_SCALE;          // ~118
 
 const GAP = 18;                  // between cards in a battlefield row
 const ROW_GAP = 22;              // between wrapped rows
 const SEAM_MARGIN = 46;          // felt centre → first (spells) row
-const SIDE_MARGIN = 42;          // quadrant edge → row
-const EDGE_MARGIN = 30;          // outer felt edge → pile/nameplate band
+const SIDE_MARGIN = 42;          // quadrant edge → row (non-pile side)
+const EDGE_MARGIN = 30;          // outer felt edge → pile column / nameplate band
+const INNER_GAP = 20;            // pile column → board rows
+const HAND_GAP = 20;             // nameplate → opponent hand fan
 
 export const NAMEPLATE = { w: 214, h: 42 } as const;
-const PILE_W = CARD_TEX.w * PILE_SCALE;          // 100
-const PILE_GAP = 16;
+const PILE_W = CARD_TEX.w * PILE_SCALE;          // 84
+const PILE_GAP = 16;             // vertical gap between piles in the column
+const PILE_LABEL_GAP = 24;       // pile bottom → its count label baseline
 
 export type PileZone = 'library' | 'graveyard' | 'exile' | 'command';
-const PILE_ORDER: PileZone[] = ['library', 'graveyard', 'exile', 'command'];
+export const PILE_FOOTPRINT = { w: PILE_W, h: CARD_TEX.h * PILE_SCALE } as const;
+export const PILE_LABEL: Record<PileZone, string> =
+  { library: 'DECK', graveyard: 'GRAVE', exile: 'EXILE', command: 'CMD' };
+// The pile column top→bottom for a *near* (bottom) seat: the command zone at the
+// top, then exile, the deck, and the graveyard. A far (top) seat mirrors it (point
+// symmetry — two people across one table), so every zone sits at the same physical
+// spot relative to whoever owns it.
+const PILE_COLUMN_NEAR: PileZone[] = ['command', 'exile', 'library', 'graveyard'];
 const LIBRARY_MAX_VISIBLE = 8;   // a library is a stack of backs, not 70 actors
+
+// The opponent's held fan advances this far per card (heavy overlap), so N backs
+// span a small, predictable width the count label can sit beside.
+const OPP_HAND_ADVANCE = OPP_HAND_SCALE * CARD_TEX.w * 0.34;
+
+/** Half the width a face-down opponent hand of `n` cards occupies, for placing the
+ *  count glyph just past the fan (shared by layout + the furniture pass). */
+export function opponentHandHalfWidth(n: number): number {
+  if (n <= 0) return 0;
+  return ((n - 1) / 2) * OPP_HAND_ADVANCE + (OPP_HAND_SCALE * CARD_TEX.w) / 2;
+}
 
 // ── seat → quadrant ──────────────────────────────────────────────────────────
 
@@ -129,29 +150,38 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   const seamEdge = corner.bottom ? q.y : q.y + q.h;        // felt-centre side
   const outerEdge = corner.bottom ? q.y + q.h : q.y;       // rail side
 
+  // Piles are a vertical column at the outer horizontal elbow (§7.2 ".zones"); the
+  // board rows inset past it so cards never collide with the stacks.
+  const boardInset = EDGE_MARGIN + PILE_W + INNER_GAP;
+  const boardLeftX = q.x + (corner.left ? boardInset : SIDE_MARGIN);
+  const boardRightX = q.x + q.w - (corner.left ? SIDE_MARGIN : boardInset);
+
   const boardTopY = seamEdge + out * (SEAM_MARGIN + CARD_H / 2);
-  const rowStartX = q.x + SIDE_MARGIN + CARD_W / 2;
-  const cols = Math.max(4, Math.floor((q.w - 2 * SIDE_MARGIN) / (CARD_W + GAP)));
+  const rowStartX = boardLeftX + CARD_W / 2;
+  const cols = Math.max(3, Math.floor((boardRightX - boardLeftX) / (CARD_W + GAP)));
 
-  const bandY = outerEdge - out * (EDGE_MARGIN + PILE_H / 2);
-
-  // Nameplate at the outer horizontal corner; piles march inboard from it.
-  const nameX = corner.left ? q.x + SIDE_MARGIN : q.x + q.w - SIDE_MARGIN - NAMEPLATE.w;
-  const nameplate: Rect = { x: nameX, y: bandY - NAMEPLATE.h / 2, w: NAMEPLATE.w, h: NAMEPLATE.h };
-
-  const pileStep = PILE_W + PILE_GAP;
-  const firstPileX = corner.left
-    ? nameX + NAMEPLATE.w + PILE_GAP + PILE_W / 2
-    : nameX - PILE_GAP - PILE_W / 2;
-  const dir = corner.left ? 1 : -1;
+  // The pile column, centred over the quadrant height. Far seats mirror the near
+  // order so a zone lands at the same spot relative to whoever sits there.
+  const pileColX = corner.left
+    ? q.x + EDGE_MARGIN + PILE_W / 2
+    : q.x + q.w - EDGE_MARGIN - PILE_W / 2;
+  const columnOrder = corner.bottom ? PILE_COLUMN_NEAR : [...PILE_COLUMN_NEAR].reverse();
+  const pileStep = PILE_H + PILE_LABEL_GAP + PILE_GAP;
+  const colTopY = q.y + q.h / 2 - ((columnOrder.length - 1) * pileStep) / 2;
   const piles = {} as Record<PileZone, Point>;
-  PILE_ORDER.forEach((zone, i) => {
-    piles[zone] = { x: firstPileX + dir * i * pileStep, y: bandY };
+  columnOrder.forEach((zone, i) => {
+    piles[zone] = { x: pileColX, y: colTopY + i * pileStep };
   });
 
-  // Opponent hand: a small fan at the front-centre of their board, clear of the
-  // central stack column (each quadrant centre-x is far from the felt centre).
-  const handFan: Point = { x: q.x + q.w / 2, y: seamEdge + out * 34 };
+  // Nameplate + the opponent's held fan share the band at the outer vertical edge,
+  // inboard of the pile column (§7.2 ".plate"). The fan sits beside the nameplate.
+  const bandY = outerEdge - out * (EDGE_MARGIN + PILE_H / 2);
+  const nameX = corner.left ? boardLeftX : boardRightX - NAMEPLATE.w;
+  const nameplate: Rect = { x: nameX, y: bandY - NAMEPLATE.h / 2, w: NAMEPLATE.w, h: NAMEPLATE.h };
+  const handHalf = opponentHandHalfWidth(player.handSize);
+  const handFan: Point = corner.left
+    ? { x: nameX + NAMEPLATE.w + HAND_GAP + handHalf, y: bandY }
+    : { x: nameX - HAND_GAP - handHalf, y: bandY };
 
   return {
     display, player, corner, quadrant: q, out,
@@ -164,22 +194,6 @@ function seatGeometry(display: number, player: Player): SeatLayout {
 /** Every seat's fixed furniture geometry, in display order (0 = you). */
 export function seatLayouts(state: GameState): SeatLayout[] {
   return displaySeats(state).map((p, d) => seatGeometry(d, p));
-}
-
-// ── deterministic pile jitter (design §8: never Math.random) ─────────────────
-
-/** A stable per-card offset/rotation for pile scatter, derived from the UUID so
- *  it is identical across frames and reloads (§8). FNV-1a → small deltas. */
-export function pileJitter(id: string): { dx: number; dy: number; drot: number } {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  const a = (h & 0xff) / 255 - 0.5;
-  const b = ((h >>> 8) & 0xff) / 255 - 0.5;
-  const c = ((h >>> 16) & 0xff) / 255 - 0.5;
-  return { dx: a * 7, dy: b * 7, drot: c * 0.09 };
 }
 
 // ── card placement ───────────────────────────────────────────────────────────
@@ -223,13 +237,15 @@ function layoutPile(
   seat: SeatLayout, zone: PileZone, cards: readonly Card[], out: PlacedActor[],
 ): void {
   const anchor = seat.piles[zone];
-  // Newest last renders on top (added later); depth offset reads as thickness.
+  // Newest last renders on top (added later); a small fixed depth offset reads as
+  // thickness and stays square — no scatter, so the stack is tidy. The offset caps
+  // so a deep pile can't climb into the zone above (the label carries true size).
   cards.forEach((card, i) => {
-    const j = pileJitter(card.id);
+    const d = Math.min(i, 7);
     place(out, card.id, card, card.id, {
-      x: anchor.x + i * 1.6 + j.dx,
-      y: anchor.y - i * 2.2 + j.dy,
-      rotation: j.drot,
+      x: anchor.x + d * 1.6,
+      y: anchor.y - d * 2.2,
+      rotation: 0,
       scale: PILE_SCALE,
       zone: zone === 'command' ? 'command' : zone,
       ownerId: seat.player.id,
@@ -254,13 +270,16 @@ function layoutLibrary(seat: SeatLayout, out: PlacedActor[]): void {
 
 function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
   const n = seat.player.handSize;
-  const spread = OPP_HAND_SCALE * CARD_TEX.w * 0.5;
+  const mid = (n - 1) / 2;
   for (let i = 0; i < n; i++) {
-    const t = n > 1 ? i / (n - 1) - 0.5 : 0;
+    const t = i - mid;
     place(out, `${seat.player.id}:hand:${i}`, undefined, undefined, {
-      x: seat.handFan.x + t * spread * n,
-      y: seat.handFan.y + Math.abs(t) * 10 * seat.out,
-      rotation: t * 0.1,
+      // A tight fan of backs beside the nameplate — the count is public, the faces
+      // are not (§7.2). The middle rides highest (smaller y) so the arc's interior
+      // is on the bottom, like a hand held from below — the same for every seat.
+      x: seat.handFan.x + t * OPP_HAND_ADVANCE,
+      y: seat.handFan.y + Math.abs(t) * 4,
+      rotation: t * 0.05,
       scale: OPP_HAND_SCALE, zone: 'hand', ownerId: seat.player.id, faceUp: false,
     });
   }

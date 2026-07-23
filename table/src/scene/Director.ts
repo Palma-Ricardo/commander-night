@@ -65,6 +65,7 @@ export class Director {
   private readonly links: StackLinks = new Map();
   private viewport: Size;
   private reducedMotion: boolean;
+  private rightInset = 0;                  // width the open log steals from the right (§8)
 
   // ── the two clocks ──
   private presentedState?: GameState;     // last *settled* real state
@@ -83,7 +84,7 @@ export class Director {
   constructor(private readonly sink: DirectorSink, opts: DirectorOpts = {}) {
     this.viewport = opts.viewport ?? { w: 1920, h: 1080 };
     this.reducedMotion = opts.reducedMotion ?? false;
-    this.camFrom = camera(TABLE_VIEW, this.viewport);
+    this.camFrom = camera(TABLE_VIEW, this.viewport, this.rightInset);
     this.camTo = this.camFrom;
   }
 
@@ -169,7 +170,7 @@ export class Director {
   /** Retarget the camera, tweening from its current interpolated preset. A 0
    *  duration (or reduced motion, or a game/first change) cuts. */
   private moveCameraTo(view: CameraView, durationMs: number): void {
-    const to = camera(view, this.viewport);
+    const to = camera(view, this.viewport, this.rightInset);
     if (durationMs <= 0 || this.reducedMotion) {
       this.camFrom = to; this.camTo = to; this.camDuration = 0; this.camElapsed = 0;
       return;
@@ -195,7 +196,7 @@ export class Director {
 
   /** §14: pull back to the whole table if any named point is off-screen. */
   ensureVisible(points: Point[]): boolean {
-    if (this.controller.ensureVisible(points, this.viewport)) {
+    if (this.controller.ensureVisible(points, this.viewport, this.rightInset)) {
       this.moveCameraTo(TABLE_VIEW, CAMERA_MANUAL_MS);
       return true;
     }
@@ -205,6 +206,15 @@ export class Director {
   setViewport(size: Size): void {
     this.viewport = size;
     // A resize is not an animation — re-frame the current view as a cut.
+    this.moveCameraTo(this.controller.view(), 0);
+  }
+
+  /** The log panel opened/closed/resized (§8): reserve its gutter so no seat frames
+   *  under it. Re-frames as a cut, like a resize; ignored if unchanged. */
+  setRightInset(px: number): void {
+    const next = Math.max(0, Math.round(px));
+    if (next === this.rightInset) return;
+    this.rightInset = next;
     this.moveCameraTo(this.controller.view(), 0);
   }
 

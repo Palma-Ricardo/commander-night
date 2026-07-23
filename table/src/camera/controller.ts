@@ -54,12 +54,12 @@ export class CameraController {
   /** §14: before a prompt becomes actionable, if any world point it concerns is
    *  off-screen under the current view, pull back to the whole table — the one
    *  preset that can never be wrong. Returns true if it moved the camera. */
-  ensureVisible(points: Point[], viewport: Size): boolean {
+  ensureVisible(points: Point[], viewport: Size, rightInset = 0): boolean {
     if (this.current.kind === 'table' || points.length === 0) return false;
-    const preset = camera(this.current, viewport);
-    // A point counts as visible only inside the safe area (above the hand band),
-    // which rectVisible enforces for a zero-size rect at that point.
-    const allVisible = points.every(p => rectVisible(preset, { x: p.x, y: p.y, w: 0, h: 0 }, viewport));
+    const preset = camera(this.current, viewport, rightInset);
+    // A point counts as visible only inside the safe area (above the hand band and
+    // clear of the open log), which rectVisible enforces for a zero-size rect there.
+    const allVisible = points.every(p => rectVisible(preset, { x: p.x, y: p.y, w: 0, h: 0 }, viewport, rightInset));
     if (allVisible) return false;
     this.current = TABLE_VIEW;
     return true;

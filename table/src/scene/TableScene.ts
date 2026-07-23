@@ -21,7 +21,10 @@ import { affordanceFor } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor } from '../render/CardActor';
 import { CardTextures, type Tier } from '../render/textures';
-import { NAMEPLATE, seatLayouts, WORLD, type PileZone, type SeatLayout } from '../layout/world';
+import {
+  NAMEPLATE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
+  type PileZone, type SeatLayout,
+} from '../layout/world';
 import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/types';
 import { camera, worldToScreen, screenToWorld, type CameraPreset } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
@@ -395,6 +398,10 @@ export class TableScene implements DirectorSink {
   showTable(): void { this.director.showTable(); }
   releaseCamera(): void { this.director.releaseCamera(); }
 
+  /** The log panel's current intrusion from the right edge (0 when collapsed), so
+   *  the camera frames the felt clear of it (§8). Called by the chrome on layout. */
+  setLogInset(px: number): void { this.director?.setRightInset(px); }
+
   /** Re-lay at the live viewport (window resize): world layout is viewport-free,
    *  so only the hand and the camera framing change — snap the current presented
    *  state to the new viewport rather than enqueuing a spurious animated step. */
@@ -423,8 +430,9 @@ export class TableScene implements DirectorSink {
     this.furniture.removeChildren();
     for (const seat of seatLayouts(state)) {
       this.drawLamplight(seat);
-      this.drawPileFootprints(seat);
+      this.drawPiles(seat);
       this.drawNameplate(seat);
+      this.drawHandCount(seat, state.me.playerId);
     }
   }
 
@@ -433,20 +441,54 @@ export class TableScene implements DirectorSink {
     this.furniture.addChild(new Graphics().circle(x, y, r).fill({ color: 0xffe6ad, alpha: 0.05 }));
   }
 
-  private drawPileFootprints(seat: SeatLayout): void {
-    const w = 100, h = 140;   // matches PILE_SCALE card size in world.ts
-    const zones: PileZone[] = ['library', 'graveyard', 'exile', 'command'];
-    for (const zone of zones) {
+  /** Each seat's pile column (§7.2 ".zones"): a footprint under the real card
+   *  stack plus a count label, so a 1-card graveyard reads apart from an 18-card
+   *  one. Empty zones are a faint outline (not a solid block that mimics a card);
+   *  exile stays cold so "gone" never reads as "dead" (§8). */
+  private drawPiles(seat: SeatLayout): void {
+    const { w, h } = PILE_FOOTPRINT;
+    const p = seat.player;
+    const counts: Record<PileZone, number> = {
+      library: p.librarySize, graveyard: p.graveyard.length,
+      exile: p.exile.length, command: p.commandZone.length,
+    };
+    for (const zone of ['library', 'graveyard', 'exile', 'command'] as PileZone[]) {
       const a = seat.piles[zone];
-      // Exile gets a cold, drained footprint so "gone" reads apart from "dead" (§8).
+      const count = counts[zone];
       const cold = zone === 'exile';
-      this.furniture.addChild(
-        new Graphics()
-          .roundRect(a.x - w / 2, a.y - h / 2, w, h, 8)
-          .fill({ color: cold ? 0x243642 : 0x000000, alpha: cold ? 0.16 : 0.12 })
-          .stroke({ width: 1.5, color: cold ? 0x486070 : 0x000000, alpha: 0.28 }),
-      );
+      const g = new Graphics().roundRect(a.x - w / 2, a.y - h / 2, w, h, 6);
+      if (count === 0) g.stroke({ width: 1.5, color: cold ? 0x486070 : 0x000000, alpha: 0.3 });
+      else g.fill({ color: cold ? 0x121d24 : 0x000000, alpha: cold ? 0.42 : 0.3 });
+      this.furniture.addChild(g);
+
+      // The command zone is always 1–2 (the commander), so a count there is noise —
+      // the zone tag alone. Every other pile carries its size.
+      const label = new Text({
+        text: zone === 'command' ? PILE_LABEL[zone] : `${PILE_LABEL[zone]} ${count}`,
+        style: new TextStyle({
+          fontFamily: 'ui-monospace, monospace', fontSize: 15, letterSpacing: 1,
+          fill: count === 0 ? 0x6c7871 : 0xa6b0a9, fontWeight: '600',
+        }),
+      });
+      label.anchor.set(0.5, 0);
+      label.position.set(a.x, a.y + h / 2 + 6);
+      this.furniture.addChild(label);
     }
+  }
+
+  /** The public count of an opponent's held hand, beside their back-fan (§7.2
+   *  ".held-n"). My own hand is the screen-space fan, so it carries no count here. */
+  private drawHandCount(seat: SeatLayout, meId: Id): void {
+    const p = seat.player;
+    if (p.id === meId || p.handSize === 0) return;
+    const side = seat.corner.left ? 1 : -1;   // the glyph sits inboard of the fan
+    const label = new Text({
+      text: `${p.handSize}`,
+      style: new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 16, fill: 0x8b95a0, fontWeight: '700' }),
+    });
+    label.anchor.set(side === 1 ? 0 : 1, 0.5);
+    label.position.set(seat.handFan.x + side * (opponentHandHalfWidth(p.handSize) + 10), seat.handFan.y);
+    this.furniture.addChild(label);
   }
 
   private drawNameplate(seat: SeatLayout): void {

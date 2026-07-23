@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  displaySeats, layoutWorld, pileJitter, seatLayouts, seatOfPlayer,
+  displaySeats, layoutWorld, seatLayouts, seatOfPlayer,
   seatQuadrantRect, WORLD,
 } from '../src/layout/world';
 import type { PlacedActor } from '../src/layout/types';
@@ -160,19 +160,18 @@ describe('seatLayouts furniture', () => {
   });
 });
 
-describe('pileJitter', () => {
-  it('is deterministic and bounded', () => {
-    const id = cid('card');
-    expect(pileJitter(id)).toEqual(pileJitter(id));
-    const j = pileJitter(id);
-    expect(Math.abs(j.dx)).toBeLessThanOrEqual(3.6);
-    expect(Math.abs(j.dy)).toBeLessThanOrEqual(3.6);
-    expect(Math.abs(j.drot)).toBeLessThanOrEqual(0.046);
-  });
-
-  it('differs across ids (no constant offset)', () => {
-    const a = pileJitter('aaaa-1111');
-    const b = pileJitter('bbbb-2222');
-    expect(a).not.toEqual(b);
+describe('piles are tidy', () => {
+  it('stacks each pile square — no per-card scatter or rotation', () => {
+    // A graveyard of several cards: every actor shares the anchor x/y up to the
+    // fixed depth step, and none is rotated (design: tidy stacks, no jitter).
+    const gy = Array.from({ length: 5 }, (_, i) => mkCard(`G${i}`, ['CREATURE']));
+    const you = mkPlayer('p1', 'You', { human: true, graveyard: gy });
+    const pile = layoutWorld(mkState([you], 'p1')).filter(p => p.placement.zone === 'graveyard');
+    expect(pile.length).toBe(5);
+    const anchorX = pile[0]!.placement.x;
+    pile.forEach((p, i) => {
+      expect(p.placement.rotation).toBe(0);
+      expect(p.placement.x).toBeCloseTo(anchorX + i * 1.6, 5);   // exact step, no jitter
+    });
   });
 });

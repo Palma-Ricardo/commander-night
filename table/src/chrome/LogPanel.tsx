@@ -9,6 +9,7 @@ import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import type { GameState, LogEntry } from '@night/core/protocol/protocol';
 import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
+import { getActiveScene } from '../scene/TableScene';
 import { hoverCard } from './hover';
 
 const COLLAPSE_KEY = 'night.table.logCollapsed';
@@ -22,12 +23,35 @@ export function LogPanel({ state }: { state: GameState }) {
   const [tab, setTab] = useState<'log' | 'chat'>('log');
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const listRef = useRef<HTMLOListElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
   const stickBottom = useRef(true);
 
   const setCollapsedPersist = (v: boolean): void => {
     setCollapsed(v);
     try { localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0'); } catch { /* private mode */ }
   };
+
+  // Tell the scene how far the log intrudes from the right edge, so the camera
+  // frames every seat clear of it (§8). Collapsed ⇒ 0 and the felt spreads back;
+  // re-measured on resize (the panel width is viewport-relative). Retries until the
+  // scene has mounted (its init is async).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let raf = 0;
+    const report = (): void => {
+      const scene = getActiveScene();
+      if (scene === null) { raf = requestAnimationFrame(report); return; }
+      const el = collapsed ? null : asideRef.current;
+      scene.setLogInset(el === null ? 0 : Math.max(0, window.innerWidth - el.getBoundingClientRect().left));
+    };
+    report();
+    window.addEventListener('resize', report);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', report);
+      getActiveScene()?.setLogInset(0);
+    };
+  }, [collapsed]);
 
   const shown = tab === 'log' ? entries : entries.filter(e => e.kind === 'chat');
 
@@ -57,7 +81,7 @@ export function LogPanel({ state }: { state: GameState }) {
   }
 
   return (
-    <aside className="log-panel">
+    <aside className="log-panel" ref={asideRef}>
       <div className="log-tabs">
         <button className={tab === 'log' ? 'tab tab-active' : 'tab'} onClick={() => setTab('log')}>
           Log

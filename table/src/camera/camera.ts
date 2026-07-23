@@ -45,14 +45,17 @@ const BLEED_Y = 120;
 const TILT_TABLE = 15 * Math.PI / 180;
 const TILT_SEAT = 8 * Math.PI / 180;
 
-/** The region the world is framed into: the viewport minus the hand band and a
- *  uniform margin. Everything the camera fits lands here. */
-export function safeArea(viewport: Size): Rect {
+/** The region the world is framed into: the viewport minus the hand band, a
+ *  uniform margin, and `rightInset` — the width the log panel steals from the
+ *  right when it is open (§8). Framing into the space *left of* the log is what
+ *  keeps a right-seat's pile column out from under it (the mockup sits the felt
+ *  and the log side by side); a collapsed log reports 0 and the felt spreads back. */
+export function safeArea(viewport: Size, rightInset = 0): Rect {
   const band = handBandHeight(viewport);
   return {
     x: SAFE_MARGIN,
     y: SAFE_MARGIN,
-    w: Math.max(1, viewport.w - 2 * SAFE_MARGIN),
+    w: Math.max(1, viewport.w - 2 * SAFE_MARGIN - Math.max(0, rightInset)),
     h: Math.max(1, viewport.h - band - SAFE_MARGIN),
   };
 }
@@ -97,9 +100,10 @@ function frame(focus: Rect, area: Rect, fill: number, focusAnchor: Point, areaAn
   };
 }
 
-/** The preset for a view at a viewport — the whole camera rig's core (design §7.3). */
-export function camera(view: CameraView, viewport: Size): CameraPreset {
-  const area = safeArea(viewport);
+/** The preset for a view at a viewport — the whole camera rig's core (design §7.3).
+ *  `rightInset` reserves the open log's gutter so nothing frames under it (§8). */
+export function camera(view: CameraView, viewport: Size, rightInset = 0): CameraPreset {
+  const area = safeArea(viewport, rightInset);
   if (view.kind === 'table') {
     // Whole world, centred in the safe area.
     const focus: Rect = { x: 0, y: 0, w: WORLD.w, h: WORLD.h };
@@ -151,9 +155,9 @@ export function screenToWorld(preset: CameraPreset, p: Point): Point {
 /** Does the whole world rect `r` project inside the viewport (and above the hand)?
  *  Used to assert framing and to decide the §14 pull-back when a prompt names an
  *  object the lens cannot see. */
-export function rectVisible(preset: CameraPreset, r: Rect, viewport: Size): boolean {
+export function rectVisible(preset: CameraPreset, r: Rect, viewport: Size, rightInset = 0): boolean {
   const band = handBandHeight(viewport);
   const tl = worldToScreen(preset, { x: r.x, y: r.y });
   const br = worldToScreen(preset, { x: r.x + r.w, y: r.y + r.h });
-  return tl.x >= 0 && tl.y >= 0 && br.x <= viewport.w && br.y <= viewport.h - band;
+  return tl.x >= 0 && tl.y >= 0 && br.x <= viewport.w - Math.max(0, rightInset) && br.y <= viewport.h - band;
 }
