@@ -29,6 +29,7 @@ import type { ActorSpace, PlacedActor, Point, Size, Transform } from '../layout/
 import { camera, worldToScreen, screenToWorld, type CameraPreset, type CameraView } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
+import { layoutScreen } from '../layout/screen';
 import { promptObjectIds } from './prompt-objects';
 import {
   highlightForAffordance, isClickable, rectContains, screenAnchor, type ScreenAnchor,
@@ -45,6 +46,7 @@ const DIM_ALPHA = 0.72;
 const DMG_INK = 0xf0a89a;
 const DMG_FILL = 0x2a100c;
 const DMG_EDGE = 0x5e1f16;
+const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
 
 // Zones a newly-created actor can fly *in from* — the owner's pile/fan anchor, in
 // world space. A draw comes from the library, an opponent's cast from their hand.
@@ -80,6 +82,10 @@ export class TableScene implements DirectorSink {
   private currentPrompt: PromptStoreState | undefined;
   private lastPromptId: number | undefined;
   private lastViewKey = '';
+  /** px the open log sidebar steals from the right (§8): the world is framed clear
+   *  of it by the camera's own inset, and the hand fan re-centres in the felt that
+   *  is left. Kept here so every layout (transition + recentre) uses one value. */
+  private rightInset = 0;
   /** Raised on a semantic click / hover; the chrome (TableCanvas) wires these to
    *  the shared @night/core click router and the hover store, so the scene stays
    *  free of any React-chrome import. */
@@ -106,6 +112,10 @@ export class TableScene implements DirectorSink {
     // paint — swap it onto the live actors when either fires (§10 image fallback).
     this.textures.onArtReady = () => this.refreshAllTextures();
     this.unsubResolver = resolver.store.subscribe(() => this.refreshAllTextures());
+    // Face-down cards (the library stack, opponents' hand fans, morphs) show the
+    // real card back (§7.2): preload it so `faceDown()` returns the art from first
+    // paint rather than the procedural back that would pop a frame later.
+    await this.textures.loadCardBack();
 
     this.worldLayer.addChild(this.feltG, this.furniture, this.worldActors);
     this.app.stage.addChild(this.worldLayer, this.screenActors);
@@ -144,7 +154,7 @@ export class TableScene implements DirectorSink {
     links: StackLinks,
   ): void {
     const size = this.size;
-    const placed = layoutKeyed(to, size, links);
+    const placed = layoutKeyed(to, size, links, this.rightInset);
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
@@ -418,9 +428,29 @@ export class TableScene implements DirectorSink {
   showTable(): void { this.director.showTable(); }
   releaseCamera(): void { this.director.releaseCamera(); }
 
-  /** The log panel's current intrusion from the right edge (0 when collapsed), so
-   *  the camera frames the felt clear of it (§8). Called by the chrome on layout. */
-  setLogInset(px: number): void { this.director?.setRightInset(px); }
+  /** The log panel's current intrusion from the right edge (0 when collapsed): the
+   *  camera frames the felt clear of it *and* the hand fan re-centres in what's
+   *  left (§8), so neither the board nor the hand tucks under the panel. Called by
+   *  the chrome whenever the sidebar opens, collapses, or is resized. */
+  setLogInset(px: number): void {
+    this.director?.setRightInset(px);
+    const inset = Math.max(0, Math.round(px));
+    if (inset === this.rightInset) return;
+    this.rightInset = inset;
+    this.recentreHand();
+  }
+
+  /** Slide the hand to stay centred in the felt left of the log gutter (§8). The
+   *  world layout is inset-free (the camera handles it), so this re-runs only the
+   *  screen layer and eases the existing fan actors — no create/destroy. */
+  private recentreHand(): void {
+    const state = this.director?.presented;
+    if (state === undefined) return;
+    for (const p of layoutScreen(state, this.size, this.rightInset)) {
+      const actor = this.actors.get(p.key);
+      if (actor?.space === 'screen') actor.animateTo(p.placement, HAND_RECENTRE_MS);
+    }
+  }
 
   /** Re-lay at the live viewport (window resize): world layout is viewport-free,
    *  so only the hand and the camera framing change — snap the current presented

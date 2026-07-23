@@ -18,6 +18,7 @@
 
 import { Container, Graphics, type Renderer, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
+import backArtUrl from '../assets/cards/Back.png';
 
 export type Tier = 'table' | 'detail' | 'artbox';
 
@@ -129,7 +130,8 @@ export class CardTextures {
   private readonly artbox = new Map<string, Texture>();     // art_crop url → battlefield art box (LRU)
   private readonly artboxFrames = new Map<string, Texture>(); // key → art-box text fallback
   private readonly loading = new Set<string>();             // image urls currently decoding
-  private back?: Texture;
+  private back?: Texture;                                    // procedural fallback back
+  private cardBackTex?: Texture;                             // the real card back art (assets/cards/Back.png)
 
   /** Fired when an async art texture finishes decoding, so the scene can swap it
    *  onto the actors still showing the text-frame placeholder. */
@@ -233,9 +235,30 @@ export class CardTextures {
     if (oldest !== undefined) { store.get(oldest)?.destroy(true); store.delete(oldest); }
   }
 
+  /** The shared face-down back for every hidden card — the library stack, opponents'
+   *  hand fans, morphs (§7.2). Returns the real card-back art once `loadCardBack`
+   *  has decoded it, else the procedural back as an immediate fallback. */
   faceDown(): Texture {
+    if (this.cardBackTex !== undefined) return this.cardBackTex;
     if (this.back === undefined) this.back = this.renderer.generateTexture(backContainer('table'));
     return this.back;
+  }
+
+  /** Preload the real card back (assets/cards/Back.png), downscaled to a table-tier
+   *  texture with rounded corners, so `faceDown()` serves it. Best-effort: on
+   *  failure every back stays the procedural fallback. Awaited at mount so a back is
+   *  the real art from first paint (and the screenshot harness is deterministic). */
+  loadCardBack(): Promise<void> {
+    if (this.cardBackTex !== undefined) return Promise.resolve();
+    return new Promise(resolve => {
+      const image = new Image();
+      image.onload = () => {
+        try { this.cardBackTex = tableArtTexture(image); this.onArtReady?.(); } catch { /* keep the fallback */ }
+        resolve();
+      };
+      image.onerror = () => resolve();
+      image.src = backArtUrl;
+    });
   }
 
   destroy(): void {
@@ -244,6 +267,7 @@ export class CardTextures {
       store.clear();
     }
     this.back?.destroy(true);
+    this.cardBackTex?.destroy(true);
   }
 }
 

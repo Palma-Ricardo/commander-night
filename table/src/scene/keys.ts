@@ -47,9 +47,11 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
 /** `layoutWorld` + `layoutScreen` with stack-actor keys canonicalized onto their
  *  stable object id, indexed by that key. The single source of truth for both
  *  the director's diff and the continuity assertions. */
-export function layoutKeyed(state: GameState, viewport: Size, links: StackLinks): Map<string, PlacedActor> {
+export function layoutKeyed(
+  state: GameState, viewport: Size, links: StackLinks, rightInset = 0,
+): Map<string, PlacedActor> {
   const out = new Map<string, PlacedActor>();
   for (const p of layoutWorld(state)) out.set(canonicalKey(p.key, links), { ...p, key: canonicalKey(p.key, links) });
-  for (const p of layoutScreen(state, viewport)) out.set(p.key, p);   // hand keys are already stable ids
+  for (const p of layoutScreen(state, viewport, rightInset)) out.set(p.key, p);   // hand keys are already stable ids
   return out;
 }

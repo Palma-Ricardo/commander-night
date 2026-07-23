@@ -55,6 +55,25 @@ describe('layoutScreen (the hand)', () => {
     expect(Math.max(...xs)).toBeLessThanOrEqual(vp.w);
   });
 
+  it('re-centres the fan in the felt left of the log gutter', () => {
+    const state = fourSeats();
+    const vp = { w: 1920, h: 1080 };
+    const inset = 400;
+    const mid = (xs: number[]) => (Math.min(...xs) + Math.max(...xs)) / 2;
+
+    const open = layoutScreen(state, vp, inset).map(p => p.placement.x);
+    const closed = layoutScreen(state, vp, 0).map(p => p.placement.x);
+    // the fan centres on the visible midline (viewport minus the gutter)…
+    expect(mid(open)).toBeCloseTo((vp.w - inset) / 2, 1);
+    // …i.e. shifted left of the full-viewport centre by half the gutter, and still
+    // clear of both edges of the felt that's left.
+    expect(mid(closed) - mid(open)).toBeCloseTo(inset / 2, 1);
+    for (const x of open) {
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(vp.w - inset);
+    }
+  });
+
   it('returns nothing for an empty hand', () => {
     const state = mkState([mkPlayer('p1', 'You', { human: true, handSize: 0 })], 'p1');
     expect(layoutScreen(state, { w: 1920, h: 1080 })).toEqual([]);

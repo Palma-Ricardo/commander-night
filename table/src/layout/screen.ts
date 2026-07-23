@@ -17,8 +17,11 @@ export function handBandHeight(viewport: Size): number {
   return Math.max(132, Math.min(240, Math.round(viewport.h * 0.19)));
 }
 
-/** The hand fan, in screen (CSS-pixel) coordinates, centred along the bottom. */
-export function layoutScreen(state: GameState, viewport: Size): PlacedActor[] {
+/** The hand fan, in screen (CSS-pixel) coordinates, centred along the bottom.
+ *  `rightInset` is the width the open log sidebar steals from the right (§8): the
+ *  fan centres in the felt *left* of it (and a crowded hand stays within that
+ *  width), so no card ever tucks under the panel. 0 ⇒ the whole viewport. */
+export function layoutScreen(state: GameState, viewport: Size, rightInset = 0): PlacedActor[] {
   const out: PlacedActor[] = [];
   const hand = state.me.hand;
   const n = hand.length;
@@ -28,9 +31,10 @@ export function layoutScreen(state: GameState, viewport: Size): PlacedActor[] {
   const scale = (band * 0.9) / CARD_TEX.h;         // card height ≈ 90% of the band
   const cardW = CARD_TEX.w * scale;
   const overlap = 0.62;                            // fan cards overlap when crowded
-  const step = Math.min(cardW * overlap, (viewport.w - cardW - 48) / Math.max(1, n - 1));
+  const availW = Math.max(cardW + 48, viewport.w - Math.max(0, rightInset));
+  const step = Math.min(cardW * overlap, (availW - cardW - 48) / Math.max(1, n - 1));
   const spanW = step * (n - 1);
-  const startX = viewport.w / 2 - spanW / 2;
+  const startX = availW / 2 - spanW / 2;
   const baseY = viewport.h - band / 2;
 
   hand.forEach((card, i) => {
