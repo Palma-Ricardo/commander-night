@@ -77,11 +77,10 @@ const STACK_MARGIN = 30;             // right edge → front card
 const STACK_SLIVER = 0.15;           // fraction of a card width each buried item shows
 const STACK_DEPTH_CAP = 8;           // buried-item falloff saturates here (deep stacks)
 
-/** Height of the stack's front card as a fraction of the play area (viewport above
- *  the hand band), clamped to a readable pixel range. */
+/** Height of the stack's front card: a constant third of the viewport height, so
+ *  the top of the stack reads at the same commanding size on every display. */
 function stackFrontHeight(viewport: Size): number {
-  const play = viewport.h - handBandHeight(viewport);
-  return Math.max(150, Math.min(300, Math.round(play * 0.42)));
+  return Math.round(viewport.h * 0.33);
 }
 
 function layoutStack(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
