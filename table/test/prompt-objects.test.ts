@@ -15,8 +15,10 @@ describe('promptObjectIds (§14 pull-back scope)', () => {
     expect(promptObjectIds(emptyScratch())).toEqual([]);
   });
 
-  it('priority names its playable objects', () => {
-    expect(ids({ ...base, kind: 'priority', canPass: true, playable: { a: [], b: [] } })).toEqual(['a', 'b']);
+  it('a plain priority window scopes nothing — you can pass, and your hand is always in shot', () => {
+    // NOT its playables: scoping by them pulled the lens to the table on every respond
+    // window (an opponent casting a creature, an ETB) while you followed their seat.
+    expect(ids({ ...base, kind: 'priority', canPass: true, playable: { a: [], b: [] } })).toEqual([]);
   });
 
   it('priority + combat names candidates and already-declared', () => {
