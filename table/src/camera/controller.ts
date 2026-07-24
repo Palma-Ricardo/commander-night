@@ -28,11 +28,23 @@ export class CameraController {
   // whole table until it can. Recomputed from scratch on every keepVisible (no saved
   // view), so releasing it always lands back on `intent` — the pin or followed seat.
   private pulledBack = false;
+  // Combat is on the board (attackers declared): the whole table reads best, so while
+  // *following* we frame it there — attacks span the table, and the arrows want room.
+  // A manual pin still wins (it's your explicit pick); combat is a follow-time default,
+  // not an override. Cleared when combat leaves the board → back to the followed seat.
+  private combat = false;
 
   /** The view the scene should render this frame — the intended view, unless a §14
-   *  pull-back is holding the whole table. */
+   *  pull-back or live combat is holding the whole table. */
   view(): CameraView {
-    return this.pulledBack ? TABLE_VIEW : this.intent;
+    return this.pulledBack ? TABLE_VIEW : this.effectiveIntent();
+  }
+
+  /** The view follow/pin wants, folding in the combat default: the whole table while
+   *  following during combat, otherwise the pinned/followed seat. The §14 pull-back
+   *  sits on top of this in `view()`. */
+  private effectiveIntent(): CameraView {
+    return this.following && this.combat ? TABLE_VIEW : this.intent;
   }
 
   isFollowing(): boolean {
@@ -51,6 +63,13 @@ export class CameraController {
     const prev = this.lastActiveSeat;
     this.lastActiveSeat = activeSeat;
     if (prev >= 0 && prev !== activeSeat && this.following) this.intent = seatView(activeSeat);
+  }
+
+  /** Combat entered/left the board. While following, live combat frames the whole
+   *  table (attacks span it); when it clears we fall back to the followed seat. A
+   *  manual pin is untouched — combat is a follow-time default, not an override. */
+  setCombat(active: boolean): void {
+    this.combat = active;
   }
 
   /** User override — pin a seat (or the whole table). Sticky until released, and it
@@ -80,12 +99,14 @@ export class CameraController {
     return !sameView(before, this.view());
   }
 
-  /** Whether the intended view frames every point inside the safe area (above the
-   *  hand band, clear of the open log). The whole table shows everything by
-   *  construction, and an empty point set has nothing to hide. */
+  /** Whether the effective view (pin/followed seat, or the whole table during
+   *  combat) frames every point inside the safe area (above the hand band, clear of
+   *  the open log). The whole table shows everything by construction, and an empty
+   *  point set has nothing to hide. */
   private intentShows(points: Point[], viewport: Size, rightInset: number): boolean {
-    if (this.intent.kind === 'table' || points.length === 0) return true;
-    const preset = camera(this.intent, viewport, rightInset);
+    const base = this.effectiveIntent();
+    if (base.kind === 'table' || points.length === 0) return true;
+    const preset = camera(base, viewport, rightInset);
     return points.every(p => rectVisible(preset, { x: p.x, y: p.y, w: 0, h: 0 }, viewport, rightInset));
   }
 }

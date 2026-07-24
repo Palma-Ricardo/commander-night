@@ -154,6 +154,29 @@ describe('CameraController follow / override policy', () => {
     expect(c.view()).toEqual(seatView(2));
   });
 
+  it('combat frames the whole table while following, then falls back to the seat', () => {
+    const c = new CameraController();
+    c.syncActive(0);
+    c.syncActive(2);                       // following seat 2
+    expect(c.view()).toEqual(seatView(2));
+    c.setCombat(true);                     // attacks on the board → whole table
+    expect(c.view()).toEqual(TABLE_VIEW);
+    expect(c.isFollowing()).toBe(true);    // still following underneath
+    c.setCombat(false);                    // combat clears → back to the followed seat
+    expect(c.view()).toEqual(seatView(2));
+  });
+
+  it('a manual pin wins over the combat default (combat is a follow-time default)', () => {
+    const c = new CameraController();
+    c.syncActive(0);
+    c.syncActive(1);
+    c.setCombat(true);
+    c.focus(seatView(3));                  // user pins during combat
+    expect(c.view()).toEqual(seatView(3));  // pin holds, combat does not override it
+    c.release();                           // Esc while combat is still live → table
+    expect(c.view()).toEqual(TABLE_VIEW);
+  });
+
   it('§14: a prompt naming an off-screen object pulls back to the whole table', () => {
     const vp = { w: 1920, h: 1080 };
     const c = new CameraController();

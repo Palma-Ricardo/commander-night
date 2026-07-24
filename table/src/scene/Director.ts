@@ -169,6 +169,7 @@ export class Director {
   private reframe(state: GameState): void {
     const before = this.controller.view();
     this.controller.syncActive(seatOfPlayer(state, state.turn.activePlayerId));
+    this.controller.setCombat((state.combat?.length ?? 0) > 0);   // attacks on the board → whole table
     const after = this.controller.view();
     if (sameView(before, after)) return;
     // The camera glides on its own clock (§7.3, CAMERA_FOLLOW_MS), decoupled from the

@@ -219,6 +219,21 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     expect(dir.cameraPreset().scale).toBeCloseTo(camera(seatView(1), VP).scale, 6);
   });
 
+  it('combat frames the whole table while following, releasing when it clears', () => {
+    const { dir } = spy();
+    const attacking = (id: string, active: string): GameState => ({
+      ...game(id, active),
+      combat: [{ attackerIds: ['atk'], defenderId: 'p3', blockerIds: [], blocked: false }],
+    });
+    dir.present(game('a', 'p1'), []);
+    dir.present(game('a', 'p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(seatView(1));   // following the active player
+    dir.present(attacking('a', 'p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(TABLE_VIEW);     // attacks on the board → whole table
+    dir.present(game('a', 'p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(seatView(1));    // combat cleared → back to the seat
+  });
+
   it('a manual camera move interpolates rather than cutting', () => {
     const { dir } = spy();
     dir.present(game('a', 'p1'), []);
