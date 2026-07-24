@@ -123,6 +123,34 @@ describe('layoutWorld', () => {
     expect(seat.landRowY).toBeGreaterThan(seat.boardTopY);   // rail is below the seam for you
   });
 
+  it('moves an animated land up to the creature rows, and home again when it wears off', () => {
+    // A 3/3 Forest fights, so it has to stand with the creatures — leaving it in the
+    // mana row makes it march to a battle lane from the back of the quadrant.
+    const animated = mkCard('Forest', ['LAND', 'CREATURE'], {
+      id: 'awoken', supertypes: ['Basic'], power: '3', toughness: '3',
+    });
+    const dormant = mkCard('Forest', ['LAND'], { id: 'awoken', supertypes: ['Basic'] });
+    const board = (forest: Card) => mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: [
+        mkPerm('p1', mkCreature('A')),
+        mkPerm('p1', mkCard('Island', ['LAND'], { id: 'plain-land' })),
+        mkPerm('p1', forest),
+      ],
+    });
+    const seat = seatLayouts(mkState([board(animated)], 'p1'))[0]!;
+    const yOf = (pl: PlacedActor[], id: string): number =>
+      pl.find(p => p.placement.zone === 'battlefield' && p.card?.id === id)!.placement.y;
+
+    const awake = layoutWorld(mkState([board(animated)], 'p1'));
+    expect(yOf(awake, 'awoken')).toBeCloseTo(seat.boardTopY, 5);      // with the creatures
+    expect(yOf(awake, 'plain-land')).toBeCloseTo(seat.landRowY, 5);   // the plain land stays put
+
+    // Same permanent, animation ended: the type line is back to LAND, so is the card.
+    const asleep = layoutWorld(mkState([board(dormant)], 'p1'));
+    expect(yOf(asleep, 'awoken')).toBeCloseTo(seat.landRowY, 5);
+  });
+
   it('collapses identical basic lands into one cell with a ×N tally', () => {
     const basic = (): Card => mkCard('Forest', ['LAND'], { supertypes: ['Basic'] });
     const you = mkPlayer('p1', 'You', {

@@ -425,16 +425,28 @@ function placeCells(
   });
 }
 
+/** Which row a permanent belongs to. A land that is *currently* a creature — an
+ *  animated Dryad Arbor, a Nissa'd Forest, anything a continuous effect turned
+ *  into a body — sits with the creatures, not in the mana row: it blocks, it
+ *  attacks, and it has to march to a battle lane from somewhere that reads as the
+ *  front line. `types` is the permanent's live type line (XMage's PermanentView
+ *  reports post-effect types), so this flips both ways on its own: when the
+ *  animation ends the land is a land again and the director tweens it home. */
+function inLandRow(p: Permanent): boolean {
+  return p.types.includes('LAND') && !p.types.includes('CREATURE');
+}
+
 function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachIndex, out: PlacedActor[]): void {
-  // The place setting (§7.2): non-land permanents are rows pinned to the seam and
-  // grow toward the rail; lands are their own row pinned to the rail and grow back
-  // toward the seam. Both fold identical basics/tokens into single cells first, so
+  // The place setting (§7.2): non-land permanents (plus animated lands, see
+  // `inLandRow`) are rows pinned to the seam and grow toward the rail; lands are
+  // their own row pinned to the rail and grow back toward the seam. Both fold
+  // identical basics/tokens into single cells first, so
   // eight Forests cost one slot — the board's answer to overflow (T4). Permanents
   // fighting in the seam (layoutCombat) are withheld from the grid entirely, and so
   // are attachments: they ride under their host, wherever the host is placed.
   const bf = seat.player.battlefield.filter(p => !inCombat.has(p.id) && !att.nested.has(p.id));
-  const nonlands = groupCells(bf.filter(p => !p.types.includes('LAND')));
-  const lands = groupCells(bf.filter(p => p.types.includes('LAND')));
+  const nonlands = groupCells(bf.filter(p => !inLandRow(p)));
+  const lands = groupCells(bf.filter(inLandRow));
   placeCells(seat, nonlands, seat.boardTopY, seat.out, att, out);
   placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, att, out);
 }
