@@ -330,45 +330,57 @@ function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, out: PlacedAct
   placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, out);
 }
 
-// ── combat in the seam (§7.2/§9) ─────────────────────────────────────────────
-// "The seam belongs to the stack and to combat": an attacker physically steps off
-// its own half into it and leans toward its defender; a blocked attacker nudges
-// back onto its own side of the line; each blocker slides out to interpose between
-// its attacker and the player it defends. All pure layout — the director tweens
-// cards into and out of these slots like any other transition, which *is* the §9
-// attack/block motion.
+// ── combat: the three battle lanes (§7.2/§9) ─────────────────────────────────
+// An attacker marches to the border its quadrant shares with its defender's: a
+// row along the horizontal seam for the seat across it, a column along the
+// vertical seam for the side neighbour, and the table's centre corner for the
+// diagonal seat (tilted 45° toward it). Attacking all three opponents mans all
+// three borders at once. An unblocked attacker crosses the line slightly; a
+// blocked one backs onto its own side, and each blocker stands directly across
+// the border from its attacker — in line, matching its rotation — so every fight
+// reads as a face-off over a fence. All pure layout: the director tweens cards
+// into and out of these slots like any other transition, which *is* the §9
+// attack/block motion (the damage-step lunge is scene juice on top).
 
-const ATTACK_ADVANCE = 34;         // an unblocked attacker's centre crosses the line by this
-const ATTACK_NUDGE_BACK = 36;      // a blocked attacker backs off to its own side
-const COMBAT_TILT_MAX = 0.18;      // radians of lean toward the defender
-const BLOCK_DIST = CARD_H * 0.85;  // blocker stands this far in front of its attacker
-const BLOCK_FAN = CARD_W * 0.62;   // side-by-side spread of gang blockers
+const ATTACK_ADVANCE = 34;        // an unblocked attacker's centre crosses the border by this
+const ATTACK_NUDGE_BACK = 36;     // a blocked attacker backs off to its own side
+const BLOCK_ACROSS = 96;          // blocker's centre, across the border from its attacker
+const BLOCK_FAN = CARD_W * 0.72;  // along-the-border spread of gang blockers
+const CORNER_TILT = Math.PI / 4;  // the diagonal lane's lean toward its defender
+const CORNER_SPREAD = CARD_W + GAP;  // fan step for multiple corner attackers
+// Each seam lane is centred on the stretch of border it owns, which stops short
+// of the table's centre corner — that zone belongs to the diagonal lane — so the
+// three fronts read as separate engagements, not one pile-up at the middle.
+const CORNER_CLEAR = 180;         // border kept free around the centre corner
 
-const clampUnit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
+type LaneKind = 'h' | 'v' | 'corner';
 
-/** Lean toward a point: full tilt at ~a third of the table away, proportionally
- *  less when the defender is nearly straight ahead. */
-const leanToward = (fromX: number, towardX: number): number =>
-  COMBAT_TILT_MAX * clampUnit((towardX - fromX) / 800);
-
-function nameplateCentre(seat: SeatLayout): Point {
-  return { x: seat.nameplate.x + NAMEPLATE.w / 2, y: seat.nameplate.y + NAMEPLATE.h / 2 };
+/** Which border an attacking quadrant shares with its defender's: the horizontal
+ *  seam, the vertical seam, or just the centre corner. Undefined when they share
+ *  a quadrant (corrupt state) — the combatant degrades to its grid slot. */
+function laneKind(a: Corner, d: Corner): LaneKind | undefined {
+  const across = a.left !== d.left;
+  const over = a.bottom !== d.bottom;
+  if (across && over) return 'corner';
+  if (over) return 'h';
+  if (across) return 'v';
+  return undefined;
 }
 
-/** Where a combat group aims: the defending player's nameplate — or, for a
- *  planeswalker/battle defender, its owner's. Undefined for an unknown id. */
-function defenderAnchor(defenderId: Id, seats: readonly SeatLayout[]): Point | undefined {
+/** The seat a combat group attacks: the defending player's — or, for a
+ *  planeswalker/battle defender, the seat whose battlefield holds it. */
+function defenderSeat(defenderId: Id, seats: readonly SeatLayout[]): SeatLayout | undefined {
   for (const s of seats) {
-    if (s.player.id === defenderId) return nameplateCentre(s);
-    if (s.player.battlefield.some(p => p.id === defenderId)) return nameplateCentre(s);
+    if (s.player.id === defenderId) return s;
+    if (s.player.battlefield.some(p => p.id === defenderId)) return s;
   }
   return undefined;
 }
 
-/** Place every combatant of `state.combat` in the seam (see the block comment
- *  above) and return their ids so the grid withholds them. Emitted *after* the
- *  boards so combatants render above the rows they stepped out of. Deterministic:
- *  slots follow combat-group order, which the wire fixes. */
+/** Place every combatant of `state.combat` on its battle lane (see the block
+ *  comment above) and return their ids so the grid withholds them. Emitted
+ *  *after* the boards so combatants render above the rows they stepped out of.
+ *  Deterministic: slots follow combat-group order, which the wire fixes. */
 function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: PlacedActor[]): Set<Id> {
   const ids = new Set<Id>();
   const combat: readonly CombatGroup[] = state.combat ?? [];
@@ -379,9 +391,26 @@ function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: Place
     for (const perm of seat.player.battlefield) permOf.set(perm.id, { perm, seat });
   }
 
-  // A combatant is withheld from the grid only if it was actually placed here —
-  // a stale id or an unknown defender must degrade to the ordinary grid slot,
-  // never to a vanished card.
+  // Pass 1 — bucket every resolvable attacker into its seat's lane toward its
+  // defender. A stale id or an unknown/same-quadrant defender is skipped here,
+  // so it degrades to the ordinary grid slot, never to a vanished card.
+  interface Entry { perm: Permanent; g: CombatGroup }
+  const lanes = new Map<string, { seat: SeatLayout; kind: LaneKind; entries: Entry[] }>();
+  for (const g of combat) {
+    for (const aid of g.attackerIds) {
+      const hit = permOf.get(aid);
+      if (hit === undefined) continue;
+      const dSeat = defenderSeat(g.defenderId, seats);
+      if (dSeat === undefined) continue;
+      const kind = laneKind(hit.seat.corner, dSeat.corner);
+      if (kind === undefined) continue;
+      const key = `${hit.seat.display}:${kind}`;
+      let lane = lanes.get(key);
+      if (lane === undefined) { lane = { seat: hit.seat, kind, entries: [] }; lanes.set(key, lane); }
+      lane.entries.push({ perm: hit.perm, g });
+    }
+  }
+
   const placeCombatant = (perm: Permanent, seat: SeatLayout, x: number, y: number, tilt: number): void => {
     ids.add(perm.id);
     place(out, perm.id, perm, perm.id, {
@@ -390,40 +419,63 @@ function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: Place
     });
   };
 
-  const nextSlot = new Map<Id, number>();   // per attacking seat: battle-line column
-  for (const g of combat) {
-    const aim = defenderAnchor(g.defenderId, seats);
-    if (aim === undefined) continue;
-    let anchor: Point | undefined;   // the group's first attacker, for its blockers
-    for (const aid of g.attackerIds) {
-      const hit = permOf.get(aid);
-      if (hit === undefined) continue;
-      const { perm, seat } = hit;
-      const slot = nextSlot.get(seat.player.id) ?? 0;
-      nextSlot.set(seat.player.id, slot + 1);
-      const seamEdge = seat.corner.bottom ? seat.quadrant.y : seat.quadrant.y + seat.quadrant.h;
-      const x = seat.rowStartX + slot * (CARD_W + GAP);
-      const y = g.blocked
-        ? seamEdge + seat.out * ATTACK_NUDGE_BACK
-        : seamEdge - seat.out * ATTACK_ADVANCE;
-      placeCombatant(perm, seat, x, y, leanToward(x, aim.x));
-      anchor ??= { x, y };
+  // Pass 2 — march each lane out. For every attacker: the border point its slot
+  // holds, the unit attack direction across that border, and the lane's tilt.
+  // Seam lanes centre their line-up on the border segment their quadrant owns
+  // (rail margin at one end, the corner-clear zone at the other); the corner
+  // lane fans about the corner itself.
+  const centreX = WORLD.w / 2;
+  const centreY = WORLD.h / 2;
+  for (const lane of lanes.values()) {
+    const seat = lane.seat;
+    const q = seat.quadrant;
+    const side: 1 | -1 = seat.corner.left ? 1 : -1;   // toward the other column
+    const mid = (lane.entries.length - 1) / 2;
+    let segMid = 0;
+    if (lane.kind === 'h') {
+      segMid = seat.corner.left
+        ? (q.x + EDGE_MARGIN + centreX - CORNER_CLEAR) / 2
+        : (centreX + CORNER_CLEAR + q.x + q.w - EDGE_MARGIN) / 2;
+    } else if (lane.kind === 'v') {
+      segMid = seat.corner.bottom
+        ? (centreY + CORNER_CLEAR + q.y + q.h - EDGE_MARGIN) / 2
+        : (q.y + EDGE_MARGIN + centreY - CORNER_CLEAR) / 2;
     }
-    if (anchor === undefined) continue;
-    // Blockers interpose along the attacker → defender line, fanned sideways when
-    // several gang up on one attacker.
-    const dx = aim.x - anchor.x;
-    const dy = aim.y - anchor.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len;
-    const uy = dy / len;
-    const mid = (g.blockerIds.length - 1) / 2;
-    g.blockerIds.forEach((bid, j) => {
-      const hit = permOf.get(bid);
-      if (hit === undefined) return;
-      const x = anchor!.x + ux * BLOCK_DIST - uy * (j - mid) * BLOCK_FAN;
-      const y = anchor!.y + uy * BLOCK_DIST + ux * (j - mid) * BLOCK_FAN;
-      placeCombatant(hit.perm, hit.seat, x, y, leanToward(x, anchor!.x));
+    lane.entries.forEach((en, i) => {
+      let bx: number, by: number, dirX: number, dirY: number, tilt: number;
+      if (lane.kind === 'h') {          // row along the horizontal seam
+        bx = segMid + (i - mid) * (CARD_W + GAP);
+        by = centreY;
+        dirX = 0; dirY = -seat.out; tilt = 0;
+      } else if (lane.kind === 'v') {   // column along the vertical seam
+        bx = centreX;
+        by = segMid + (i - mid) * (CARD_H + GAP);
+        dirX = side; dirY = 0; tilt = 0;
+      } else {                          // the centre corner, fanned on the diagonal
+        dirX = side * Math.SQRT1_2;
+        dirY = -seat.out * Math.SQRT1_2;
+        const off = (i - mid) * CORNER_SPREAD;
+        bx = centreX - dirY * off;      // spread along the border (⊥ to the attack)
+        by = centreY + dirX * off;
+        tilt = side * CORNER_TILT;
+      }
+      const adv = en.g.blocked ? -ATTACK_NUDGE_BACK : ATTACK_ADVANCE;
+      placeCombatant(en.perm, seat, bx + dirX * adv, by + dirY * adv, tilt);
+      // Its blockers: directly across the border, in line, same rotation —
+      // fanned along the border when several gang up. First placement wins if a
+      // creature somehow blocks twice.
+      const bMid = (en.g.blockerIds.length - 1) / 2;
+      en.g.blockerIds.forEach((bid, j) => {
+        const bHit = permOf.get(bid);
+        if (bHit === undefined || ids.has(bid)) return;
+        const f = (j - bMid) * BLOCK_FAN;
+        placeCombatant(
+          bHit.perm, bHit.seat,
+          bx + dirX * BLOCK_ACROSS - dirY * f,
+          by + dirY * BLOCK_ACROSS + dirX * f,
+          tilt,
+        );
+      });
     });
   }
   return ids;

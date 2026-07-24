@@ -44,6 +44,11 @@ const HOVER_LIFT = 0.26;       // upward shift, as a fraction of texH·scale. MU
 /** ease-out cubic — cards decelerate into place (overshoot/spring is T4). */
 const ease = (t: number): number => 1 - (1 - t) ** 3;
 
+/** Where in a lunge's duration the strike lands: sin(π·p^0.72) peaks at
+ *  p = 0.5^(1/0.72) — fast out, easier back. The scene delays the impact
+ *  flash/number/shake by `duration × LUNGE_IMPACT_AT` so they land on the hit. */
+export const LUNGE_IMPACT_AT = 0.5 ** (1 / 0.72);
+
 /** The hand hover-lift transform at hover amount `amt` (0..1): the grown draw scale
  *  and the upward shift (own-space px). Kept pure + exported so the no-flicker
  *  invariant — the card's bottom edge never rises above its resting bottom — can be
@@ -89,6 +94,9 @@ export class CardActor {
   private chillHold = 0;       // ms the chill holds before easing off (the flight)
   private vanishing = false;   // counter (§9): the face hides while the shatter plays
   private vanishAmt = 0;       // 0..1 face/chrome fade-out
+  private readonly lungeVec = { x: 0, y: 0 };  // §9 combat damage: the punch, own-space units
+  private lungeDur = 0;        // ms; 0 ⇒ at rest
+  private lungeT = 0;
   private hoverAmt = 0;        // 0..1 hand hover-lift (eases toward hoverTarget)
   private hoverTarget = 0;     // the scene sets this: 1 while a hand card is pointed at
   // The face's four screen corners from the last render (TL, TR, BR, BL), so the
@@ -268,6 +276,17 @@ export class CardActor {
   vanish(): void { this.vanishing = true; }
   unvanish(): void { this.vanishing = false; }
 
+  /** A there-and-back punch (§9 combat damage): the face travels `(dx, dy)`
+   *  own-space units, striking at ~LUNGE_IMPACT_AT of `durationMs` and recovering
+   *  over the rest. A pure render offset — the settled transform, `pos` and
+   *  hit-testing never move, so the card is still exactly where the layout says. */
+  lunge(dx: number, dy: number, durationMs = 320): void {
+    this.lungeVec.x = dx;
+    this.lungeVec.y = dy;
+    this.lungeDur = durationMs;
+    this.lungeT = 0;
+  }
+
   /** Raise/lower the hand hover-lift (§9). The scene drives this for a pointed-at
    *  hand card; the lift eases in `decayJuice` and is painted every frame. A no-op
    *  read for non-hand cards (the scene never raises them). */
@@ -311,6 +330,10 @@ export class CardActor {
     else if (this.mortis > 0) this.mortis = Math.max(0, this.mortis - dtMs / 300);
     if (this.vanishing) this.vanishAmt = Math.min(1, this.vanishAmt + dtMs / 110);
     else if (this.vanishAmt > 0) this.vanishAmt = Math.max(0, this.vanishAmt - dtMs / 240);
+    if (this.lungeDur > 0) {
+      this.lungeT += dtMs;
+      if (this.lungeT >= this.lungeDur) this.lungeDur = 0;
+    }
     this.hoverAmt += (this.hoverTarget - this.hoverAmt) * Math.min(1, dtMs / 70);   // ~snappy lift
   }
 
@@ -328,8 +351,17 @@ export class CardActor {
     const hw = (this.texW * drawScale * (1 + 0.16 * sq)) / 2;
     const hh = (this.texH * drawScale * (1 - 0.26 * sq)) / 2;
     const rot = this.current.rotation + this.spin + this.mortis * DEATH_TIP;
-    const cx = this.current.x;
-    const cy = this.current.y - Math.sin(Math.PI * this.lastT) * this.arc - lift;
+    // The lunge (§9 combat damage): a there-and-back offset, biased so the strike
+    // lands fast (peak at ~LUNGE_IMPACT_AT of the duration) and the recovery eases.
+    let lungeX = 0;
+    let lungeY = 0;
+    if (this.lungeDur > 0) {
+      const f = Math.sin(Math.PI * (this.lungeT / this.lungeDur) ** 0.72);
+      lungeX = this.lungeVec.x * f;
+      lungeY = this.lungeVec.y * f;
+    }
+    const cx = this.current.x + lungeX;
+    const cy = this.current.y - Math.sin(Math.PI * this.lastT) * this.arc - lift + lungeY;
     const cos = Math.cos(rot);
     const sin = Math.sin(rot);
     // a space-corner from unit signs (sx, sy) ∈ {−1, +1}, then rotated + placed

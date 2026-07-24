@@ -21,7 +21,7 @@ import type {
 } from '@night/core';
 import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
-import { CardActor } from '../render/CardActor';
+import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
 import { Effects } from '../render/Effects';
 import {
@@ -475,12 +475,18 @@ export class TableScene implements DirectorSink {
         }
         case 'damage': {
           const p = this.worldPointOf(e.targetId) ?? this.seatPoint(e.targetId, to);
-          if (p !== undefined) {
-            this.effects.damageNumber(p, e.amount, e.combat);
-            this.effects.impactFlash(p);
-          }
-          this.actorByObject(e.targetId)?.sparkFlash();
-          if (e.combat) this.effects.addShake(Math.min(18, 3 + e.amount * 1.4));
+          // Combat damage is delivered by a lunge (§9): whoever is punching the
+          // target strikes there-and-back, and the flash/number/shake land at the
+          // moment of the hit, not at takeoff. 0 ⇒ nobody lunged, fire at once.
+          const hitDelay = e.combat ? this.lungeAt(e.targetId, to) : 0;
+          this.after(hitDelay, () => {
+            if (p !== undefined) {
+              this.effects.damageNumber(p, e.amount, e.combat);
+              this.effects.impactFlash(p);
+            }
+            this.actorByObject(e.targetId)?.sparkFlash();
+            if (e.combat) this.effects.addShake(Math.min(18, 3 + e.amount * 1.4));
+          });
           break;
         }
         case 'life': {
@@ -639,6 +645,42 @@ export class TableScene implements DirectorSink {
     const seat = seatLayouts(state).find(s => s.player.id === playerId);
     if (seat === undefined) return undefined;
     return { x: seat.nameplate.x + NAMEPLATE.w / 2, y: seat.nameplate.y + NAMEPLATE.h / 2 };
+  }
+
+  /** §9 combat damage: everyone punching `targetId` lunges at it — an attacker
+   *  hits the defending player's nameplate, or falls just short into the blocker
+   *  that stopped it; a blocker punches back at its attacker (the pair clash
+   *  head-on when they trade). The lunge is a render-only there-and-back on the
+   *  actor. Returns the time until the strike lands, so the caller can put the
+   *  flash/number/shake on the hit; 0 ⇒ nobody lunged. */
+  private lungeAt(targetId: Id, state: GameState): number {
+    const target = this.worldPointOf(targetId) ?? this.seatPoint(targetId, state);
+    if (target === undefined) return 0;
+    const isPlayer = state.players.some(pl => pl.id === targetId);
+    const punchers: Id[] = [];
+    for (const g of state.combat ?? []) {
+      if (g.defenderId === targetId && !g.blocked) punchers.push(...g.attackerIds);
+      else if (g.blockerIds.includes(targetId)) punchers.push(...g.attackerIds);
+      else if (g.attackerIds.includes(targetId)) punchers.push(...g.blockerIds);
+    }
+    // Fall short of a card so the faces meet edge-on; a nameplate is flat, so the
+    // punch stops at its rim and reads as rapping the plate itself.
+    const stopShort = isPlayer ? NAMEPLATE.h / 2 + 14 : 58;
+    let impact = 0;
+    for (const id of punchers) {
+      const actor = this.actorByObject(id, 'battlefield');
+      if (actor === undefined || actor.space === 'screen') continue;
+      const from = actor.pos;   // live position — settled in its lane by damage time
+      const dx = target.x - from.x;
+      const dy = target.y - from.y;
+      const len = Math.hypot(dx, dy);
+      const reach = len - stopShort;
+      if (reach < 8) continue;
+      const dur = Math.min(460, 220 + reach * 0.3);
+      actor.lunge((dx / len) * reach, (dy / len) * reach, dur);
+      impact = Math.max(impact, dur * LUNGE_IMPACT_AT);
+    }
+    return impact;
   }
 
   // ── stack tethers (design §9, T4): what's on the stack and where it points ─────

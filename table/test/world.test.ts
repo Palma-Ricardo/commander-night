@@ -226,9 +226,11 @@ describe('piles are tidy', () => {
   });
 });
 
-describe('combat in the seam (§7.2/§9)', () => {
+describe('combat: the three battle lanes (§7.2/§9)', () => {
+  const SEAM_X = WORLD.w / 2;
   const SEAM_Y = WORLD.h / 2;
 
+  // p2 (bottom-right) attacks p1 (bottom-left): the vertical-seam lane.
   const combatState = (blocked: boolean): { state: ReturnType<typeof fourSeats>; atkId: string; blkId: string } => {
     const state = fourSeats();
     const atk = state.players[1]!.battlefield.find(p => p.types.includes('CREATURE'))!;
@@ -240,39 +242,33 @@ describe('combat in the seam (§7.2/§9)', () => {
     return { state, atkId: atk.id, blkId: blk.id };
   };
 
-  it('an unblocked attacker steps off its own half into the seam', () => {
+  it('a side-neighbour attacker marches to the vertical seam and crosses it, unrotated', () => {
     const { state, atkId } = combatState(false);
     const grid = byKey(layoutWorld({ ...state, combat: undefined }));
     const placed = byKey(layoutWorld(state));
     const attacker = placed.get(atkId)!;
-    // p2 sits bottom-right: its half is y > SEAM_Y. The attacker crosses the line.
-    expect(attacker.placement.y).toBeLessThan(SEAM_Y);
-    // …and has genuinely left its grid slot.
-    expect(attacker.placement.y).not.toBeCloseTo(grid.get(atkId)!.placement.y, 0);
+    // p2 sits bottom-right: its column is x > SEAM_X. The attacker crosses the line…
+    expect(attacker.placement.x).toBeLessThan(SEAM_X);
+    // …centred on its own (bottom) stretch of the border, clear of the corner zone…
+    expect(attacker.placement.y).toBeGreaterThan(SEAM_Y + 150);
+    expect(attacker.placement.y).toBeLessThan(WORLD.h - 100);
+    // …edge lanes carry no rotation, and it genuinely left its grid slot.
+    expect(attacker.placement.rotation).toBe(0);
+    expect(attacker.placement.x).not.toBeCloseTo(grid.get(atkId)!.placement.x, 0);
     expect(attacker.placement.zone).toBe('battlefield');
     expect(attacker.placement.ownerId).toBe('p2');
   });
 
-  it('a blocked attacker nudges back onto its own side of the line', () => {
+  it('a blocked attacker backs onto its own side of the border', () => {
     const b = combatState(true);
     const o = combatState(false);
     const blocked = byKey(layoutWorld(b.state)).get(b.atkId)!;
     const open = byKey(layoutWorld(o.state)).get(o.atkId)!;
-    expect(blocked.placement.y).toBeGreaterThan(SEAM_Y);        // its own (bottom) side
-    expect(blocked.placement.y).toBeGreaterThan(open.placement.y);   // behind its unblocked spot
-    // …but still well forward of the ordinary front row.
-    const seat = seatLayouts(b.state).find(s => s.player.id === 'p2')!;
-    expect(blocked.placement.y).toBeLessThan(seat.boardTopY);
+    expect(blocked.placement.x).toBeGreaterThan(SEAM_X);             // its own (right) side
+    expect(blocked.placement.x).toBeGreaterThan(open.placement.x);   // behind its unblocked spot
   });
 
-  it('the attacker leans toward its defender', () => {
-    const { state, atkId } = combatState(false);
-    const attacker = byKey(layoutWorld(state)).get(atkId)!;
-    // Defender p1 is the bottom-left seat: to the attacker's left → negative lean.
-    expect(attacker.placement.rotation).toBeLessThan(0);
-  });
-
-  it('a blocker slides out to interpose between attacker and defender', () => {
+  it('a blocker stands directly across the border, in line with its attacker', () => {
     const { state, atkId, blkId } = combatState(true);
     const placed = byKey(layoutWorld(state));
     const grid = byKey(layoutWorld({ ...state, combat: undefined }));
@@ -280,13 +276,43 @@ describe('combat in the seam (§7.2/§9)', () => {
     const blk = placed.get(blkId)!.placement;
     expect(blk.zone).toBe('battlefield');
     expect(blk.ownerId).toBe('p1');
-    // It left its grid slot and stands a fixed reach in front of its attacker,
-    // displaced toward the defending player (p1 sits below-left of the attacker).
-    expect(blk.y).not.toBeCloseTo(grid.get(blkId)!.placement.y, 0);
+    expect(blk.x).not.toBeCloseTo(grid.get(blkId)!.placement.x, 0);  // left its grid slot
+    expect(blk.x).toBeLessThan(SEAM_X);                              // the defender's side
+    expect(blk.y).toBeCloseTo(atk.y, 5);                             // in line across the seam
+    expect(blk.rotation).toBe(atk.rotation);                         // matching rotation
     const dist = Math.hypot(blk.x - atk.x, blk.y - atk.y);
-    expect(dist).toBeGreaterThan(80);
-    expect(dist).toBeLessThan(120);
-    expect(blk.y).toBeGreaterThan(atk.y);
+    expect(dist).toBeGreaterThan(100);                               // a face-off, not a pile-up
+    expect(dist).toBeLessThan(180);
+  });
+
+  it('the seat across the table fights along the horizontal seam, centred on its stretch', () => {
+    const state = fourSeats();
+    const both = state.players[0]!.battlefield.filter(p => p.types.includes('CREATURE'));
+    const atk = both[0]!;
+    state.combat = [{ attackerIds: [atk.id], defenderId: 'p4', blockerIds: [], blocked: false }];
+    const attacker = byKey(layoutWorld(state)).get(atk.id)!;
+    // p1 (bottom-left) → p4 (top-left): crosses the horizontal seam, on its own
+    // column, clear of the centre corner (that zone belongs to the diagonal lane).
+    expect(attacker.placement.y).toBeLessThan(SEAM_Y);
+    expect(attacker.placement.y).toBeGreaterThan(SEAM_Y - 60);
+    expect(attacker.placement.x).toBeLessThan(SEAM_X - 150);
+    expect(attacker.placement.rotation).toBe(0);
+    // The line-up is centred: two attackers straddle the single attacker's spot.
+    state.combat = [{ attackerIds: both.map(p => p.id), defenderId: 'p4', blockerIds: [], blocked: false }];
+    const pair = byKey(layoutWorld(state));
+    const xs = both.map(p => pair.get(p.id)!.placement.x);
+    expect((xs[0]! + xs[1]!) / 2).toBeCloseTo(attacker.placement.x, 5);
+  });
+
+  it('the diagonal seat is fought at the centre corner, tilted 45° toward it', () => {
+    const state = fourSeats();
+    const atk = state.players[0]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    state.combat = [{ attackerIds: [atk.id], defenderId: 'p3', blockerIds: [], blocked: false }];
+    const attacker = byKey(layoutWorld(state)).get(atk.id)!;
+    // p1 (bottom-left) → p3 (top-right): at the table's centre, leaning up-right.
+    expect(Math.abs(attacker.placement.x - SEAM_X)).toBeLessThan(60);
+    expect(Math.abs(attacker.placement.y - SEAM_Y)).toBeLessThan(60);
+    expect(attacker.placement.rotation).toBeCloseTo(Math.PI / 4, 5);
   });
 
   it('combatants are placed exactly once — no double placement with the grid', () => {

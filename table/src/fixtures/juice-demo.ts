@@ -39,16 +39,22 @@ const BEATS: Beat[] = [
     events: () => [{ k: 'life', playerId: 'p1', from: 34, to: 26 }],
   },
   {
-    label: 'attack (step into the seam + danger plate)',
+    // Ana (bottom-right) swings at all three opponents at once, so the reel mans
+    // every battle lane: p1 across the vertical seam, p3 across the horizontal
+    // seam, p4 at the centre corner (the 45° diagonal).
+    label: 'attack (all three lanes + danger plates)',
     mutate: s => {
-      const g = s.players[1]!.battlefield.find(b => b.tapped);   // Ana's swung goblin
+      const gobs = s.players[1]!.battlefield.filter(b => b.name === 'Goblin Token' && !b.tapped).slice(0, 3);
       s.turn.phase = 'COMBAT'; s.turn.step = 'DECLARE_ATTACKERS';
-      if (g) s.combat = [{ attackerIds: [g.id], defenderId: 'p1', blockerIds: [], blocked: false }];
+      if (gobs.length < 3) return;
+      gobs.forEach(g => { g.tapped = true; });
+      s.combat = (['p1', 'p3', 'p4'] as const).map((pid, i) =>
+        ({ attackerIds: [gobs[i]!.id], defenderId: pid, blockerIds: [], blocked: false }));
     },
-    events: s => { const g = s.players[1]!.battlefield.find(b => b.tapped); return g ? [{ k: 'attack', attackerIds: [g.id], defenderId: 'p1' }] : []; },
+    events: s => (s.combat ?? []).map(g => ({ k: 'attack', attackerIds: g.attackerIds, defenderId: g.defenderId })),
   },
   {
-    label: 'block (interpose + nudge back)',
+    label: 'block (stand across the border + nudge back)',
     mutate: s => {
       const c = byName(s, 'p1', 'Sakura-Tribe Elder');
       const g = s.combat?.[0];
@@ -62,16 +68,28 @@ const BEATS: Beat[] = [
     },
   },
   {
-    label: 'combat damage',
+    // Every lunge kind at once: the blocked pair trade (head-on clash), while the
+    // two unblocked goblins punch their defenders' nameplates.
+    label: 'combat damage (lunges)',
     mutate: s => {
       s.turn.phase = 'COMBAT'; s.turn.step = 'COMBAT_DAMAGE';
-      const c = byName(s, 'p1', 'Sakura-Tribe Elder'); if (c) c.damage = 2;
-      you(s).life = 23;
+      const c = byName(s, 'p1', 'Sakura-Tribe Elder'); if (c) c.damage = 1;
+      const aid = s.combat?.[0]?.attackerIds[0];
+      const g = s.players[1]!.battlefield.find(b => b.id === aid); if (g) g.damage = 1;
+      s.players[2]!.life = 39;
+      s.players[3]!.life = 30;
     },
     events: s => {
       const c = byName(s, 'p1', 'Sakura-Tribe Elder');
-      const ev: GameEvent[] = [{ k: 'life', playerId: 'p1', from: 26, to: 23 }, { k: 'damage', targetId: 'p1', amount: 3, combat: true }];
-      if (c) ev.push({ k: 'damage', targetId: c.id, amount: 2, combat: true });
+      const aid = s.combat?.[0]?.attackerIds[0];
+      const ev: GameEvent[] = [
+        { k: 'life', playerId: 'p3', from: 40, to: 39 },
+        { k: 'damage', targetId: 'p3', amount: 1, combat: true },
+        { k: 'life', playerId: 'p4', from: 31, to: 30 },
+        { k: 'damage', targetId: 'p4', amount: 1, combat: true },
+      ];
+      if (c) ev.push({ k: 'damage', targetId: c.id, amount: 1, combat: true });
+      if (aid !== undefined) ev.push({ k: 'damage', targetId: aid, amount: 1, combat: true });
       return ev;
     },
   },
