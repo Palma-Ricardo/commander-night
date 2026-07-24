@@ -15,7 +15,7 @@
 // cards (§7.2). No animation here — T2's director drives motion from these targets.
 
 import type { Card, CombatGroup, CommandObject, GameState, Id, Permanent, Player } from '@night/core';
-import type { ActorPlacement, PlacedActor, Point, Rect } from './types';
+import type { ActorPlacement, PlacedActor, Point, Rect, Transform } from './types';
 
 // ── the fixed world ──────────────────────────────────────────────────────────
 
@@ -48,6 +48,14 @@ const PILE_H = CARD_TEX.h * PILE_SCALE;          // ~118
 // CARD_H/2 from the centre — the land row reserves this (not the upright half) so
 // a tapped land in the front row clears the nameplate instead of dipping into it.
 const CARD_TAPPED_HALF_H = (CARD_W / 2) * Math.sin(TAP_ANGLE) + (CARD_H / 2) * Math.cos(TAP_ANGLE);  // ~79
+
+// An aura/equipment is not a permanent of its own on the felt: it is tucked under
+// the thing it enchants, offset just enough for its name bar to show past the
+// host's top edge (the art box's bar is 34/184 native ≈ 21 world px at
+// BOARD_SCALE — so the peek clears it). The lateral step keeps a second and third
+// attachment individually readable and clickable.
+const ATTACH_PEEK = 24;          // per-attachment step past the host's top edge
+const ATTACH_SIDE = 10;          // per-attachment lateral step
 
 const GAP = 18;                  // between cards in a battlefield row
 const ROW_GAP = 22;              // between wrapped rows
@@ -280,19 +288,116 @@ function groupCells(perms: readonly Permanent[]): Permanent[][] {
   return cells;
 }
 
+// ── attachments ──────────────────────────────────────────────────────────────
+// Auras and equipment don't get grid slots of their own: they ride under the
+// permanent they are attached to, exactly as they sit on a real table. The host
+// may live in another seat's quadrant (a Pacifism you control on their creature)
+// or out in a battle lane (a sword on an attacker) — the attachment follows it
+// wherever it ends up, which is why nesting is resolved across the whole table
+// rather than per seat.
+
+/** Who is attached to whom, table-wide. `nested` is every permanent that has been
+ *  adopted by a host (so the grid and the lanes withhold it). */
+interface AttachIndex {
+  byHost: ReadonlyMap<Id, Permanent[]>;
+  nested: ReadonlySet<Id>;
+}
+
+/** Whether `p`'s host chain ends somewhere — corrupt state could hand us a cycle
+ *  (A on B, B on A), which would nest forever, so those stay in the grid. */
+function chainTerminates(p: Permanent, perms: ReadonlyMap<Id, Permanent>): boolean {
+  const seen = new Set<Id>([p.id]);
+  let cur = p;
+  for (;;) {
+    const nextId = cur.attachedTo;
+    if (nextId === undefined) return true;
+    const next = perms.get(nextId);
+    if (next === undefined) return true;      // chain leaves the battlefield ⇒ a root
+    if (seen.has(next.id)) return false;
+    seen.add(next.id);
+    cur = next;
+  }
+}
+
+function attachIndex(state: GameState): AttachIndex {
+  const perms = new Map<Id, Permanent>();
+  for (const pl of state.players) for (const p of pl.battlefield) perms.set(p.id, p);
+  const byHost = new Map<Id, Permanent[]>();
+  const nested = new Set<Id>();
+  for (const pl of state.players) {
+    for (const p of pl.battlefield) {
+      const hostId = p.attachedTo;
+      // `attachedTo` is a permanent *or a player* (protocol §6), and can be stale:
+      // anything we can't resolve to a permanent on the felt keeps its own cell.
+      if (hostId === undefined || hostId === p.id || !perms.has(hostId)) continue;
+      if (!chainTerminates(p, perms)) continue;
+      const kids = byHost.get(hostId);
+      if (kids === undefined) byHost.set(hostId, [p]); else kids.push(p);
+      nested.add(p.id);
+    }
+  }
+  return { byHost, nested };
+}
+
+/** Emit everything attached to `host` (recursively — an aura can enchant an aura),
+ *  tucked under the transform the host itself will take. Each attachment steps one
+ *  peek further past the host's top edge, in the host's own rotated frame, so a
+ *  tapped or lane-tilted host carries its kit along at the same angle. Emitted
+ *  deepest-first and always *before* the host, so the host renders over them and
+ *  every attachment shows exactly its name bar. */
+function placeAttachments(
+  seat: SeatLayout, host: Permanent, t: Transform, att: AttachIndex, out: PlacedActor[],
+): void {
+  const kids = att.byHost.get(host.id);
+  if (kids === undefined) return;
+  const cos = Math.cos(t.rotation);
+  const sin = Math.sin(t.rotation);
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const kid = kids[i]!;
+    const dx = ATTACH_SIDE * (i + 1);
+    const dy = -ATTACH_PEEK * (i + 1);
+    const kt: Transform = {
+      x: t.x + dx * cos - dy * sin,
+      y: t.y + dx * sin + dy * cos,
+      rotation: t.rotation,      // the cluster turns as one — the host's tap owns the angle
+      scale: t.scale,
+    };
+    placeAttachments(seat, kid, kt, att, out);
+    place(out, kid.id, kid, kid.id, {
+      ...kt,
+      zone: 'battlefield',
+      // The seat whose quadrant the cluster sits in, not the attachment's own
+      // controller: an aura on an opponent's creature is over *there*, and must
+      // dim and brighten with the board it is lying on (§7.3 camera focus).
+      ownerId: seat.player.id,
+      faceUp: !(kid.faceDown ?? false),
+      // Its own tap state still reads (dim + glyph) even though the angle is the
+      // host's — a tapped Equipment must not silently look untapped.
+      tapped: kid.tapped,
+    });
+  }
+}
+
 /** One grid slot: every member is placed (so each keeps its own actor, hit-test
  *  and affordance ring), co-located under a small depth offset so the cell reads
  *  as a tidy pile; only the topmost (last, so it renders over the rest) carries
- *  the "×N" tally. */
-function placeCell(seat: SeatLayout, cell: readonly Permanent[], cx: number, cy: number, out: PlacedActor[]): void {
+ *  the "×N" tally. Whatever is attached to a member goes down first, under it. */
+function placeCell(
+  seat: SeatLayout, cell: readonly Permanent[], cx: number, cy: number,
+  att: AttachIndex, out: PlacedActor[],
+): void {
   const n = cell.length;
   cell.forEach((perm, i) => {
     const d = Math.min(i, 6);
-    place(out, perm.id, perm, perm.id, {
+    const t: Transform = {
       x: cx + d * 2,
       y: cy - d * 3,
       rotation: perm.tapped ? TAP_ANGLE : 0,
       scale: BOARD_SCALE,
+    };
+    placeAttachments(seat, perm, t, att, out);
+    place(out, perm.id, perm, perm.id, {
+      ...t,
       zone: 'battlefield',
       ownerId: seat.player.id,
       faceUp: !(perm.faceDown ?? false),
@@ -304,7 +409,10 @@ function placeCell(seat: SeatLayout, cell: readonly Permanent[], cx: number, cy:
 
 /** Lay a list of cells as a grid anchored at (rowStartX, anchorY), rows advancing
  *  in `rowStep` (toward the rail for permanents, toward the seam for lands). */
-function placeCells(seat: SeatLayout, cells: readonly Permanent[][], anchorY: number, rowStep: 1 | -1, out: PlacedActor[]): void {
+function placeCells(
+  seat: SeatLayout, cells: readonly Permanent[][], anchorY: number, rowStep: 1 | -1,
+  att: AttachIndex, out: PlacedActor[],
+): void {
   cells.forEach((cell, i) => {
     const col = i % seat.cols;
     const row = Math.floor(i / seat.cols);
@@ -312,22 +420,23 @@ function placeCells(seat: SeatLayout, cells: readonly Permanent[][], anchorY: nu
       seat, cell,
       seat.rowStartX + col * (CARD_W + GAP),
       anchorY + rowStep * row * (CARD_H + ROW_GAP),
-      out,
+      att, out,
     );
   });
 }
 
-function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, out: PlacedActor[]): void {
+function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachIndex, out: PlacedActor[]): void {
   // The place setting (§7.2): non-land permanents are rows pinned to the seam and
   // grow toward the rail; lands are their own row pinned to the rail and grow back
   // toward the seam. Both fold identical basics/tokens into single cells first, so
   // eight Forests cost one slot — the board's answer to overflow (T4). Permanents
-  // fighting in the seam (layoutCombat) are withheld from the grid entirely.
-  const bf = seat.player.battlefield.filter(p => !inCombat.has(p.id));
+  // fighting in the seam (layoutCombat) are withheld from the grid entirely, and so
+  // are attachments: they ride under their host, wherever the host is placed.
+  const bf = seat.player.battlefield.filter(p => !inCombat.has(p.id) && !att.nested.has(p.id));
   const nonlands = groupCells(bf.filter(p => !p.types.includes('LAND')));
   const lands = groupCells(bf.filter(p => p.types.includes('LAND')));
-  placeCells(seat, nonlands, seat.boardTopY, seat.out, out);
-  placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, out);
+  placeCells(seat, nonlands, seat.boardTopY, seat.out, att, out);
+  placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, att, out);
 }
 
 // ── combat: the three battle lanes (§7.2/§9) ─────────────────────────────────
@@ -381,7 +490,9 @@ function defenderSeat(defenderId: Id, seats: readonly SeatLayout[]): SeatLayout 
  *  comment above) and return their ids so the grid withholds them. Emitted
  *  *after* the boards so combatants render above the rows they stepped out of.
  *  Deterministic: slots follow combat-group order, which the wire fixes. */
-function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: PlacedActor[]): Set<Id> {
+function layoutCombat(
+  state: GameState, seats: readonly SeatLayout[], att: AttachIndex, out: PlacedActor[],
+): Set<Id> {
   const ids = new Set<Id>();
   const combat: readonly CombatGroup[] = state.combat ?? [];
   if (combat.length === 0) return ids;
@@ -399,7 +510,9 @@ function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: Place
   for (const g of combat) {
     for (const aid of g.attackerIds) {
       const hit = permOf.get(aid);
-      if (hit === undefined) continue;
+      // An attached permanent is already placed under its host (it can't legally
+      // attack anyway) — taking a lane slot too would place it twice.
+      if (hit === undefined || att.nested.has(aid)) continue;
       const dSeat = defenderSeat(g.defenderId, seats);
       if (dSeat === undefined) continue;
       const kind = laneKind(hit.seat.corner, dSeat.corner);
@@ -413,8 +526,10 @@ function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: Place
 
   const placeCombatant = (perm: Permanent, seat: SeatLayout, x: number, y: number, tilt: number): void => {
     ids.add(perm.id);
+    const t: Transform = { x, y, rotation: tilt, scale: BOARD_SCALE };
+    placeAttachments(seat, perm, t, att, out);   // a creature marches with its kit on
     place(out, perm.id, perm, perm.id, {
-      x, y, rotation: tilt, scale: BOARD_SCALE, zone: 'battlefield',
+      ...t, zone: 'battlefield',
       ownerId: seat.player.id, faceUp: !(perm.faceDown ?? false), tapped: perm.tapped,
     });
   };
@@ -467,7 +582,7 @@ function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: Place
       const bMid = (en.g.blockerIds.length - 1) / 2;
       en.g.blockerIds.forEach((bid, j) => {
         const bHit = permOf.get(bid);
-        if (bHit === undefined || ids.has(bid)) return;
+        if (bHit === undefined || ids.has(bid) || att.nested.has(bid)) return;
         const f = (j - bMid) * BLOCK_FAN;
         placeCombatant(
           bHit.perm, bHit.seat,
@@ -547,11 +662,12 @@ export function layoutWorld(state: GameState): PlacedActor[] {
 
   // Combat is computed first (the grid must withhold the fighters) but appended
   // last, so combatants render above the rows they stepped out of.
+  const att = attachIndex(state);
   const combatants: PlacedActor[] = [];
-  const inCombat = layoutCombat(state, seats, combatants);
+  const inCombat = layoutCombat(state, seats, att, combatants);
 
   for (const seat of seats) {
-    layoutBoard(seat, inCombat, out);
+    layoutBoard(seat, inCombat, att, out);
     layoutLibrary(seat, out);
     layoutPile(seat, 'graveyard', seat.player.graveyard, out);
     layoutPile(seat, 'exile', seat.player.exile, out);

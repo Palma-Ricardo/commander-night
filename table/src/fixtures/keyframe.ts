@@ -94,6 +94,34 @@ const martaCmdr = commander('Elenda, the Dusk Rose', 'lcc', '268', ['W', 'B'], '
 
 // ── the four seats ────────────────────────────────────────────────────────────
 
+// Sakura-Tribe Elder is dressed: an Aura and an Equipment, which the table nests
+// under it rather than giving each its own cell (§7.2). Hoisted so the ids can be
+// cross-referenced both ways (`attachedTo` on the kit, `attachments` on the host).
+const elder = perm('p1', card('Sakura-Tribe Elder', 'soc', '285', 2, ['CREATURE'],
+  { manaCost: '{1}{G}', colors: ['G'], subtypes: ['Snake', 'Shaman'], power: '1', toughness: '1' }));
+const rancor: Permanent = {
+  ...perm('p1', card('Rancor', '2x2', '156', 1, ['ENCHANTMENT'],
+    { manaCost: '{G}', colors: ['G'], subtypes: ['Aura'], text: ['Enchanted creature gets +2/+0 and has trample.'] })),
+  attachedTo: elder.id,
+};
+const bonesplitter: Permanent = {
+  ...perm('p1', card('Bonesplitter', 'cmr', '458', 1, ['ARTIFACT'],
+    { manaCost: '{1}', subtypes: ['Equipment'], text: ['Equipped creature gets +2/+0.', 'Equip {1}'] })),
+  attachedTo: elder.id,
+};
+elder.attachments = [rancor.id, bonesplitter.id];
+
+// An aura *you* control, lying on Tom's Wall of Omens across the table — it nests
+// over there, on his board, not in your quadrant.
+const tomWall = perm('p3', card('Wall of Omens', 'tdc', '138', 2, ['CREATURE'],
+  { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Wall'], power: '0', toughness: '4' }));
+const pacifism: Permanent = {
+  ...perm('p1', card('Pacifism', 'msc', '575', 2, ['ENCHANTMENT'],
+    { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Aura'], text: ['Enchanted creature can’t attack or block.'] })),
+  attachedTo: tomWall.id,
+};
+tomWall.attachments = [pacifism.id];
+
 const you = seat('p1', 'You', true, 34, {
   commander: commander('Muldrotha, the Gravetide', 'ecc', '128', ['B', 'G', 'U'], '{3}{B}{G}{U}', ['6', '6']),
   battlefield: [
@@ -104,8 +132,8 @@ const you = seat('p1', 'You', true, 34, {
     perm('p1', land('Island', ['U'])),
     perm('p1', land('Swamp', ['B'])),
     perm('p1', card('Sol Ring', 'msc', '211', 1, ['ARTIFACT'], { manaCost: '{1}', text: ['{T}: Add {C}{C}.'] })),
-    perm('p1', card('Sakura-Tribe Elder', 'soc', '285', 2, ['CREATURE'],
-      { manaCost: '{1}{G}', colors: ['G'], subtypes: ['Snake', 'Shaman'], power: '1', toughness: '1' })),
+    elder, rancor, bonesplitter,
+    pacifism,   // on Tom's Wall — an attachment lives in its *controller's* battlefield
   ],
   graveyard: [card('Eternal Witness', 'cmm', '286', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' })],
   handSize: 4, librarySize: 71,
@@ -136,11 +164,9 @@ const ana = seat('p2', 'Ana', false, 22, {
   handSize: 2, librarySize: 63,
 });
 
-// Hoisted so the stack's Lightning Bolt can name it as a target (the §9 target
-// tether draws from the pile to this permanent's world cell).
-const tomWall = perm('p3', card('Wall of Omens', 'tdc', '138', 2, ['CREATURE'],
-  { manaCost: '{1}{W}', colors: ['W'], subtypes: ['Wall'], power: '0', toughness: '4' }));
-
+// `tomWall` is hoisted above (with the aura lying on it) so the stack's Lightning
+// Bolt can name it as a target — the §9 target tether draws from the pile to this
+// permanent's world cell.
 const tom = seat('p3', 'Tom', false, 40, {
   commander: commander('Brago, King Eternal', 'khc', '82', ['W', 'U'], '{2}{W}{U}', ['2', '4']),
   battlefield: [

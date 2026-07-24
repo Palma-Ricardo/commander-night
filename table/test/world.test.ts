@@ -226,6 +226,98 @@ describe('piles are tidy', () => {
   });
 });
 
+describe('attachments nest under their host', () => {
+  // A bear wearing a sword and an aura, plus a bare bear to compare grid slots.
+  const enchanted = (opts: { hostTapped?: boolean } = {}) => {
+    const host = mkPerm('p1', mkCreature('Host'), opts.hostTapped ?? false);
+    const aura = { ...mkPerm('p1', mkCard('Pacifism', ['ENCHANTMENT'])), attachedTo: host.id };
+    const gear = { ...mkPerm('p1', mkCard('Bonesplitter', ['ARTIFACT'])), attachedTo: host.id };
+    const bare = mkPerm('p1', mkCreature('Bare'));
+    host.attachments = [aura.id, gear.id];
+    const you = mkPlayer('p1', 'You', { human: true, battlefield: [aura, host, gear, bare] });
+    return { state: mkState([you], 'p1'), host, aura, gear, bare };
+  };
+
+  it('tucks each attachment onto its host instead of giving it a grid slot', () => {
+    const { state, host, aura, gear, bare } = enchanted();
+    const placed = byKey(layoutWorld(state));
+    const h = placed.get(host.id)!.placement;
+    const a = placed.get(aura.id)!.placement;
+    const g = placed.get(gear.id)!.placement;
+    // Both attachments sit on the host's cell, peeking past its top edge (smaller
+    // y is toward the far edge = up the screen for every seat), stepped so each
+    // one's name bar shows. Neither took a column of its own.
+    for (const at of [a, g]) {
+      expect(Math.abs(at.x - h.x)).toBeLessThan(40);
+      expect(at.y).toBeLessThan(h.y);
+      expect(h.y - at.y).toBeLessThan(80);
+    }
+    expect(a.y).not.toBeCloseTo(g.y, 0);                    // stepped, not co-located
+    // The bare creature is the host's only grid neighbour: the board is two cells.
+    expect(placed.get(bare.id)!.placement.y).toBeCloseTo(h.y, 5);
+    const cellXs = new Set([h.x, placed.get(bare.id)!.placement.x]);
+    expect(cellXs.size).toBe(2);
+  });
+
+  it('renders the host over its attachments (layout order is z order)', () => {
+    const { state, host, aura, gear } = enchanted();
+    const order = layoutWorld(state).map(p => p.key);
+    expect(order.indexOf(aura.id)).toBeLessThan(order.indexOf(host.id));
+    expect(order.indexOf(gear.id)).toBeLessThan(order.indexOf(host.id));
+  });
+
+  it('turns the whole cluster with a tapped host, keeping each tap state', () => {
+    const { state, host, aura } = enchanted({ hostTapped: true });
+    const placed = byKey(layoutWorld(state));
+    const h = placed.get(host.id)!.placement;
+    const a = placed.get(aura.id)!.placement;
+    expect(h.rotation).not.toBe(0);
+    expect(a.rotation).toBeCloseTo(h.rotation, 5);   // the kit leans with its host
+    expect(a.tapped).toBe(false);                    // …but reports its own tap state
+  });
+
+  it('marches a creature into the battle lane with its kit on', () => {
+    const { state, host, aura, gear } = enchanted();
+    state.players.push(mkPlayer('p2', 'Ana', { battlefield: [] }));   // someone to swing at
+    const grid = byKey(layoutWorld(state));
+    state.combat = [{ attackerIds: [host.id], defenderId: 'p2', blockerIds: [], blocked: false }];
+    const placed = byKey(layoutWorld(state));
+    const h = placed.get(host.id)!.placement;
+    expect(h.x).not.toBeCloseTo(grid.get(host.id)!.placement.x, 0);   // it left the grid
+    for (const id of [aura.id, gear.id]) {
+      const at = placed.get(id)!.placement;
+      expect(Math.hypot(at.x - h.x, at.y - h.y)).toBeLessThan(80);    // came along
+    }
+  });
+
+  it('follows its host across the table — an aura on an opponent’s creature', () => {
+    const host = mkPerm('p2', mkCreature('Theirs'));
+    const aura = { ...mkPerm('p1', mkCard('Pacifism', ['ENCHANTMENT'])), attachedTo: host.id };
+    const you = mkPlayer('p1', 'You', { human: true, battlefield: [aura] });
+    const them = mkPlayer('p2', 'Ana', { battlefield: [host] });
+    const placed = byKey(layoutWorld(mkState([you, them], 'p1')));
+    const h = placed.get(host.id)!.placement;
+    const a = placed.get(aura.id)!.placement;
+    expect(Math.hypot(a.x - h.x, a.y - h.y)).toBeLessThan(80);
+    expect(inRect(placed.get(aura.id)!, seatQuadrantRect(1), 90)).toBe(true);
+    // It dims and brightens with the board it is lying on (§7.3), not with mine.
+    expect(a.ownerId).toBe('p2');
+  });
+
+  it('keeps an unresolvable or cyclic attachment in the grid, never vanished', () => {
+    const stray = { ...mkPerm('p1', mkCard('Curse', ['ENCHANTMENT'])), attachedTo: 'p1' };   // attached to a *player*
+    const a = mkPerm('p1', mkCard('A', ['ENCHANTMENT']));
+    const b = mkPerm('p1', mkCard('B', ['ENCHANTMENT']));
+    const cyc = [{ ...a, attachedTo: b.id }, { ...b, attachedTo: a.id }];                    // corrupt: A↔B
+    const you = mkPlayer('p1', 'You', { human: true, battlefield: [stray, ...cyc] });
+    const placed = byKey(layoutWorld(mkState([you], 'p1')));
+    for (const p of [stray, a, b]) expect(placed.has(p.id)).toBe(true);
+    // …each in its own cell, and nothing placed twice.
+    const xs = new Set([stray, a, b].map(p => placed.get(p.id)!.placement.x));
+    expect(xs.size).toBe(3);
+  });
+});
+
 describe('combat: the three battle lanes (§7.2/§9)', () => {
   const SEAM_X = WORLD.w / 2;
   const SEAM_Y = WORLD.h / 2;

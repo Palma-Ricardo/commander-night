@@ -339,6 +339,11 @@ Everything in §7 that reads as a design decision is a consequence of this table
   the table rather than an overlay floating above it. Because the arrow can be occluded, the
   defending player also carries the state directly — nameplate turns to danger, with incoming
   unblocked damage on it.
+- **Auras and equipment are not permanents of their own on the felt.** They tuck under the thing
+  they are attached to, offset just enough for the name bar to clear the host's top edge, and the
+  cluster turns as one when the host taps. The host may be in another seat's quadrant (your
+  Pacifism on their creature) or out in a battle lane (a sword on an attacker) — the attachment
+  follows it, and dims with the board it is lying on.
 - **Cards always billboard upright.** Rotating opponents' cards to face their own seat is the
   literal table and it is unreadable; seat identity is carried by the furniture instead. This is a
   deliberate break from realism and the only one.
