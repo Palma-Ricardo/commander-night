@@ -34,7 +34,7 @@ import {
 } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
-import { layoutScreen, stackAnchor } from '../layout/screen';
+import { stackAnchor } from '../layout/screen';
 import { promptObjectIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, isClickable, rectContains, type Projector, type ScreenAnchor,
@@ -126,6 +126,9 @@ export class TableScene implements DirectorSink {
   private currentPrompt: PromptStoreState | undefined;
   private lastPromptId: number | undefined;
   private lastViewKey = '';
+  /** True while the pending prompt targets a stack item (counter/copy/redirect):
+   *  the pile un-fans into a clickable row so buried candidates are reachable (§7 T4). */
+  private spreadStack = false;
   /** px the open log sidebar steals from the right (§8): the world is framed clear
    *  of it by the camera's own inset, and the hand fan re-centres in the felt that
    *  is left. Kept here so every layout (transition + recentre) uses one value. */
@@ -214,7 +217,7 @@ export class TableScene implements DirectorSink {
     links: StackLinks,
   ): void {
     const size = this.size;
-    const placed = layoutKeyed(to, size, links, this.rightInset);
+    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack);
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
@@ -727,6 +730,7 @@ export class TableScene implements DirectorSink {
     const changed = newId !== this.lastPromptId;
     this.currentPrompt = prompt;
     this.refreshAffordances();
+    this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
     if (changed && prompt?.pending !== undefined) {
       this.director.flush();          // §6.4: input never waits on animation
       this.pullBackForPrompt(prompt); // §14: keep the asked-about objects in shot
@@ -815,12 +819,42 @@ export class TableScene implements DirectorSink {
    *  world layout is inset-free (the camera handles it), so this re-runs only the
    *  screen layer and eases the existing fan actors — no create/destroy. */
   private recentreHand(): void {
+    this.relayScreen(HAND_RECENTRE_MS);
+  }
+
+  /** Ease the screen-space actors (hand + stack) to a freshly-computed layout at
+   *  the current inset + spread state — no create/destroy, same keys. Runs on a log
+   *  toggle (the fan re-centres, the pile re-pins) and on a stack spread/collapse.
+   *  Goes through `layoutKeyed` so an adopted stack actor is found by its real key. */
+  private relayScreen(durationMs: number): void {
     const state = this.director?.presented;
     if (state === undefined) return;
-    for (const p of layoutScreen(state, this.size, this.rightInset)) {
-      const actor = this.actors.get(p.key);
-      if (actor?.space === 'screen') actor.animateTo(p.placement, HAND_RECENTRE_MS);
+    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack);
+    for (const [key, p] of placed) {
+      if (p.space !== 'screen') continue;
+      const actor = this.actors.get(key);
+      if (actor?.space === 'screen') actor.animateTo(p.placement, durationMs);
     }
+  }
+
+  /** Recompute whether the pending prompt targets a stack item; on a change, un-fan
+   *  (or re-collapse) the pile so buried candidates become clickable (§7 T4). */
+  private updateStackSpread(): void {
+    const want = this.promptTargetsStackItem();
+    if (want === this.spreadStack) return;
+    this.spreadStack = want;
+    this.relayScreen(HAND_RECENTRE_MS);
+  }
+
+  private promptTargetsStackItem(): boolean {
+    const prompt = this.currentPrompt;
+    if (prompt?.pending === undefined) return false;
+    for (const a of this.actors.values()) {
+      if (a.placement.zone === 'stack' && a.objectId !== undefined && isClickable(affordanceFor(prompt, a.objectId))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Re-lay at the live viewport (window resize): world layout is viewport-free,

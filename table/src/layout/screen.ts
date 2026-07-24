@@ -24,10 +24,11 @@ export function handBandHeight(viewport: Size): number {
  *  is the width the open log sidebar steals from the right (§8): the hand centres
  *  in the felt *left* of it and the stack pins to that inset right edge, so nothing
  *  ever tucks under the panel. 0 ⇒ the whole viewport. */
-export function layoutScreen(state: GameState, viewport: Size, rightInset = 0): PlacedActor[] {
+export function layoutScreen(state: GameState, viewport: Size, rightInset = 0, spreadStack = false): PlacedActor[] {
   const out: PlacedActor[] = [];
   layoutHand(state, viewport, rightInset, out);
-  layoutStack(state, viewport, rightInset, out);
+  if (spreadStack) layoutStackSpread(state, viewport, rightInset, out);
+  else layoutStack(state, viewport, rightInset, out);
   return out;
 }
 
@@ -129,6 +130,51 @@ function layoutStack(state: GameState, viewport: Size, rightInset: number, out: 
         y: frontY + d * 5,                 // gentle downward-left arc, like a held fan
         rotation: -d * 0.02,
         scale: scale * (1 - d * 0.02),     // buried items read a touch smaller
+        zone: 'stack',
+        ownerId: item.controllerId,
+        faceUp: true,
+        ...(item.kind === 'ability' ? { ability: true } : {}),
+      },
+    });
+  });
+}
+
+// When a prompt asks you to target a stack item (counter/copy/redirect target
+// spell or ability), the collapsed fan hides everything but the top card — you
+// can't click a buried candidate. The pile un-fans into a centred row so every
+// item is separated and individually hittable, then re-collapses when the prompt
+// clears (design §7 T4, mirroring Arena's target-a-spell spread).
+function layoutStackSpread(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
+  const items = state.stack;
+  const n = items.length;
+  if (n === 0) return;
+
+  // A readable card, sized so the whole spread fits the felt width left of the log.
+  const availW = viewport.w - Math.max(0, rightInset);
+  const band = handBandHeight(viewport);
+  const wantH = Math.min(280, (viewport.h - band) * 0.4);
+  let scale = wantH / CARD_TEX.h;
+  let cardW = CARD_TEX.w * scale;
+  const gap = cardW * 0.18;
+  const margin = 40;
+  const spanW = n * cardW + (n - 1) * gap;
+  if (spanW > availW - 2 * margin) {                 // shrink to fit a deep stack
+    scale *= (availW - 2 * margin) / spanW;
+    cardW = CARD_TEX.w * scale;
+  }
+  const stepX = cardW + cardW * 0.18;
+  const totalW = (n - 1) * stepX;
+  const cx = availW / 2;
+  const cy = (viewport.h - band) / 2;
+
+  items.forEach((item, i) => {
+    out.push({
+      key: item.id, card: item.card, objectId: item.card?.id, space: 'screen',
+      placement: {
+        x: cx - totalW / 2 + i * stepX,
+        y: cy,
+        rotation: 0,
+        scale,
         zone: 'stack',
         ownerId: item.controllerId,
         faceUp: true,

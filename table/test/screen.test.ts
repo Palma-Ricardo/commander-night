@@ -87,11 +87,10 @@ describe('layoutScreen (the hand)', () => {
 });
 
 const stackOf = (placed: ReturnType<typeof layoutScreen>) => placed.filter(p => p.placement.zone === 'stack');
+const withStack = (items: StackItem[], handSize = 4) =>
+  mkState([mkPlayer('p1', 'You', { human: true, handSize })], 'p1', { stack: items });
 
 describe('layoutScreen (the stack pile)', () => {
-  const withStack = (items: StackItem[], handSize = 4) =>
-    mkState([mkPlayer('p1', 'You', { human: true, handSize })], 'p1', { stack: items });
-
   it('places one screen actor per stack item, face up, keyed by the stack id', () => {
     const items = [spell('Cultivate'), spell('Counterspell'), spell('Bolt')];
     for (const vp of SUPPORTED_VIEWPORTS) {
@@ -141,5 +140,40 @@ describe('layoutScreen (the stack pile)', () => {
     const open = stackOf(layoutScreen(withStack(items), vp, 400))[0]!.placement.x;
     expect(open).toBeLessThan(closed);              // the gutter pushes it inward
     expect(open).toBeLessThanOrEqual(vp.w - 400);   // clear of the panel
+  });
+});
+
+describe('layoutScreen (the stack spread for stack-item targeting)', () => {
+  it('un-fans into a centred, uniform, non-overlapping row', () => {
+    const items = [spell('a'), spell('b'), spell('c'), spell('d')];
+    const vp = { w: 1920, h: 1080 };
+    const s = stackOf(layoutScreen(withStack(items), vp, 0, true));
+    expect(s.length).toBe(items.length);
+    // every card the same size and upright — a clean row, not a fan
+    expect(new Set(s.map(p => p.placement.scale)).size).toBe(1);
+    expect(s.every(p => p.placement.rotation === 0)).toBe(true);
+    // left→right in stack order, centred on the viewport midline
+    const xs = s.map(p => p.placement.x);
+    for (let i = 1; i < xs.length; i++) expect(xs[i]!).toBeGreaterThan(xs[i - 1]!);
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(vp.w / 2, 1);
+    // adjacent centres are more than a card apart ⇒ each item is separated
+    const cardW = 200 * s[0]!.placement.scale;
+    expect(xs[1]! - xs[0]!).toBeGreaterThan(cardW);
+  });
+
+  it('keeps a deep spread within the viewport', () => {
+    const items = Array.from({ length: 12 }, (_, i) => spell(`t${i}`));
+    const vp = { w: 1366, h: 768 };
+    const xs = stackOf(layoutScreen(withStack(items), vp, 0, true)).map(p => p.placement.x);
+    expect(Math.min(...xs)).toBeGreaterThan(0);
+    expect(Math.max(...xs)).toBeLessThan(vp.w);
+  });
+
+  it('centres the spread left of the log gutter', () => {
+    const items = [spell('a'), spell('b'), spell('c')];
+    const vp = { w: 1920, h: 1080 };
+    const xs = stackOf(layoutScreen(withStack(items), vp, 500, true)).map(p => p.placement.x);
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo((vp.w - 500) / 2, 1);
+    expect(Math.max(...xs)).toBeLessThan(vp.w - 500);
   });
 });

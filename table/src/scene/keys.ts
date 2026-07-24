@@ -57,13 +57,13 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
  *  abilities at once), so the stack item keeps its own ephemeral key and the
  *  source stays put — the scene flies an ephemeral ghost toward the stack instead. */
 export function layoutKeyed(
-  state: GameState, viewport: Size, links: StackLinks, rightInset = 0,
+  state: GameState, viewport: Size, links: StackLinks, rightInset = 0, spreadStack = false,
 ): Map<string, PlacedActor> {
   // World felt + the screen-space layer (hand + stack). The stack now lives in the
   // screen layer, so adoption must span both: a cast lifts a hand actor (screen)
   // onto the stack (screen), and unifying it onto the stable card id keeps it one
   // continuous actor across the fan → pile → resolve chain.
-  const all = [...layoutWorld(state), ...layoutScreen(state, viewport, rightInset)];
+  const all = [...layoutWorld(state), ...layoutScreen(state, viewport, rightInset, spreadStack)];
   const offStack = new Set<string>();
   for (const p of all) {
     if (p.placement.zone !== 'stack' && p.objectId !== undefined) offStack.add(p.objectId);
