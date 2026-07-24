@@ -225,3 +225,82 @@ describe('piles are tidy', () => {
     });
   });
 });
+
+describe('combat in the seam (§7.2/§9)', () => {
+  const SEAM_Y = WORLD.h / 2;
+
+  const combatState = (blocked: boolean): { state: ReturnType<typeof fourSeats>; atkId: string; blkId: string } => {
+    const state = fourSeats();
+    const atk = state.players[1]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    const blk = state.players[0]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    state.combat = [{
+      attackerIds: [atk.id], defenderId: 'p1',
+      blockerIds: blocked ? [blk.id] : [], blocked,
+    }];
+    return { state, atkId: atk.id, blkId: blk.id };
+  };
+
+  it('an unblocked attacker steps off its own half into the seam', () => {
+    const { state, atkId } = combatState(false);
+    const grid = byKey(layoutWorld({ ...state, combat: undefined }));
+    const placed = byKey(layoutWorld(state));
+    const attacker = placed.get(atkId)!;
+    // p2 sits bottom-right: its half is y > SEAM_Y. The attacker crosses the line.
+    expect(attacker.placement.y).toBeLessThan(SEAM_Y);
+    // …and has genuinely left its grid slot.
+    expect(attacker.placement.y).not.toBeCloseTo(grid.get(atkId)!.placement.y, 0);
+    expect(attacker.placement.zone).toBe('battlefield');
+    expect(attacker.placement.ownerId).toBe('p2');
+  });
+
+  it('a blocked attacker nudges back onto its own side of the line', () => {
+    const b = combatState(true);
+    const o = combatState(false);
+    const blocked = byKey(layoutWorld(b.state)).get(b.atkId)!;
+    const open = byKey(layoutWorld(o.state)).get(o.atkId)!;
+    expect(blocked.placement.y).toBeGreaterThan(SEAM_Y);        // its own (bottom) side
+    expect(blocked.placement.y).toBeGreaterThan(open.placement.y);   // behind its unblocked spot
+    // …but still well forward of the ordinary front row.
+    const seat = seatLayouts(b.state).find(s => s.player.id === 'p2')!;
+    expect(blocked.placement.y).toBeLessThan(seat.boardTopY);
+  });
+
+  it('the attacker leans toward its defender', () => {
+    const { state, atkId } = combatState(false);
+    const attacker = byKey(layoutWorld(state)).get(atkId)!;
+    // Defender p1 is the bottom-left seat: to the attacker's left → negative lean.
+    expect(attacker.placement.rotation).toBeLessThan(0);
+  });
+
+  it('a blocker slides out to interpose between attacker and defender', () => {
+    const { state, atkId, blkId } = combatState(true);
+    const placed = byKey(layoutWorld(state));
+    const grid = byKey(layoutWorld({ ...state, combat: undefined }));
+    const atk = placed.get(atkId)!.placement;
+    const blk = placed.get(blkId)!.placement;
+    expect(blk.zone).toBe('battlefield');
+    expect(blk.ownerId).toBe('p1');
+    // It left its grid slot and stands a fixed reach in front of its attacker,
+    // displaced toward the defending player (p1 sits below-left of the attacker).
+    expect(blk.y).not.toBeCloseTo(grid.get(blkId)!.placement.y, 0);
+    const dist = Math.hypot(blk.x - atk.x, blk.y - atk.y);
+    expect(dist).toBeGreaterThan(80);
+    expect(dist).toBeLessThan(120);
+    expect(blk.y).toBeGreaterThan(atk.y);
+  });
+
+  it('combatants are placed exactly once — no double placement with the grid', () => {
+    const { state } = combatState(true);
+    const placed = layoutWorld(state);
+    expect(new Map(placed.map(p => [p.key, p])).size).toBe(placed.length);
+  });
+
+  it('a stale combat id degrades to the ordinary grid, never a vanished card', () => {
+    const { state, atkId } = combatState(false);
+    state.combat = [{ attackerIds: ['no-such-id'], defenderId: 'p1', blockerIds: [], blocked: false }];
+    const placed = byKey(layoutWorld(state));
+    expect(placed.has(atkId)).toBe(true);   // back in its grid slot
+    const grid = byKey(layoutWorld({ ...state, combat: undefined }));
+    expect(placed.get(atkId)!.placement).toEqual(grid.get(atkId)!.placement);
+  });
+});

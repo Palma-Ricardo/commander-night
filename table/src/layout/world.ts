@@ -14,7 +14,7 @@
 // by the furniture (nameplate, lamplight, piles), never by rotating opponents'
 // cards (§7.2). No animation here — T2's director drives motion from these targets.
 
-import type { Card, CommandObject, GameState, Id, Permanent, Player } from '@night/core';
+import type { Card, CombatGroup, CommandObject, GameState, Id, Permanent, Player } from '@night/core';
 import type { ActorPlacement, PlacedActor, Point, Rect } from './types';
 
 // ── the fixed world ──────────────────────────────────────────────────────────
@@ -317,16 +317,116 @@ function placeCells(seat: SeatLayout, cells: readonly Permanent[][], anchorY: nu
   });
 }
 
-function layoutBoard(seat: SeatLayout, out: PlacedActor[]): void {
+function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, out: PlacedActor[]): void {
   // The place setting (§7.2): non-land permanents are rows pinned to the seam and
   // grow toward the rail; lands are their own row pinned to the rail and grow back
   // toward the seam. Both fold identical basics/tokens into single cells first, so
-  // eight Forests cost one slot — the board's answer to overflow (T4).
-  const bf = seat.player.battlefield;
+  // eight Forests cost one slot — the board's answer to overflow (T4). Permanents
+  // fighting in the seam (layoutCombat) are withheld from the grid entirely.
+  const bf = seat.player.battlefield.filter(p => !inCombat.has(p.id));
   const nonlands = groupCells(bf.filter(p => !p.types.includes('LAND')));
   const lands = groupCells(bf.filter(p => p.types.includes('LAND')));
   placeCells(seat, nonlands, seat.boardTopY, seat.out, out);
   placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, out);
+}
+
+// ── combat in the seam (§7.2/§9) ─────────────────────────────────────────────
+// "The seam belongs to the stack and to combat": an attacker physically steps off
+// its own half into it and leans toward its defender; a blocked attacker nudges
+// back onto its own side of the line; each blocker slides out to interpose between
+// its attacker and the player it defends. All pure layout — the director tweens
+// cards into and out of these slots like any other transition, which *is* the §9
+// attack/block motion.
+
+const ATTACK_ADVANCE = 34;         // an unblocked attacker's centre crosses the line by this
+const ATTACK_NUDGE_BACK = 36;      // a blocked attacker backs off to its own side
+const COMBAT_TILT_MAX = 0.18;      // radians of lean toward the defender
+const BLOCK_DIST = CARD_H * 0.85;  // blocker stands this far in front of its attacker
+const BLOCK_FAN = CARD_W * 0.62;   // side-by-side spread of gang blockers
+
+const clampUnit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
+
+/** Lean toward a point: full tilt at ~a third of the table away, proportionally
+ *  less when the defender is nearly straight ahead. */
+const leanToward = (fromX: number, towardX: number): number =>
+  COMBAT_TILT_MAX * clampUnit((towardX - fromX) / 800);
+
+function nameplateCentre(seat: SeatLayout): Point {
+  return { x: seat.nameplate.x + NAMEPLATE.w / 2, y: seat.nameplate.y + NAMEPLATE.h / 2 };
+}
+
+/** Where a combat group aims: the defending player's nameplate — or, for a
+ *  planeswalker/battle defender, its owner's. Undefined for an unknown id. */
+function defenderAnchor(defenderId: Id, seats: readonly SeatLayout[]): Point | undefined {
+  for (const s of seats) {
+    if (s.player.id === defenderId) return nameplateCentre(s);
+    if (s.player.battlefield.some(p => p.id === defenderId)) return nameplateCentre(s);
+  }
+  return undefined;
+}
+
+/** Place every combatant of `state.combat` in the seam (see the block comment
+ *  above) and return their ids so the grid withholds them. Emitted *after* the
+ *  boards so combatants render above the rows they stepped out of. Deterministic:
+ *  slots follow combat-group order, which the wire fixes. */
+function layoutCombat(state: GameState, seats: readonly SeatLayout[], out: PlacedActor[]): Set<Id> {
+  const ids = new Set<Id>();
+  const combat: readonly CombatGroup[] = state.combat ?? [];
+  if (combat.length === 0) return ids;
+
+  const permOf = new Map<Id, { perm: Permanent; seat: SeatLayout }>();
+  for (const seat of seats) {
+    for (const perm of seat.player.battlefield) permOf.set(perm.id, { perm, seat });
+  }
+
+  // A combatant is withheld from the grid only if it was actually placed here —
+  // a stale id or an unknown defender must degrade to the ordinary grid slot,
+  // never to a vanished card.
+  const placeCombatant = (perm: Permanent, seat: SeatLayout, x: number, y: number, tilt: number): void => {
+    ids.add(perm.id);
+    place(out, perm.id, perm, perm.id, {
+      x, y, rotation: tilt, scale: BOARD_SCALE, zone: 'battlefield',
+      ownerId: seat.player.id, faceUp: !(perm.faceDown ?? false), tapped: perm.tapped,
+    });
+  };
+
+  const nextSlot = new Map<Id, number>();   // per attacking seat: battle-line column
+  for (const g of combat) {
+    const aim = defenderAnchor(g.defenderId, seats);
+    if (aim === undefined) continue;
+    let anchor: Point | undefined;   // the group's first attacker, for its blockers
+    for (const aid of g.attackerIds) {
+      const hit = permOf.get(aid);
+      if (hit === undefined) continue;
+      const { perm, seat } = hit;
+      const slot = nextSlot.get(seat.player.id) ?? 0;
+      nextSlot.set(seat.player.id, slot + 1);
+      const seamEdge = seat.corner.bottom ? seat.quadrant.y : seat.quadrant.y + seat.quadrant.h;
+      const x = seat.rowStartX + slot * (CARD_W + GAP);
+      const y = g.blocked
+        ? seamEdge + seat.out * ATTACK_NUDGE_BACK
+        : seamEdge - seat.out * ATTACK_ADVANCE;
+      placeCombatant(perm, seat, x, y, leanToward(x, aim.x));
+      anchor ??= { x, y };
+    }
+    if (anchor === undefined) continue;
+    // Blockers interpose along the attacker → defender line, fanned sideways when
+    // several gang up on one attacker.
+    const dx = aim.x - anchor.x;
+    const dy = aim.y - anchor.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const mid = (g.blockerIds.length - 1) / 2;
+    g.blockerIds.forEach((bid, j) => {
+      const hit = permOf.get(bid);
+      if (hit === undefined) return;
+      const x = anchor!.x + ux * BLOCK_DIST - uy * (j - mid) * BLOCK_FAN;
+      const y = anchor!.y + uy * BLOCK_DIST + ux * (j - mid) * BLOCK_FAN;
+      placeCombatant(hit.perm, hit.seat, x, y, leanToward(x, anchor!.x));
+    });
+  }
+  return ids;
 }
 
 function layoutPile(
@@ -391,9 +491,15 @@ function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
 export function layoutWorld(state: GameState): PlacedActor[] {
   const out: PlacedActor[] = [];
   const me = state.me.playerId;
+  const seats = seatLayouts(state);
 
-  for (const seat of seatLayouts(state)) {
-    layoutBoard(seat, out);
+  // Combat is computed first (the grid must withhold the fighters) but appended
+  // last, so combatants render above the rows they stepped out of.
+  const combatants: PlacedActor[] = [];
+  const inCombat = layoutCombat(state, seats, combatants);
+
+  for (const seat of seats) {
+    layoutBoard(seat, inCombat, out);
     layoutLibrary(seat, out);
     layoutPile(seat, 'graveyard', seat.player.graveyard, out);
     layoutPile(seat, 'exile', seat.player.exile, out);
@@ -401,5 +507,6 @@ export function layoutWorld(state: GameState): PlacedActor[] {
     if (seat.player.id !== me) layoutOpponentHand(seat, out);
   }
 
+  out.push(...combatants);
   return out;
 }

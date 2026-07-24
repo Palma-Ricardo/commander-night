@@ -296,7 +296,7 @@ export class TableScene implements DirectorSink {
       }
       if (duration > 0) {
         const mv = p.objectId !== undefined ? moveByObj.get(p.objectId) : undefined;
-        actor.animateTo(p.placement, duration, arcForMove(mv?.verb, p.space));
+        actor.animateTo(p.placement, duration, arcForMove(mv?.verb, p.space, mv?.to));
       } else {
         actor.snapTo(p.placement);
       }
@@ -438,7 +438,7 @@ export class TableScene implements DirectorSink {
     let untapIdx = 0;
     for (const e of events) {
       switch (e.k) {
-        case 'move': this.moveJuice(e, duration); break;
+        case 'move': this.moveJuice(e, duration, preset); break;
         case 'tap': {
           const actor = this.actorByObject(e.objectId);
           actor?.overshoot(0.14);
@@ -465,8 +465,12 @@ export class TableScene implements DirectorSink {
           break;
         }
         case 'block': {
-          this.actorByObject(e.attackerId)?.sparkGlow(HL_COMBAT);
-          for (const bid of e.blockerIds) this.actorByObject(bid)?.sparkGlow(HL_COMBAT);
+          // The pair rims to a common colour (§9) while the layout slides the
+          // blocker out to interpose and nudges the attacker back.
+          this.actorByObject(e.attackerId, 'battlefield')?.sparkGlow(HL_COMBAT, duration + 300);
+          for (const bid of e.blockerIds) {
+            this.actorByObject(bid, 'battlefield')?.sparkGlow(HL_COMBAT, duration + 300);
+          }
           break;
         }
         case 'damage': {
@@ -513,44 +517,81 @@ export class TableScene implements DirectorSink {
     }
   }
 
-  /** The per-verb read of a zone move (design §9 catalogue rows). */
-  private moveJuice(e: Extract<GameEvent, { k: 'move' }>, duration: number): void {
-    const actor = this.actorByObject(e.objectId);
+  /** The per-verb read of a zone move (design §9 catalogue rows). Runs after the
+   *  placement loop, so the actor already targets its destination (`e.to`) while
+   *  its *current* position is still where the move starts. */
+  private moveJuice(e: Extract<GameEvent, { k: 'move' }>, duration: number, preset: CameraPreset): void {
+    const actor = this.actorByObject(e.objectId, e.to);
     const card = actor?.card;
     const land = this.worldPointOf(e.objectId);
     switch (e.verb) {
       case 'cast':
-        if (actor !== undefined && card !== undefined) actor.sparkGlow(identityColor(card));
+        // Glow by colour identity for the whole flight plus a beat on the stack —
+        // a decay that starts at takeoff is spent before anyone sees it.
+        if (actor !== undefined && card !== undefined) {
+          actor.sparkGlow(identityColor(card), duration + 400);
+        }
         break;
       case 'resolve':
         if (land !== undefined) this.after(duration, () => {
-          this.actorByObject(e.objectId)?.land(1);
+          this.actorByObject(e.objectId, e.to)?.land(1);
           this.effects.dustRing(land, 1);
         });
         break;
       case 'play':
         if (land !== undefined) this.after(duration, () => {
-          this.actorByObject(e.objectId)?.land(0.6);
+          this.actorByObject(e.objectId, e.to)?.land(0.6);
           this.effects.dustRing(land, 0.7);
+        });
+        break;
+      case 'token':
+        if (land !== undefined) this.after(duration, () => {
+          this.actorByObject(e.objectId, e.to)?.land(0.5);
+          this.effects.dustRing(land, 0.6);
         });
         break;
       case 'destroy':
         actor?.die();
+        this.reviveAfter(e.objectId, duration);
         break;
-      case 'sacrifice':
+      case 'sacrifice': {
+        // A different read from destroy (§9): a brief self-consuming implosion at
+        // the spot it stood, no attacker involved.
         actor?.die();
         actor?.sparkFlash();
+        if (actor !== undefined) this.effects.implosion(this.startPointOf(actor, preset));
+        this.reviveAfter(e.objectId, duration);
         break;
-      case 'exile':
-        actor?.sparkGlow(0x5b7f9c);   // cold-toned "gone" read (§8/§9)
+      }
+      case 'counter': {
+        // The stack card shatters instead of resolving (§9): the face hides, its
+        // shards burst where it sat, and the card reappears only as the pile top.
+        if (actor !== undefined) {
+          this.effects.shatter(actor.faceTexture, this.startPointOf(actor, preset), actor.scaleNow);
+          actor.vanish();
+          this.after(duration + 60, () => this.actorByObject(e.objectId)?.unvanish());
+        }
         break;
-      case 'counter':                 // countered spell shatters instead of resolving
-        actor?.sparkFlash();
-        actor?.overshoot(0.5);
-        break;
+      }
       default:
         break;
     }
+    // Exile is a destination read, not a verb read: the bridge only says `exile`
+    // for battlefield→exile — an exiled hand/graveyard/library card arrives as
+    // `put` — but the §8/§9 cold rise-and-fade belongs to every flight off-table.
+    if (e.to === 'exile') actor?.chill(duration + 300);
+  }
+
+  /** End a death read once the fall has landed and settled (§9) — without this,
+   *  the pile's top card sits permanently grey and tipped. */
+  private reviveAfter(objectId: Id, duration: number): void {
+    this.after(duration + 650, () => this.actorByObject(objectId)?.revive());
+  }
+
+  /** Where an actor's current move *starts*, in world coordinates — its live
+   *  (pre-tween) position, unprojected if the actor still sits in screen space. */
+  private startPointOf(actor: CardActor, preset: CameraPreset): Point {
+    return actor.space === 'screen' ? screenToWorld(preset, actor.pos) : actor.pos;
   }
 
   private after(ms: number, fn: () => void): void {
@@ -568,11 +609,19 @@ export class TableScene implements DirectorSink {
     for (const fn of due) fn();
   }
 
-  /** The live actor carrying object `id` (juice targets objects, not layout keys). */
-  private actorByObject(id: Id | undefined): CardActor | undefined {
+  /** The live actor carrying object `id` (juice targets objects, not layout keys).
+   *  An ability's stack card shares its source permanent's objectId (§3), so a
+   *  bare id can be ambiguous: `zone` pins the lookup to the actor actually in
+   *  that zone; without one, the non-stack actor (the real card) wins. */
+  private actorByObject(id: Id | undefined, zone?: Zone): CardActor | undefined {
     if (id === undefined) return undefined;
-    for (const a of this.actors.values()) if (a.objectId === id) return a;
-    return undefined;
+    let fallback: CardActor | undefined;
+    for (const a of this.actors.values()) {
+      if (a.objectId !== id) continue;
+      if (zone !== undefined ? a.placement.zone === zone : a.placement.zone !== 'stack') return a;
+      fallback ??= a;
+    }
+    return fallback;
   }
 
   /** An object's world anchor (its target placement), or undefined for a hand card
@@ -1131,10 +1180,16 @@ export class TableScene implements DirectorSink {
     const n = NAMEPLATE;
     const p = seat.player;
     const box = seat.nameplate;
+    // §9 attack: the defending player carries the state directly — the plate turns
+    // to danger with the incoming unblocked damage on it (the chalk arrow on the
+    // felt can be occluded by cards).
+    const incoming = incomingUnblockedDamage(state, p.id);
     this.shapeSpecs.push({
       rect: { x: box.x, y: box.y, w: n.w, h: n.h },
-      fill: { color: BRASS_FILL, alpha: 1 },
-      stroke: { width: 1.5, color: BRASS, alpha: 1 },
+      fill: { color: incoming > 0 ? DMG_FILL : BRASS_FILL, alpha: 1 },
+      stroke: incoming > 0
+        ? { width: 2, color: 0xc0392b, alpha: 1 }
+        : { width: 1.5, color: BRASS, alpha: 1 },
     });
     const dead = p.flags?.dead === true || p.flags?.left === true;
     this.addFurnitureText(
@@ -1144,27 +1199,32 @@ export class TableScene implements DirectorSink {
     );
     this.addFurnitureText(
       `${p.life}`,
-      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: INK, fontWeight: '700' }),
+      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: incoming > 0 ? DMG_INK : INK, fontWeight: '700' }),
       1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
     );
-    this.drawCommanderDamage(seat, commanderDamageRows(state, p));
+    const chips = commanderDamageRows(state, p).map(row => {
+      const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
+      return `⚔ ${short} ${row.amount}`;
+    });
+    if (incoming > 0) chips.unshift(`⚔ ${incoming} incoming`);
+    this.drawSeatChips(seat, chips);
   }
 
-  /** Commander-damage chips (§6), one per attacking commander — a red pill of
-   *  "⚔ <commander> N" so lethal (21) creeps up where the victim reads it, without
-   *  tracing a combat arrow. Laid in a strip on the *rail side* of the plate (below
-   *  a near seat, above a far seat), centred under it: the old strip ran off the
-   *  right of the plate, straight under an opponent's inboard hand fan, which hid it
-   *  (reviewed 2026-07-23). Chip boxes keystone; their text billboards. */
-  private drawCommanderDamage(seat: SeatLayout, rows: { commander: string; amount: number }[]): void {
-    if (rows.length === 0) return;
+  /** Red seat chips — commander damage per attacking commander (§6) and, during
+   *  combat, the incoming-unblocked-damage danger chip (§9) — so lethal creeps up
+   *  where the victim reads it, without tracing a combat arrow. Laid in a strip on
+   *  the *rail side* of the plate (below a near seat, above a far seat), centred
+   *  under it: the old strip ran off the right of the plate, straight under an
+   *  opponent's inboard hand fan, which hid it (reviewed 2026-07-23). Chip boxes
+   *  keystone; their text billboards. */
+  private drawSeatChips(seat: SeatLayout, labels: string[]): void {
+    if (labels.length === 0) return;
     const h = 18;
     const gap = 5;
     const centerX = seat.nameplate.x + NAMEPLATE.w / 2;
-    const chips = rows.map(row => {
-      const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
+    const chips = labels.map(label => {
       const style = new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 13, fill: DMG_INK, fontWeight: '700' });
-      const node = new Text({ text: `⚔ ${short} ${row.amount}`, style });
+      const node = new Text({ text: label, style });
       return { node, w: Math.round(node.width) + 12 };
     });
     const totalW = chips.reduce((s, c) => s + c.w, 0) + gap * (chips.length - 1);
@@ -1231,9 +1291,11 @@ function anchorContains(b: ScreenAnchor, p: Point): boolean {
 
 /** The upward bow of a move's path (design §9), in the actor's own-space units
  *  (screen px for the hand, world px on the felt). A cast lifts high, a draw and a
- *  bounce arc, a resolve/land drops nearly straight. */
-function arcForMove(verb: Verb | undefined, space: ActorSpace): number {
+ *  bounce arc, a resolve/land drops nearly straight — and anything bound for exile
+ *  rises off the table (§9) whatever its verb (`put` covers non-battlefield exiles). */
+function arcForMove(verb: Verb | undefined, space: ActorSpace, to: Zone | undefined): number {
   const base = space === 'screen' ? 120 : 90;
+  if (to === 'exile') return 110;
   switch (verb) {
     case 'cast': return base;
     case 'draw': return base * 0.7;
@@ -1242,6 +1304,23 @@ function arcForMove(verb: Verb | undefined, space: ActorSpace): number {
     case 'play': return 30;
     default: return 0;
   }
+}
+
+/** Total power of the unblocked attackers currently aimed at `playerId` (§9
+ *  attack: the defender's plate carries the threat directly). Non-numeric power
+ *  ("*") counts as 0 — an understatement beats a NaN. */
+function incomingUnblockedDamage(state: GameState, playerId: Id): number {
+  let total = 0;
+  for (const g of state.combat ?? []) {
+    if (g.defenderId !== playerId || g.blocked) continue;
+    for (const aid of g.attackerIds) {
+      for (const pl of state.players) {
+        const perm = pl.battlefield.find(b => b.id === aid);
+        if (perm !== undefined) { total += Number(perm.power) || 0; break; }
+      }
+    }
+  }
+  return total;
 }
 
 const PHASE_LABEL: Record<Phase, string> = {

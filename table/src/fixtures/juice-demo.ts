@@ -39,6 +39,29 @@ const BEATS: Beat[] = [
     events: () => [{ k: 'life', playerId: 'p1', from: 34, to: 26 }],
   },
   {
+    label: 'attack (step into the seam + danger plate)',
+    mutate: s => {
+      const g = s.players[1]!.battlefield.find(b => b.tapped);   // Ana's swung goblin
+      s.turn.phase = 'COMBAT'; s.turn.step = 'DECLARE_ATTACKERS';
+      if (g) s.combat = [{ attackerIds: [g.id], defenderId: 'p1', blockerIds: [], blocked: false }];
+    },
+    events: s => { const g = s.players[1]!.battlefield.find(b => b.tapped); return g ? [{ k: 'attack', attackerIds: [g.id], defenderId: 'p1' }] : []; },
+  },
+  {
+    label: 'block (interpose + nudge back)',
+    mutate: s => {
+      const c = byName(s, 'p1', 'Sakura-Tribe Elder');
+      const g = s.combat?.[0];
+      s.turn.step = 'DECLARE_BLOCKERS';
+      if (c && g) { g.blockerIds = [c.id]; g.blocked = true; }
+    },
+    events: s => {
+      const c = byName(s, 'p1', 'Sakura-Tribe Elder');
+      const g = s.combat?.[0];
+      return c && g ? [{ k: 'block', attackerId: g.attackerIds[0]!, blockerIds: [c.id] }] : [];
+    },
+  },
+  {
     label: 'combat damage',
     mutate: s => {
       s.turn.phase = 'COMBAT'; s.turn.step = 'COMBAT_DAMAGE';
@@ -51,15 +74,6 @@ const BEATS: Beat[] = [
       if (c) ev.push({ k: 'damage', targetId: c.id, amount: 2, combat: true });
       return ev;
     },
-  },
-  {
-    label: 'attack',
-    mutate: s => {
-      const g = s.players[1]!.battlefield.find(b => b.tapped);   // Ana's swung goblin
-      s.turn.phase = 'COMBAT'; s.turn.step = 'DECLARE_ATTACKERS';
-      if (g) s.combat = [{ attackerIds: [g.id], defenderId: 'p1', blockerIds: [], blocked: false }];
-    },
-    events: s => { const g = s.players[1]!.battlefield.find(b => b.tapped); return g ? [{ k: 'attack', attackerIds: [g.id], defenderId: 'p1' }] : []; },
   },
   {
     label: 'trigger (ghost)',
@@ -78,7 +92,21 @@ const BEATS: Beat[] = [
     events: s => { const card = s.stack.find(i => i.id === 'demo-cast')?.card; return card ? [{ k: 'move', objectId: card.id, from: 'hand', to: 'stack', verb: 'cast' }, { k: 'stackLink', stackId: 'demo-cast', objectId: card.id }] : []; },
   },
   {
-    label: 'destroy (die)',
+    label: 'resolve (dust ring + squash)',
+    mutate: s => {
+      const item = s.stack.find(i => i.id === 'demo-cast');
+      if (item?.card) {
+        s.stack = s.stack.filter(i => i.id !== 'demo-cast');
+        you(s).battlefield.push({ ...item.card, controllerId: 'p1', tapped: false });
+      }
+    },
+    events: s => {
+      const p = you(s).battlefield[you(s).battlefield.length - 1];
+      return p ? [{ k: 'move', objectId: p.id, from: 'stack', to: 'battlefield', verb: 'resolve' }] : [];
+    },
+  },
+  {
+    label: 'destroy (die, then settle)',
     mutate: s => {
       const c = byName(s, 'p1', 'Sakura-Tribe Elder');
       if (c) { you(s).battlefield = you(s).battlefield.filter(b => b.id !== c.id); you(s).graveyard.push(stripPerm(c)); }
@@ -86,7 +114,47 @@ const BEATS: Beat[] = [
     events: s => { const g = you(s).graveyard.find(c => c.name === 'Sakura-Tribe Elder'); return g ? [{ k: 'move', objectId: g.id, from: 'battlefield', to: 'graveyard', verb: 'destroy' }] : []; },
   },
   {
-    label: 'phase ribbon',
+    label: 'sacrifice (implosion)',
+    mutate: s => {
+      const f = you(s).battlefield.find(b => b.name === 'Forest');
+      if (f) { you(s).battlefield = you(s).battlefield.filter(b => b.id !== f.id); you(s).graveyard.push(stripPerm(f)); }
+    },
+    events: s => {
+      const f = you(s).graveyard.find(c => c.name === 'Forest');
+      return f ? [{ k: 'move', objectId: f.id, from: 'battlefield', to: 'graveyard', verb: 'sacrifice', cause: { name: 'Dust Bowl' } }] : [];
+    },
+  },
+  {
+    label: 'exile (cold rise off-table)',
+    mutate: s => {
+      const f = you(s).battlefield.find(b => b.name === 'Forest');
+      if (f) { you(s).battlefield = you(s).battlefield.filter(b => b.id !== f.id); you(s).exile.push(stripPerm(f)); }
+    },
+    events: s => {
+      const f = you(s).exile.find(c => c.name === 'Forest');
+      return f ? [{ k: 'move', objectId: f.id, from: 'battlefield', to: 'exile', verb: 'exile', cause: { name: 'Path to Exile' } }] : [];
+    },
+  },
+  {
+    label: 'opponent casts (to be countered)',
+    mutate: s => { s.stack.push(spellItem('demo-oppcast', minCard('opp-bolt', 'Lightning Bolt', ['INSTANT']), 'p2')); },
+    events: () => [
+      { k: 'move', objectId: 'opp-bolt', from: 'hand', to: 'stack', verb: 'cast' },
+      { k: 'stackLink', stackId: 'demo-oppcast', objectId: 'opp-bolt' },
+    ],
+  },
+  {
+    label: 'countered (shatter)',
+    mutate: s => {
+      s.stack = s.stack.filter(i => i.id !== 'demo-oppcast');
+      s.players[1]!.graveyard.push(minCard('opp-bolt', 'Lightning Bolt', ['INSTANT']));
+    },
+    events: () => [
+      { k: 'move', objectId: 'opp-bolt', from: 'stack', to: 'graveyard', verb: 'counter', cause: { name: 'Counterspell' } },
+    ],
+  },
+  {
+    label: 'phase ribbon (combat ends, fighters march home)',
     mutate: s => { s.turn.phase = 'POSTCOMBAT_MAIN'; s.turn.step = 'POST_MAIN'; s.combat = undefined; },
     events: () => [{ k: 'step', phase: 'POSTCOMBAT_MAIN', step: 'POST_MAIN' }],
   },
@@ -95,11 +163,11 @@ const BEATS: Beat[] = [
 function abilityItem(id: string, sourceId: string, name: string, text: string[]): StackItem {
   return { id, kind: 'ability', controllerId: 'p1', card: minCard(sourceId, name), text };
 }
-function spellItem(id: string, card: Card): StackItem {
-  return { id, kind: 'spell', controllerId: 'p1', card: { ...card }, text: [] };
+function spellItem(id: string, card: Card, controllerId = 'p1'): StackItem {
+  return { id, kind: 'spell', controllerId, card: { ...card }, text: [] };
 }
-function minCard(id: string, name: string): Card {
-  return { id, name, set: 'CMR', number: '0', manaValue: 0, types: ['ARTIFACT'], subtypes: [], supertypes: [], colors: [], text: [] };
+function minCard(id: string, name: string, types: Card['types'] = ['ARTIFACT']): Card {
+  return { id, name, set: 'CMR', number: '0', manaValue: 0, types, subtypes: [], supertypes: [], colors: [], text: [] };
 }
 function stripPerm(p: GameState['players'][number]['battlefield'][number]): Card {
   const { id, name, set, number, manaCost, manaValue, types, subtypes, supertypes, colors, text, power, toughness } = p;

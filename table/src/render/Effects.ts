@@ -13,7 +13,7 @@
 // stable across frames); the small spawn jitter here is per-effect and one-shot,
 // so a plain counter-seeded value is fine.
 
-import { Container, Graphics, Text, TextStyle, type Texture, PerspectiveMesh } from 'pixi.js';
+import { Container, Graphics, Rectangle, Sprite, Text, TextStyle, Texture, PerspectiveMesh } from 'pixi.js';
 import type { Point } from '../layout/types';
 import type { Projector } from '../scene/interaction';
 
@@ -294,6 +294,91 @@ export class Effects {
         mesh.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
         mesh.alpha = 0.7 * (1 - clamp01((k - 0.4) / 0.6));
         mesh.tint = 0xbfd0ff;   // faint cold ghost tint
+      },
+    });
+  }
+
+  /** A countered spell shatters instead of resolving (design §9): the card face
+   *  splits into a grid of shards that burst outward, tumble under gravity, and
+   *  fade — spawned where the stack card was. `scale` is the card's world scale
+   *  (world units per texture px), so the assembled shards start card-sized. */
+  shatter(texture: Texture, world: Point, scale: number): void {
+    const cols = 4;
+    const rows = 5;
+    const node = new Container();
+    const fw = texture.width / cols;
+    const fh = texture.height / rows;
+    interface Shard { sp: Sprite; wx: number; wy: number; vx: number; vy: number; rot: number; vr: number }
+    const shards: Shard[] = [];
+    for (let cx = 0; cx < cols; cx++) {
+      for (let cy = 0; cy < rows; cy++) {
+        const frame = new Rectangle(texture.frame.x + cx * fw, texture.frame.y + cy * fh, fw, fh);
+        const sp = new Sprite(new Texture({ source: texture.source, frame }));
+        sp.anchor.set(0.5, 0.5);
+        node.addChild(sp);
+        // burst radially: out through the shard's own offset from the card centre,
+        // with an upward kick; per-shard one-shot jitter off the counter seed.
+        this.seed += 1;
+        const jitter = ((this.seed * 7919) % 97) / 97;
+        const ox = (cx + 0.5 - cols / 2) * fw * scale;
+        const oy = (cy + 0.5 - rows / 2) * fh * scale;
+        shards.push({
+          sp, wx: world.x + ox, wy: world.y + oy,
+          vx: ox * (3 + 2 * jitter), vy: oy * 3 - (140 + 160 * jitter),
+          rot: 0, vr: (jitter - 0.5) * 11,
+        });
+      }
+    }
+    let t = 0;
+    const ttl = 780;
+    this.add({
+      node, screen: false,
+      update: dt => {
+        const d = dt / 1000;
+        for (const s of shards) {
+          s.vy += 1000 * d;   // gravity, world units/s²
+          s.wx += s.vx * d;
+          s.wy += s.vy * d;
+          s.rot += s.vr * d;
+        }
+        return (t += dt) < ttl;
+      },
+      render: proj => {
+        const k = clamp01(t / ttl);
+        const alpha = 1 - clamp01((k - 0.35) / 0.65);
+        for (const s of shards) {
+          const w = { x: s.wx, y: s.wy };
+          const c = proj.toScreen(w);
+          s.sp.position.set(c.x, c.y);
+          s.sp.rotation = s.rot;
+          s.sp.scale.set(scale * proj.scaleAt(w));
+          s.sp.alpha = alpha;
+        }
+      },
+    });
+  }
+
+  /** A sacrifice's self-consuming implosion (design §9): a ring collapses *into*
+   *  the card and a bright core swallows it — no attacker, no outward impact; the
+   *  card did this to itself. Distinct from both the dust ring and the flash. */
+  implosion(world: Point, color = 0xffb45e): void {
+    const g = new Graphics();
+    let t = 0;
+    const ttl = 420;
+    this.add({
+      node: g, screen: false,
+      update: dt => (t += dt) < ttl,
+      render: proj => {
+        const k = clamp01(t / ttl);
+        const s = proj.scaleAt(world);
+        const c = proj.toScreen(world);
+        g.clear().position.set(c.x, c.y);
+        const r = (58 * (1 - ease(k)) + 6) * s;
+        g.circle(0, 0, r).stroke({ width: 3.5 * s, color, alpha: 0.85 * (1 - 0.4 * k) });
+        if (k > 0.45) {
+          const kk = (k - 0.45) / 0.55;
+          g.circle(0, 0, 26 * s * (1 - kk)).fill({ color: 0xfff3d6, alpha: 0.8 * (1 - kk) });
+        }
       },
     });
   }

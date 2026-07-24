@@ -81,9 +81,14 @@ export class CardActor {
   private spin = 0;            // radians of rotation overshoot (tap/untap), decays
   private flashAmt = 0;        // 0..1 white impact flash
   private glowAmt = 0;         // 0..1 cast/colour glow
+  private glowHold = 0;        // ms the glow holds at full before decaying (§9 cast flight)
   private glowColor = 0xffffff;
   private dying = false;       // destroy/sacrifice → ramp `mortis` toward 1
-  private mortis = 0;          // 0..1 death desaturation + tip-over
+  private mortis = 0;          // 0..1 death desaturation + tip-over; eases back when !dying
+  private chillAmt = 0;        // 0..1 exile cold-fade (§9): cold tint + half-fade in flight
+  private chillHold = 0;       // ms the chill holds before easing off (the flight)
+  private vanishing = false;   // counter (§9): the face hides while the shatter plays
+  private vanishAmt = 0;       // 0..1 face/chrome fade-out
   private hoverAmt = 0;        // 0..1 hand hover-lift (eases toward hoverTarget)
   private hoverTarget = 0;     // the scene sets this: 1 while a hand card is pointed at
   // The face's four screen corners from the last render (TL, TR, BR, BL), so the
@@ -174,8 +179,24 @@ export class CardActor {
    *  re-projecting a card across the world↔screen seam (§6.2). */
   get scaleNow(): number { return this.current.scale; }
 
+  /** The live face texture — the shatter effect (§9 counter) cuts its shards
+   *  from whatever the card is showing right now. */
+  get faceTexture(): Texture { return this.face.texture; }
+
+  /** A zone change sheds any zone-scoped juice: a card leaving the graveyard drops
+   *  the death read (reanimation must not arrive grey and tipped), one leaving
+   *  exile warms back up, a hidden (countered) face returns. Each channel then
+   *  eases back to rest in `decayJuice` rather than popping. */
+  private noteZone(zone: ActorPlacement['zone']): void {
+    if (zone === this.placement.zone) return;
+    this.dying = false;
+    this.chillHold = 0;
+    this.vanishing = false;
+  }
+
   /** Jump instantly to `p` — first sight, snap steps, or the reduced-motion cut. */
   snapTo(p: ActorPlacement): void {
+    this.noteZone(p.zone);
     this.placement = p;
     Object.assign(this.target, transformOf(p));
     Object.assign(this.current, this.target);
@@ -191,6 +212,7 @@ export class CardActor {
    *  by the next step continues smoothly from its live position (§6.3). `arc` bows
    *  the path upward (§9 cast/draw), in the actor's own-space units. */
   animateTo(p: ActorPlacement, durationMs: number, arc = 0): void {
+    this.noteZone(p.zone);
     this.placement = p;
     Object.assign(this.target, transformOf(p));
     if (durationMs <= 0) { this.snapTo(p); return; }
@@ -212,15 +234,39 @@ export class CardActor {
    *  settles back — the §9 "overshoot ease" without disturbing the tween's target. */
   overshoot(rad: number): void { this.spin = rad; }
 
-  /** A cast/colour-identity glow that blooms then fades (§9 cast). */
-  sparkGlow(color: number): void { this.glowColor = color; this.glowAmt = 1; }
+  /** A cast/colour-identity glow that blooms then fades (§9 cast). `holdMs` keeps
+   *  it at full — set it to the flight duration so the glow rides the whole arc
+   *  instead of dying mid-air. */
+  sparkGlow(color: number, holdMs = 0): void {
+    this.glowColor = color;
+    this.glowAmt = 1;
+    this.glowHold = Math.max(this.glowHold, holdMs);
+  }
 
   /** A white impact flash (§9 combat damage). */
   sparkFlash(): void { this.flashAmt = 1; }
 
   /** Begin the death read (§9 destroy/sacrifice): desaturate + tip over as the card
-   *  falls to the graveyard. Persists (ramps to full) until the actor is replaced. */
+   *  falls to the graveyard. Ramps while dying; `revive()` (the scene fires it once
+   *  the fall has landed, and any later zone change forces it) eases it back so the
+   *  card never sits permanently grey and tipped in the pile — or worse, carries the
+   *  death read to a zone it later moves to. */
   die(): void { this.dying = true; }
+
+  /** End the death read — mortis eases back to rest in `decayJuice`. */
+  revive(): void { this.dying = false; }
+
+  /** The exile read (§9): cold-tinted and half-faded for `holdMs` (the flight off
+   *  the table), then eases back so the pile's top card renders plainly. */
+  chill(holdMs: number): void {
+    this.chillAmt = 1;
+    this.chillHold = Math.max(this.chillHold, holdMs);
+  }
+
+  /** Hide the face/chrome while a counter's shatter plays (§9) — the shards are the
+   *  card now. `unvanish()` brings it back (in the graveyard pile). */
+  vanish(): void { this.vanishing = true; }
+  unvanish(): void { this.vanishing = false; }
 
   /** Raise/lower the hand hover-lift (§9). The scene drives this for a pointed-at
    *  hand card; the lift eases in `decayJuice` and is painted every frame. A no-op
@@ -255,10 +301,16 @@ export class CardActor {
   private decayJuice(dtMs: number): void {
     this.squash = Math.max(0, this.squash - dtMs / 260);
     this.flashAmt = Math.max(0, this.flashAmt - dtMs / 240);
-    this.glowAmt = Math.max(0, this.glowAmt - dtMs / 520);
+    if (this.glowHold > 0) this.glowHold = Math.max(0, this.glowHold - dtMs);
+    else this.glowAmt = Math.max(0, this.glowAmt - dtMs / 520);
+    if (this.chillHold > 0) this.chillHold = Math.max(0, this.chillHold - dtMs);
+    else this.chillAmt = Math.max(0, this.chillAmt - dtMs / 380);
     this.spin *= Math.exp(-dtMs / 110);
     if (Math.abs(this.spin) < 0.001) this.spin = 0;
     if (this.dying) this.mortis = Math.min(1, this.mortis + dtMs / 320);
+    else if (this.mortis > 0) this.mortis = Math.max(0, this.mortis - dtMs / 300);
+    if (this.vanishing) this.vanishAmt = Math.min(1, this.vanishAmt + dtMs / 110);
+    else if (this.vanishAmt > 0) this.vanishAmt = Math.max(0, this.vanishAmt - dtMs / 240);
     this.hoverAmt += (this.hoverTarget - this.hoverAmt) * Math.min(1, dtMs / 70);   // ~snappy lift
   }
 
@@ -293,25 +345,42 @@ export class CardActor {
     this.face.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
     this.corners[0] = tl; this.corners[1] = tr; this.corners[2] = br; this.corners[3] = bl;
 
-    // face tint: the tap dim, deepened toward grave-grey as death ramps.
-    const base = this.placement.tapped === true && this.placement.zone === 'battlefield' ? TAP_DIM : 0xffffff;
-    this.face.tint = this.mortis > 0 ? mixColor(base, DEATH_TINT, this.mortis) : base;
+    // face tint: the tap dim, deepened toward grave-grey as death ramps, chilled
+    // toward exile-blue as the cold-fade rides; the vanish channel (counter) and
+    // the chill's half-fade act on alpha, chrome included.
+    let tint = this.placement.tapped === true && this.placement.zone === 'battlefield' ? TAP_DIM : 0xffffff;
+    if (this.mortis > 0) tint = mixColor(tint, DEATH_TINT, this.mortis);
+    if (this.chillAmt > 0) tint = mixColor(tint, CHILL_TINT, this.chillAmt * 0.7);
+    this.face.tint = tint;
+    const fade = (1 - 0.45 * this.chillAmt) * (1 - this.vanishAmt);
+    this.face.alpha = fade;
+    this.chrome.alpha = fade;
 
     const centre = { x: cx, y: cy };
     const screenScale = drawScale * proj.scaleAt(centre);
 
-    // cast/colour glow: a soft bloom just outside the face, behind everything.
+    // cast/colour glow: a bloom just outside the face, behind everything. Two
+    // feathered rims over a fill — the single faint rim of the first pass vanished
+    // against the felt (T4 review: "no glow in cast").
     this.glowG.clear();
     if (this.glowAmt > 0) {
-      const gx = 0.14 * this.texW * this.current.scale;
-      const gy = 0.14 * this.texH * this.current.scale;
-      const g0 = proj.toScreen(at(-1, -1, gx, gy));
-      const g1 = proj.toScreen(at(1, -1, gx, gy));
-      const g2 = proj.toScreen(at(1, 1, gx, gy));
-      const g3 = proj.toScreen(at(-1, 1, gx, gy));
-      const gpoly = [g0.x, g0.y, g1.x, g1.y, g2.x, g2.y, g3.x, g3.y];
-      this.glowG.poly(gpoly).fill({ color: this.glowColor, alpha: 0.28 * this.glowAmt });
-      this.glowG.poly(gpoly).stroke({ width: Math.max(3, 10 * screenScale), color: this.glowColor, alpha: 0.5 * this.glowAmt });
+      const rim = (padFrac: number): number[] => {
+        const px = padFrac * this.texW * this.current.scale;
+        const py = padFrac * this.texH * this.current.scale;
+        const q0 = proj.toScreen(at(-1, -1, px, py));
+        const q1 = proj.toScreen(at(1, -1, px, py));
+        const q2 = proj.toScreen(at(1, 1, px, py));
+        const q3 = proj.toScreen(at(-1, 1, px, py));
+        return [q0.x, q0.y, q1.x, q1.y, q2.x, q2.y, q3.x, q3.y];
+      };
+      const inner = rim(0.14);
+      this.glowG.poly(rim(0.3)).stroke({
+        width: Math.max(8, 26 * screenScale), color: this.glowColor, alpha: 0.3 * this.glowAmt,
+      });
+      this.glowG.poly(inner).fill({ color: this.glowColor, alpha: 0.42 * this.glowAmt });
+      this.glowG.poly(inner).stroke({
+        width: Math.max(4, 14 * screenScale), color: this.glowColor, alpha: 0.85 * this.glowAmt,
+      });
     }
 
     // impact flash: a white wash over the face.
@@ -405,6 +474,7 @@ function sameHighlight(a: HighlightSpec | undefined, b: HighlightSpec | undefine
 const TAP_DIM = 0x8b8b8b;   // face tint for a tapped permanent (~55% brightness)
 const DEATH_TINT = 0x4a4640;   // grave-grey the face desaturates toward as it dies (§9)
 const DEATH_TIP = 0.42;        // radians a dying card tips over as it falls to the pile
+const CHILL_TINT = 0x7d9db8;   // exile's cold blue-grey (§8: "gone", never "dead")
 // Corner radius of the embossed metal chrome (P/T / counter / count plates). A
 // small radius reads as bevelled brass, not a soft stadium pill (reviewed 2026-07-23).
 const PLATE_RADIUS = 4;
