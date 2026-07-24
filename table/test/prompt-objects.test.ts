@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { emptyScratch, type PromptStoreState } from '@night/core/stores/prompt';
-import type { Prompt } from '@night/core/protocol/protocol';
-import { promptObjectIds } from '../src/scene/prompt-objects';
+import type { Prompt, StackItem } from '@night/core/protocol/protocol';
+import { promptObjectIds, stackTargetIds } from '../src/scene/prompt-objects';
 
 const base = { t: 'game.prompt', seq: 1, gameId: 'g', promptId: 1, message: 'm' } as const;
 const ids = (pending: Prompt) => promptObjectIds({ ...emptyScratch(), pending }).sort();
@@ -45,5 +45,26 @@ describe('promptObjectIds (§14 pull-back scope)', () => {
 
   it('a plain confirm concerns no board object', () => {
     expect(ids({ ...base, kind: 'confirm' })).toEqual([]);
+  });
+});
+
+describe('stackTargetIds (§14 stack-target framing)', () => {
+  const item = (o: Partial<StackItem>): StackItem => ({ id: 'x', kind: 'spell', text: [], ...o });
+
+  it('an empty stack targets nothing', () => {
+    expect(stackTargetIds([])).toEqual([]);
+  });
+
+  it('collects the targets of every stack item, spell and ability alike', () => {
+    expect(stackTargetIds([
+      item({ id: 's1', targets: ['a', 'b'] }),        // a modal/removal spell
+      item({ id: 's2', kind: 'ability', targets: ['c'] }),
+    ])).toEqual(['a', 'b', 'c']);
+  });
+
+  it('an untargeted stack (a creature being cast, an ETB) contributes nothing', () => {
+    // This is the "don't zoom out for a plain cast" guarantee, at the source.
+    expect(stackTargetIds([item({ id: 'creature' }), item({ id: 'etb', kind: 'ability', targets: [] })]))
+      .toEqual([]);
   });
 });

@@ -35,7 +35,7 @@ import {
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
 import { stackAnchor } from '../layout/screen';
-import { promptObjectIds } from './prompt-objects';
+import { promptObjectIds, stackTargetIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, isClickable, rectContains, type Projector, type ScreenAnchor,
 } from './interaction';
@@ -274,6 +274,7 @@ export class TableScene implements DirectorSink {
     this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
+    this.syncCameraFocus(to);    // §14: widen for a cross-board stack target, no prompt needed
     if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration, preset);
     this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
@@ -733,7 +734,7 @@ export class TableScene implements DirectorSink {
     this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
     if (changed) {
       if (prompt?.pending !== undefined) this.director.flush();   // §6.4: input never waits on animation
-      this.syncCameraForPrompt(prompt);   // §14: pull back for off-screen refs, restore when clear
+      this.syncCameraFocus(this.director.presented);   // §14: pull back for off-screen refs, restore when clear
     }
     this.lastPromptId = newId;
   }
@@ -782,22 +783,35 @@ export class TableScene implements DirectorSink {
     if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
   }
 
-  /** §14: keep the objects the current prompt names in shot — pull back to the whole
-   *  table while any sits off-screen under the pinned/followed view, and ease back to
-   *  that view once they're visible again or the prompt clears. Recomputed on every
-   *  prompt change, so the pull-back never outlives its reason (e.g. a spell that
-   *  targeted across the table resolving off the stack — the camera then returns to
-   *  the pin you set, or resumes follow). Screen-space objects (your hand) are always
-   *  visible, so only world actors contribute points; no pending prompt ⇒ no points ⇒
-   *  a plain restore. */
-  private syncCameraForPrompt(prompt: PromptStoreState | undefined): void {
+  /** §14: keep everything that must be seen in shot — pull back to the whole table
+   *  while any of it sits off-screen under the pinned/followed view, and ease back
+   *  once it's all visible again. Two orthogonal sources of "must be seen":
+   *   • the current prompt's named objects (forced choices / combat declaration) —
+   *     what *you* must see to act; and
+   *   • every target of anything on the stack — a cross-battlefield effect (the
+   *     active player casting removal at another seat's creature while you follow the
+   *     caster) that would otherwise resolve off-screen. A target on the framed
+   *     board is already in shot, so a same-seat effect never widens the lens.
+   *  Recomputed on every prompt change *and* every state transition, so the pull-back
+   *  tracks the live stack and never outlives its reason (the spell resolves off the
+   *  stack → its target drops out → the lens returns to the pin/follow). Screen-space
+   *  objects (your hand) are always visible; only felt anchors — a permanent's
+   *  placement or a targeted player's nameplate — contribute points. */
+  private syncCameraFocus(state: GameState | undefined): void {
     const pts: Point[] = [];
+    const prompt = this.currentPrompt;
     if (prompt?.pending !== undefined) {
       const ids = new Set(promptObjectIds(prompt));
       for (const a of this.actors.values()) {
         if (a.objectId !== undefined && a.space === 'world' && ids.has(a.objectId)) {
           pts.push({ x: a.placement.x, y: a.placement.y });
         }
+      }
+    }
+    if (state !== undefined) {
+      for (const tid of stackTargetIds(state.stack)) {
+        const p = this.worldPointOf(tid) ?? this.seatPoint(tid, state);
+        if (p !== undefined) pts.push(p);
       }
     }
     this.director.keepVisible(pts);

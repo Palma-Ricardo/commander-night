@@ -16,7 +16,7 @@
 // scoped: declaring blockers spans the attacker's board and yours, which is exactly
 // when a pull-back earns its keep.
 
-import type { Id } from '@night/core/protocol/protocol';
+import type { Id, StackItem } from '@night/core/protocol/protocol';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 
 export function promptObjectIds(prompt: PromptStoreState): Id[] {
@@ -35,4 +35,19 @@ export function promptObjectIds(prompt: PromptStoreState): Id[] {
     default:
       return [];
   }
+}
+
+/** Every object/player id that anything on the stack targets — the second input to
+ *  the §14 pull-back, orthogonal to any prompt. A targeted effect that reaches off
+ *  the framed board (the active player casting removal at another seat's creature
+ *  while you follow the caster) must widen the lens to the whole table rather than
+ *  resolve off-screen. "Any effect that targets," across the whole stack; an
+ *  untargeted spell (a creature being cast, an ETB) contributes nothing, so a plain
+ *  cast never pulls back. Which of these actually *forces* a pull-back is decided in
+ *  the scene, by whether each target's board anchor is visible under the current
+ *  view — a target on the framed player's own board is already in shot. */
+export function stackTargetIds(stack: readonly StackItem[]): Id[] {
+  const out: Id[] = [];
+  for (const item of stack) if (item.targets !== undefined) out.push(...item.targets);
+  return out;
 }
