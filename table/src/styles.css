@@ -367,6 +367,25 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .hl-declared { box-shadow: 0 0 0 2px var(--error); }
 .card-selected { box-shadow: 0 0 0 3px var(--accent); }
 
+/* Trigger-order ability plate (§7): a gilt panel laid over the card's printed text
+   box with just the one ability that fired — readable at grid scale where the card
+   art's own box is not. Click-through, so the card underneath still selects/hovers
+   (the hover preview shows the full text large). */
+.ability-plate {
+  position: absolute; left: 6%; right: 6%; top: 46%; bottom: 11%;
+  display: flex; flex-direction: column; gap: 0.1rem;
+  padding: 0.3rem 0.4rem; overflow: hidden; pointer-events: none;
+  background: rgba(12, 10, 8, 0.92);
+  border: 1px solid var(--brass); border-radius: 4px;
+  font-family: Georgia, serif; font-size: 0.72rem; line-height: 1.16; color: #e8e2cf;
+}
+.ability-plate-head {
+  align-self: center; text-transform: uppercase; letter-spacing: 0.08em;
+  font-weight: 800; font-size: 0.6rem; color: var(--brass-hi); margin-bottom: 0.12rem;
+}
+.ability-plate p { margin: 0; }
+.card-preview .ability-plate { font-size: 0.95rem; line-height: 1.25; }
+
 .badge {
   position: absolute; z-index: 2; font-size: 0.65rem; font-weight: 700;
   border-radius: 999px; padding: 0.05rem 0.3rem; background: var(--bg);

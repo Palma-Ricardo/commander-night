@@ -109,6 +109,16 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
           ? <img className="card-face" src={image.url} alt={card.name} draggable={false} />
           : <TextFrame card={card} size={size} />}
 
+      {/* Trigger-order picker (§7): the card art shows *which* permanent fired, but
+          its printed box is unreadable at grid scale and lists every ability — so
+          overlay a gilt plate with this one ability's rule, mirroring the stack. */}
+      {card.ability === true && card.text.length > 0 && (
+        <div className="ability-plate">
+          <span className="ability-plate-head">Ability</span>
+          {card.text.map((line, i) => <p key={i}>{line}</p>)}
+        </div>
+      )}
+
       {/* overlays */}
       {card.faceDown === true && !redacted && <span className="badge badge-facedown">face-down</span>}
       {perm !== undefined && perm.damage !== undefined && perm.damage > 0 && (
