@@ -408,6 +408,11 @@ const DEATH_TIP = 0.42;        // radians a dying card tips over as it falls to 
 // Corner radius of the embossed metal chrome (P/T / counter / count plates). A
 // small radius reads as bevelled brass, not a soft stadium pill (reviewed 2026-07-23).
 const PLATE_RADIUS = 4;
+// The stack-effect panel's text is built at the card's *logical* size (~200×280)
+// but the stack's front card is projected ~2.5× larger (detail tier), so text
+// rasterised at device resolution upscaled and blurred (play-test #5). Rasterise it
+// this many× denser instead; the art tier already carries ~2.44× the pixels.
+const STACK_TEXT_RES = 3;
 
 /** Blend two packed 0xRRGGBB colours, `t` 0 ⇒ a, 1 ⇒ b (per-channel linear). */
 function mixColor(a: number, b: number, t: number): number {
@@ -467,6 +472,7 @@ function stackEffectPanel(w: number, h: number, label: string, lines: string[]):
   c.addChild(g);
 
   const header = new Text({
+    resolution: STACK_TEXT_RES,
     text: label,
     style: new TextStyle({
       fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.05), fontWeight: '800',
@@ -479,6 +485,7 @@ function stackEffectPanel(w: number, h: number, label: string, lines: string[]):
 
   if (lines.length > 0) {
     const body = new Text({
+      resolution: STACK_TEXT_RES,
       text: lines.join('\n'),
       style: new TextStyle({
         fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.043), fill: 0xe8e2cf,

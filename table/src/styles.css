@@ -194,9 +194,12 @@ button.danger { background: var(--error); color: #14161a; }
 .prompt-dock {
   display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end;
   max-width: 100%;
-  background: color-mix(in srgb, var(--accent) 14%, #0d1016ee);
-  border: 1px solid var(--accent); border-radius: 10px; padding: 0.5rem 0.8rem;
-  box-shadow: 0 8px 30px #000a;
+  /* On-scheme dark blue-gray, matching the turn-controls / log chrome rather than a
+     saturated accent slab (play-test #5). The primary button carries the accent so
+     the call-to-action still reads; a faint accent rim marks "a prompt is waiting". */
+  background: color-mix(in srgb, var(--panel) 90%, #000 10%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.5rem 0.8rem;
+  box-shadow: 0 8px 30px #000a, inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .dock-msg { font-weight: 600; }
 .dock-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
