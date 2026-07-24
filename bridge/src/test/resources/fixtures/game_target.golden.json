@@ -526,7 +526,7 @@
   "seq" : 1,
   "gameId" : "g",
   "promptId" : 1,
-  "message" : "Select land cards from your graveyard (selected 0 of 3)",
+  "message" : "Select land cards from your graveyard",
   "kind" : "chooseTargets",
   "candidates" : [ ],
   "min" : 0,

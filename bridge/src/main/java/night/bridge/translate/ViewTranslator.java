@@ -15,6 +15,7 @@ import mage.view.PermanentView;
 import mage.view.PlaneView;
 import mage.view.PlayerView;
 import mage.view.RevealedView;
+import mage.view.AbilityView;
 import mage.view.SimpleCardView;
 import mage.view.StackAbilityView;
 import night.bridge.proto.state.Card;
@@ -435,15 +436,31 @@ public final class ViewTranslator {
      * Context-free path for prompt payloads (PromptTranslator): commander info
      * lines are stripped from the text but not collected — prompt cards are
      * not an authoritative scrape site, state is.
+     *
+     * <p>Trigger-order (and mode-choice) prompts arrive as {@link AbilityView}: a
+     * placeholder CardView with name "Ability", no types, and no printing — the real
+     * card lives in {@code getSourceCard()}. Render it <em>as</em> that source card
+     * (set/number so the client resolves the art, the real name so the player sees
+     * which permanent fired) but keep the ability's own rule text, and keep the
+     * ability id — that id, not the card id, is what the answer channel round-trips.
      */
     public static Card card(CardView v) {
+        if (v instanceof AbilityView av && av.getSourceCard() != null) {
+            return cardFrom(av.getSourceCard(),
+                    CommanderDamage.scrape(av.getRules()).remainingRules(),
+                    av.getId().toString());
+        }
         return cardFrom(v, CommanderDamage.scrape(v.getRules()).remainingRules());
     }
 
     private static Card cardFrom(CardView v, List<String> rawRules) {
+        return cardFrom(v, rawRules, v.getId().toString());
+    }
+
+    private static Card cardFrom(CardView v, List<String> rawRules, String id) {
         String manaCost = v.getManaCostStr();
         return new Card(
-                v.getId().toString(),
+                id,
                 v.getName() == null ? "" : v.getName(),
                 v.getExpansionSetCode(),
                 v.getCardNumber(),

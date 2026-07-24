@@ -37,7 +37,17 @@ public final class PromptTranslator {
 
     private static final String OPT_YES_TEXT = "UI.left.btn.text";
     private static final String OPT_NO_TEXT = "UI.right.btn.text";
-    private static final Pattern PROGRESS = Pattern.compile("selected (\\d+) of (\\d+)", Pattern.CASE_INSENSITIVE);
+    // XMage's TargetImpl.getMessage: "Select <name> (selected N of MAX, min MIN)"
+    // — "of MAX" present when the max is bounded, ", min MIN" present when min > 0.
+    // Both counts and the true minimum are server-side only; we recover them here.
+    private static final Pattern PROGRESS =
+            Pattern.compile("selected (\\d+)(?: of (\\d+))?(?:, min (\\d+))?", Pattern.CASE_INSENSITIVE);
+    // The whole "(selected …)" parenthetical, stripped from the display message: it
+    // is XMage's static server-side tally ("selected 0 of 6") that never updates as
+    // the client accumulates its scratch selection, so it reads as a stuck "0". The
+    // dock's own "Submit k of range" counter is the live source of truth (§8).
+    private static final Pattern PROGRESS_SUFFIX =
+            Pattern.compile("\\s*\\(selected \\d+(?: of \\d+)?(?:, min \\d+)?\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern MANA_COST = Pattern.compile("((?:\\{[^}]+\\})+)");
 
     /** GAME_ASK → confirm. Custom button texts ride the options map (HumanPlayer.chooseUse). */
@@ -159,16 +169,29 @@ public final class PromptTranslator {
                 cards.forEach(c -> candidates.add(c.id()));
             }
         }
+        String rawMessage = msg.getMessage() == null ? "" : msg.getMessage();
         GamePrompt.Progress progress = null;
-        Matcher m = PROGRESS.matcher(msg.getMessage() == null ? "" : msg.getMessage());
+        Integer parsedMax = null;
+        Integer parsedMin = null;
+        Matcher m = PROGRESS.matcher(rawMessage);
         if (m.find()) {
-            progress = new GamePrompt.Progress(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
+            int chosen = Integer.parseInt(m.group(1));
+            parsedMax = m.group(2) == null ? null : Integer.parseInt(m.group(2));
+            parsedMin = m.group(3) == null ? null : Integer.parseInt(m.group(3));
+            if (parsedMax != null) {
+                progress = new GamePrompt.Progress(chosen, parsedMax);
+            }
         }
         boolean required = msg.isFlag();
-        int max = progress != null ? progress.of() : 1;
-        int min = required ? Math.min(1, max) : 0;
+        int max = parsedMax != null ? parsedMax : 1;
+        // Prefer XMage's own minimum (parsed above) — it distinguishes a fixed pick
+        // (discard exactly 6: min == max) from an "up to" pick, so the client renders
+        // the range as "6" not "1–6". Fall back to the required-⇒-1 heuristic only
+        // when the message carried no minimum.
+        int min = parsedMin != null ? parsedMin : (required ? Math.min(1, max) : 0);
+        String message = Html.strip(PROGRESS_SUFFIX.matcher(rawMessage).replaceFirst(""));
         Serializable zone = msg.getOptions() == null ? null : msg.getOptions().get("targetZone");
-        return GamePrompt.chooseTargets(promptId, Html.strip(msg.getMessage()),
+        return GamePrompt.chooseTargets(promptId, message,
                 candidates, min, max, required,
                 zone == null ? null : zone.toString(), progress, cards);
     }

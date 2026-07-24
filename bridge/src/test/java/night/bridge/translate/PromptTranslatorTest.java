@@ -147,6 +147,23 @@ class PromptTranslatorTest {
         assertEquals(1, p.min());
         assertEquals(Boolean.TRUE, p.required());
         assertNull(p.cards());
+        // The stale server-side "(selected …)" tally is stripped from the display
+        // message — the dock's own live counter is the source of truth (play-test #5).
+        assertEquals("Select target creatures", p.message());
+    }
+
+    @Test
+    void fixedCountDiscardParsesTrueMinFromMessage() {
+        // XMage's discard-exactly-6 message carries ", min 6"; the true minimum must
+        // survive so the client renders the range as "6", not "1–6" (play-test #5).
+        GameClientMessage msg = new GameClientMessage(null, null,
+                "Select cards to discard (selected 0 of 6, min 6)", null,
+                new LinkedHashSet<>(Set.of(UUID.randomUUID())), true);
+        GamePrompt p = PromptTranslator.chooseTargets(7, msg);
+        assertEquals(6, p.min());
+        assertEquals(6, p.max());
+        assertEquals(new GamePrompt.Progress(0, 6), p.progress());
+        assertEquals("Select cards to discard", p.message());
     }
 
     @Test
