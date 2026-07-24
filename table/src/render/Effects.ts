@@ -26,11 +26,35 @@ interface Fx {
   render(proj: Projector): void;
 }
 
+interface Size { w: number; h: number }
+
+/** The live phase ribbon: one band, re-labelled in place as phases advance. */
+interface Ribbon { band: Container; bg: Graphics; label: Text; t: number }
+
 const DUST = 0xd8c9a0;      // warm felt dust
 const CHALK = 0xf0ead6;     // combat arrow
 const DMG = 0xff5a48;       // damage number
+
+// Phase-ribbon geometry + clock. It reads as prose, so it holds far longer than a
+// particle: fade in, a long steady hold, fade out.
+const RIBBON_H = 42;
+const RIBBON_TTL = 1700;
+const RIBBON_IN = 180;
+const RIBBON_OUT = 300;
+// Phases that are superseded inside this window never render at all, and a label
+// already up holds RIBBON_DWELL before it can be relabelled. XMage walks
+// untap→upkeep→draw→main in one burst, so without them the ribbon strobes through
+// two or three labels before settling. Last-in wins while we wait, so the ribbon
+// never trails the game by more than one dwell.
+const RIBBON_COALESCE = 170;
+const RIBBON_DWELL = 520;
 const ease = (t: number): number => 1 - (1 - t) ** 3;
 const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t);
+
+/** Fade in, long hold, fade out — the ribbon's whole envelope, by age in ms. */
+const ribbonAlpha = (t: number): number => clamp01(
+  t < RIBBON_IN ? t / RIBBON_IN
+    : t > RIBBON_TTL - RIBBON_OUT ? (RIBBON_TTL - t) / RIBBON_OUT : 1);
 
 export class Effects {
   readonly worldFx = new Container();
@@ -38,6 +62,11 @@ export class Effects {
   private readonly list: Fx[] = [];
   private shake = 0;          // current shake amplitude in screen px, decays each frame
   private seed = 0;           // one-shot jitter source (never used for frame-stable values)
+  // The phase ribbon is a *single* slot, not a spawn: a second phase reuses the
+  // live band (swap the label, restart the hold) instead of stacking another
+  // translucent slab and a second label on top of the first.
+  private ribbon?: Ribbon;
+  private pendingRibbon?: { text: string; viewport: Size; inset: number; wait: number };
 
   constructor() {
     this.worldFx.eventMode = 'none';
@@ -51,6 +80,7 @@ export class Effects {
 
   /** Advance every effect; drop the finished ones. Also decays the shake. */
   update(dtMs: number): void {
+    this.advancePendingRibbon(dtMs);
     this.shake *= Math.exp(-dtMs / 90);
     if (this.shake < 0.3) this.shake = 0;
     for (let i = this.list.length - 1; i >= 0; i--) {
@@ -268,30 +298,69 @@ export class Effects {
     });
   }
 
-  /** A phase ribbon that sweeps across the screen (design §9 `step`). */
-  phaseRibbon(text: string, viewport: { w: number; h: number }): void {
+  /** Announce a phase across the screen (design §9 `step`). `inset` is the gutter
+   *  the open log steals from the right (§8) — the label centres on the *felt*, not
+   *  on the window, so it stays under the DOM turn ribbon as the panel opens.
+   *  Coalescing: the ribbon lands a beat late and a label already up holds its
+   *  dwell, so a phase superseded inside that window never renders — a burst of
+   *  steps yields one readable label instead of a strobe. */
+  phaseRibbon(text: string, viewport: Size, inset = 0): void {
+    const live = this.ribbon;
+    const dwell = live === undefined ? 0 : RIBBON_DWELL - live.t;
+    const wait = Math.max(RIBBON_COALESCE, dwell);
+    this.pendingRibbon = { text, viewport: { ...viewport }, inset, wait };
+  }
+
+  private advancePendingRibbon(dtMs: number): void {
+    const p = this.pendingRibbon;
+    if (p === undefined) return;
+    p.wait -= dtMs;
+    if (p.wait > 0) return;
+    this.pendingRibbon = undefined;
+    this.showRibbon(p.text, p.viewport, p.inset);
+  }
+
+  private showRibbon(text: string, viewport: Size, inset: number): void {
+    const live = this.ribbon;
+    if (live !== undefined) {
+      // Reuse: relabel and restart the hold, so consecutive phases read as one
+      // band changing its word rather than a stack of slabs. Rewind onto the
+      // fade-in ramp at the alpha it is already showing — a band caught mid
+      // fade-out swells back rather than popping to full.
+      live.label.text = text;
+      live.t = Math.min(RIBBON_IN, ribbonAlpha(live.t) * RIBBON_IN);
+      this.placeRibbon(live, viewport, inset);
+      return;
+    }
     const band = new Container();
-    const bg = new Graphics()
-      .rect(0, 0, viewport.w, 42).fill({ color: 0x0c0a08, alpha: 0.55 });
+    const bg = new Graphics();
     const label = new Text({
       text, style: new TextStyle({
         fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: '700', fill: 0xe8d9b0, letterSpacing: 3,
       }),
     });
     label.anchor.set(0.5, 0.5);
-    label.position.set(viewport.w / 2, 21);
     band.addChild(bg, label);
-    band.position.set(0, viewport.h * 0.16);
-    let t = 0;
-    const ttl = 900;
+    const r: Ribbon = { band, bg, label, t: 0 };
+    this.placeRibbon(r, viewport, inset);
+    this.ribbon = r;
     this.add({
       node: band, screen: true,
-      update: dt => (t += dt) < ttl,
-      render: () => {
-        const k = clamp01(t / ttl);
-        band.alpha = k < 0.2 ? k / 0.2 : k > 0.75 ? (1 - k) / 0.25 : 1;
+      update: dt => {
+        r.t += dt;
+        if (r.t < RIBBON_TTL) return true;
+        if (this.ribbon === r) this.ribbon = undefined;
+        return false;
       },
+      render: () => { band.alpha = ribbonAlpha(r.t); },
     });
+  }
+
+  /** (Re)size the band to the window and re-centre the label on the visible felt. */
+  private placeRibbon(r: Ribbon, viewport: Size, inset: number): void {
+    r.bg.clear().rect(0, 0, viewport.w, RIBBON_H).fill({ color: 0x0c0a08, alpha: 0.55 });
+    r.label.position.set(Math.max(0, viewport.w - inset) / 2, RIBBON_H / 2);
+    r.band.position.set(0, viewport.h * 0.16);
   }
 
   /** A red vignette pulse on a large life loss (design §9). */
@@ -323,5 +392,7 @@ export class Effects {
     for (const fx of this.list) fx.node.destroy({ children: true });
     this.list.length = 0;
     this.shake = 0;
+    this.ribbon = undefined;
+    this.pendingRibbon = undefined;
   }
 }

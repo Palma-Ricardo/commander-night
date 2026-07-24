@@ -318,6 +318,7 @@ export class TableScene implements DirectorSink {
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
     this.syncCameraFocus(to);    // §14: widen for a cross-board stack target, no prompt needed
+    this.announcePhase(events);  // outside the juice gate on purpose — see below
     if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration, preset);
     this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
@@ -406,6 +407,23 @@ export class TableScene implements DirectorSink {
 
   // ── §9 animation catalogue: events → juice ───────────────────────────────────
 
+  /** Raise the phase ribbon for this transition (design §9 `step`).
+   *
+   *  Deliberately *not* part of `playJuice`: juice only plays for an animated step,
+   *  but the director snaps at duration 0 whenever it catches up on a backlog
+   *  (§6.3) or flushes for a fresh prompt (§6.4) — and getting priority in your
+   *  precombat main is exactly a flush, so that banner was the one most reliably
+   *  swallowed. The ribbon is an announcement, not motion, so it survives the cut.
+   *  Effects coalesces, so a burst of phases in one tick shows only the newest. */
+  private announcePhase(events: readonly GameEvent[]): void {
+    if (this.reducedMotion) return;
+    for (const e of events) {
+      if (e.k === 'step' && e.phase !== undefined) {
+        this.effects.phaseRibbon(phaseLabel(e.phase, e.step), this.size, this.rightInset);
+      }
+    }
+  }
+
   /** Turn the advisory §7.1 events for this transition into motion + particles
    *  (design §9). Only called for an animated step (duration > 0, motion enabled) —
    *  a snap/first-paint/reduced-motion cut plays no juice, matching the director's
@@ -489,11 +507,8 @@ export class TableScene implements DirectorSink {
           }
           break;
         }
-        case 'step': {
-          if (e.phase !== undefined) this.effects.phaseRibbon(phaseLabel(e.phase, e.step), this.size);
-          break;
-        }
-        default: break;   // hidden / stackLink / reveal / shuffle / scry / search: no §9 motion
+        default: break;   // step (see announcePhase) / hidden / stackLink / reveal /
+                          // shuffle / scry / search: no §9 motion
       }
     }
   }

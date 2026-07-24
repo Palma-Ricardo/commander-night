@@ -414,7 +414,7 @@ Driven entirely by §4 events. First pass, in the order they earn their keep:
 | `tap` / `untap` | 90° rotation with overshoot ease; `forMana` adds a brief mana-coloured pip toward the pool |
 | `attack` | attacker steps off its own half into the seam and tilts toward its defender; chalk arrow drawn on the felt under the cards; defender's nameplate turns to danger with incoming damage |
 | `block` | blocker slides to interpose across the seam; attacker nudges back; the pair rims to a common colour |
-| `damage` (combat) | impact flash on the target, damage number arcs off, screen-shake scaled to amount |
+| `damage` (combat) | attacker lunges toward blocker, impact flash on the target, damage number arcs off, screen-shake scaled to amount |
 | `life` | number tumbles up/down at the seat; red vignette pulse on large losses |
 | `move` battlefield→graveyard (`destroy`) | card desaturates, tips over, falls onto the graveyard pile |
 | `move` …→graveyard (`sacrifice`) | different read from destroy: brief self-consuming flash, no attacker arrow |
