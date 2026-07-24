@@ -159,7 +159,7 @@ describe('CameraController follow / override policy', () => {
     const c = new CameraController();
     c.focus(seatView(0));                  // pinned bottom-left
     // a point deep in the opposite (top-right) quadrant is off-screen here
-    const moved = c.ensureVisible([{ x: 2200, y: 200 }], vp);
+    const moved = c.keepVisible([{ x: 2200, y: 200 }], vp);
     expect(moved).toBe(true);
     expect(c.view()).toEqual(TABLE_VIEW);
   });
@@ -168,8 +168,46 @@ describe('CameraController follow / override policy', () => {
     const vp = { w: 1920, h: 1080 };
     const c = new CameraController();
     c.focus(seatView(0));
-    const moved = c.ensureVisible([{ x: 120, y: 1400 }], vp);  // inside the focused quadrant
+    const moved = c.keepVisible([{ x: 120, y: 1400 }], vp);  // inside the focused quadrant
     expect(moved).toBe(false);
     expect(c.view()).toEqual(seatView(0));
+  });
+
+  it('§14: the pull-back is transient — it restores the manual pin once the object returns', () => {
+    const vp = { w: 1920, h: 1080 };
+    const c = new CameraController();
+    c.focus(seatView(0));                  // pinned bottom-left
+    c.keepVisible([{ x: 2200, y: 200 }], vp);            // off-screen → table
+    expect(c.view()).toEqual(TABLE_VIEW);
+    const moved = c.keepVisible([], vp);                 // prompt cleared → restore the pin
+    expect(moved).toBe(true);
+    expect(c.view()).toEqual(seatView(0));
+    expect(c.isFollowing()).toBe(false);
+  });
+
+  it('§14: a pull-back while following restores to whoever is active now, not a stale seat', () => {
+    const vp = { w: 1920, h: 1080 };
+    const c = new CameraController();
+    c.syncActive(0);
+    c.syncActive(1);                       // following seat 1 (bottom-right)
+    c.keepVisible([{ x: 200, y: 200 }], vp);            // far top-left → off-screen → table
+    expect(c.view()).toEqual(TABLE_VIEW);
+    c.syncActive(2);                       // turn advances under the pull-back
+    c.keepVisible([], vp);                 // released → follows the *new* active seat
+    expect(c.view()).toEqual(seatView(2));
+    expect(c.isFollowing()).toBe(true);
+  });
+
+  it('§14: an explicit pick cancels a pull-back rather than snapping back to it', () => {
+    const vp = { w: 1920, h: 1080 };
+    const c = new CameraController();
+    c.focus(seatView(0));                  // pinned bottom-left
+    c.keepVisible([{ x: 200, y: 200 }], vp);            // far top-left → table
+    c.focus(seatView(2));                  // user pins top-right mid-pull-back
+    expect(c.view()).toEqual(seatView(2));
+    c.keepVisible([{ x: 200, y: 200 }], vp);            // still off-screen from seat 2 → table again
+    expect(c.view()).toEqual(TABLE_VIEW);
+    c.keepVisible([], vp);                 // clears → back to the seat the user picked
+    expect(c.view()).toEqual(seatView(2));
   });
 });

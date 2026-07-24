@@ -49,6 +49,11 @@ interface Step { state: GameState; events: readonly GameEvent[] }
 
 export const BASE_STEP_MS = 300;    // a normal move at an empty backlog
 const CAMERA_MANUAL_MS = 260;       // a user-driven camera move (1–4 / compass / Esc)
+// An *automatic* camera glide — a turn-change follow, or a §14 pull-back/restore.
+// The camera rides its own clock, not the step's, so a turn eases in even when the
+// underlying state update is a cut; a touch slower than the manual move so an
+// unbidden move reads as gentle, not a yank (matches the manual picker's feel).
+const CAMERA_FOLLOW_MS = 340;
 const DROP_THRESHOLD = 3;           // backlog past which we snap all but the newest
 const MIN_STEP_MS = 90;             // durations never scale below this while animating
 const DEFAULT_FLUSH_MS = 400;       // §6.4 budgeted-flush cap
@@ -136,7 +141,7 @@ export class Director {
   /** Push one step to the scene at `durationMs`; a 0 duration settles instantly. */
   private applyStep(step: Step, durationMs: number): void {
     accumulateStackLinks(this.links, step.events);
-    this.reframe(step.state, durationMs);
+    this.reframe(step.state);
     this.sink.applyTransition(step.state, this.presentedState, step.events, durationMs, this.links);
     if (durationMs > 0) {
       this.stepActive = true;
@@ -161,10 +166,20 @@ export class Director {
 
   // ── camera (design §7.3 — camera moves are the director's) ───────────────────
 
-  private reframe(state: GameState, durationMs: number): void {
+  private reframe(state: GameState): void {
     const before = this.controller.view();
     this.controller.syncActive(seatOfPlayer(state, state.turn.activePlayerId));
-    if (!sameView(before, this.controller.view())) this.moveCameraTo(this.controller.view(), durationMs);
+    const after = this.controller.view();
+    if (sameView(before, after)) return;
+    // The camera glides on its own clock (§7.3, CAMERA_FOLLOW_MS), decoupled from the
+    // step animation: a turn change eases in even when the state step itself is a cut
+    // (an eventless advisory update, or a snap while a deep backlog catches up). Only
+    // a genuine discontinuity cuts the camera too — the first paint, a new game, or
+    // reduced motion.
+    const hardCut = this.reducedMotion
+      || this.presentedState === undefined
+      || this.presentedState.gameId !== state.gameId;
+    this.moveCameraTo(after, hardCut ? 0 : CAMERA_FOLLOW_MS);
   }
 
   /** Retarget the camera, tweening from its current interpolated preset. A 0
@@ -194,13 +209,15 @@ export class Director {
   showTable(): void { this.controller.focus(TABLE_VIEW); this.moveCameraTo(TABLE_VIEW, CAMERA_MANUAL_MS); }
   releaseCamera(): void { this.controller.release(); this.moveCameraTo(this.controller.view(), CAMERA_MANUAL_MS); }
 
-  /** §14: pull back to the whole table if any named point is off-screen. */
-  ensureVisible(points: Point[]): boolean {
-    if (this.controller.ensureVisible(points, this.viewport, this.rightInset)) {
-      this.moveCameraTo(TABLE_VIEW, CAMERA_MANUAL_MS);
-      return true;
-    }
-    return false;
+  /** §14: keep the objects a prompt names in shot — pull back to the whole table
+   *  while any is off-screen, and ease back to the pinned/followed view once they're
+   *  visible again (or the prompt clears). The pull-back and the restore both glide;
+   *  each interrupts an in-flight move smoothly (moveCameraTo eases from the live
+   *  interpolated preset). Returns true if it moved the camera. */
+  keepVisible(points: Point[]): boolean {
+    if (!this.controller.keepVisible(points, this.viewport, this.rightInset)) return false;
+    this.moveCameraTo(this.controller.view(), CAMERA_FOLLOW_MS);
+    return true;
   }
 
   setViewport(size: Size): void {

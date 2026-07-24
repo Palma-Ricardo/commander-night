@@ -8,19 +8,31 @@
 //    release it (Esc), which resumes follow.
 //  • One — and only one — exception to stickiness: a prompt naming an object the
 //    lens cannot see pulls back to the whole table (§14). Pulling back is always
-//    safe; flying to a corner when the prompt spans several seats is not.
+//    safe; flying to a corner when the prompt spans several seats is not. That
+//    pull-back is **transient** — it releases itself the moment the object is back
+//    in shot (or the prompt clears), restoring the pin (or the followed seat) you
+//    were on. There is no saved state to leak: it is recomputed from the intended
+//    view on every `keepVisible`, so it can never outlive its reason.
 
 import type { Point, Size } from '../layout/types';
 import { camera, rectVisible, seatView, TABLE_VIEW, type CameraView } from './camera';
 
 export class CameraController {
-  private current: CameraView = TABLE_VIEW;
+  // The view the follow/pin policy *wants* — moved by syncActive (follow) and focus
+  // (manual pin). What we render can differ from it only while a §14 pull-back holds
+  // the whole table; `view()` folds the two together.
+  private intent: CameraView = TABLE_VIEW;
   private following = true;
   private lastActiveSeat = -1;
+  // §14: a prompt references something the intended view can't show, so we hold the
+  // whole table until it can. Recomputed from scratch on every keepVisible (no saved
+  // view), so releasing it always lands back on `intent` — the pin or followed seat.
+  private pulledBack = false;
 
-  /** The view the scene should render this frame. */
+  /** The view the scene should render this frame — the intended view, unless a §14
+   *  pull-back is holding the whole table. */
   view(): CameraView {
-    return this.current;
+    return this.pulledBack ? TABLE_VIEW : this.intent;
   }
 
   isFollowing(): boolean {
@@ -31,39 +43,55 @@ export class CameraController {
    *  an actual *change* from a previously-known active seat, so the initial load
    *  stays on the whole table until play moves — the whole quadrant world reads
    *  first, then the camera starts following (design §7.3: "re-frames on turn
-   *  change"). Seat < 0 means unknown (e.g. the pre-game mulligan window). */
+   *  change"). Seat < 0 means unknown (e.g. the pre-game mulligan window). Moves the
+   *  *intended* view even while a pull-back holds the table, so releasing the
+   *  pull-back lands on whoever is active now, not a stale seat. */
   syncActive(activeSeat: number): void {
     if (activeSeat < 0) return;
     const prev = this.lastActiveSeat;
     this.lastActiveSeat = activeSeat;
-    if (prev >= 0 && prev !== activeSeat && this.following) this.current = seatView(activeSeat);
+    if (prev >= 0 && prev !== activeSeat && this.following) this.intent = seatView(activeSeat);
   }
 
-  /** User override — pin a seat (or the whole table). Sticky until released. */
+  /** User override — pin a seat (or the whole table). Sticky until released, and it
+   *  cancels any transient pull-back: an explicit pick is what you want to see. */
   focus(view: CameraView): void {
     this.following = false;
-    this.current = view;
+    this.intent = view;
+    this.pulledBack = false;
   }
 
   /** Esc — resume following; snap to whoever is active, else the whole table. */
   release(): void {
     this.following = true;
-    this.current = this.lastActiveSeat >= 0 ? seatView(this.lastActiveSeat) : TABLE_VIEW;
+    this.intent = this.lastActiveSeat >= 0 ? seatView(this.lastActiveSeat) : TABLE_VIEW;
+    this.pulledBack = false;
   }
 
-  /** §14: before a prompt becomes actionable, if any world point it concerns is
-   *  off-screen under the current view, pull back to the whole table — the one
-   *  preset that can never be wrong. Returns true if it moved the camera. */
-  ensureVisible(points: Point[], viewport: Size, rightInset = 0): boolean {
-    if (this.current.kind === 'table' || points.length === 0) return false;
-    const preset = camera(this.current, viewport, rightInset);
-    // A point counts as visible only inside the safe area (above the hand band and
-    // clear of the open log), which rectVisible enforces for a zero-size rect there.
-    const allVisible = points.every(p => rectVisible(preset, { x: p.x, y: p.y, w: 0, h: 0 }, viewport, rightInset));
-    if (allVisible) return false;
-    this.current = TABLE_VIEW;
-    return true;
+  /** §14: keep the world points a prompt names in shot. Pull back to the whole table
+   *  while any would be off-screen under the intended view; drop the pull-back — back
+   *  to the pin or the followed seat — the moment they're all visible again, or there
+   *  are none (the prompt cleared, the spell resolved off the stack). Idempotent:
+   *  recomputed each call, so it never sticks on the table after its reason is gone.
+   *  Returns true if the *rendered* view changed. */
+  keepVisible(points: Point[], viewport: Size, rightInset = 0): boolean {
+    const before = this.view();
+    this.pulledBack = !this.intentShows(points, viewport, rightInset);
+    return !sameView(before, this.view());
   }
+
+  /** Whether the intended view frames every point inside the safe area (above the
+   *  hand band, clear of the open log). The whole table shows everything by
+   *  construction, and an empty point set has nothing to hide. */
+  private intentShows(points: Point[], viewport: Size, rightInset: number): boolean {
+    if (this.intent.kind === 'table' || points.length === 0) return true;
+    const preset = camera(this.intent, viewport, rightInset);
+    return points.every(p => rectVisible(preset, { x: p.x, y: p.y, w: 0, h: 0 }, viewport, rightInset));
+  }
+}
+
+function sameView(a: CameraView, b: CameraView): boolean {
+  return a.kind === 'table' ? b.kind === 'table' : b.kind === 'seat' && a.seat === b.seat;
 }
 
 // Re-export the visibility helper for callers that frame against whole rects.

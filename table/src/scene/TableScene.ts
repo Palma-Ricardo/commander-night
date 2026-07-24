@@ -731,9 +731,9 @@ export class TableScene implements DirectorSink {
     this.currentPrompt = prompt;
     this.refreshAffordances();
     this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
-    if (changed && prompt?.pending !== undefined) {
-      this.director.flush();          // §6.4: input never waits on animation
-      this.pullBackForPrompt(prompt); // §14: keep the asked-about objects in shot
+    if (changed) {
+      if (prompt?.pending !== undefined) this.director.flush();   // §6.4: input never waits on animation
+      this.syncCameraForPrompt(prompt);   // §14: pull back for off-screen refs, restore when clear
     }
     this.lastPromptId = newId;
   }
@@ -782,19 +782,25 @@ export class TableScene implements DirectorSink {
     if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
   }
 
-  /** §14: pull back to the whole table if a card the prompt names sits off-screen
-   *  under the current (manual) camera. Screen-space objects (your hand) are
-   *  always visible, so only world actors contribute points. */
-  private pullBackForPrompt(prompt: PromptStoreState): void {
-    const ids = new Set(promptObjectIds(prompt));
-    if (ids.size === 0) return;
+  /** §14: keep the objects the current prompt names in shot — pull back to the whole
+   *  table while any sits off-screen under the pinned/followed view, and ease back to
+   *  that view once they're visible again or the prompt clears. Recomputed on every
+   *  prompt change, so the pull-back never outlives its reason (e.g. a spell that
+   *  targeted across the table resolving off the stack — the camera then returns to
+   *  the pin you set, or resumes follow). Screen-space objects (your hand) are always
+   *  visible, so only world actors contribute points; no pending prompt ⇒ no points ⇒
+   *  a plain restore. */
+  private syncCameraForPrompt(prompt: PromptStoreState | undefined): void {
     const pts: Point[] = [];
-    for (const a of this.actors.values()) {
-      if (a.objectId !== undefined && a.space === 'world' && ids.has(a.objectId)) {
-        pts.push({ x: a.placement.x, y: a.placement.y });
+    if (prompt?.pending !== undefined) {
+      const ids = new Set(promptObjectIds(prompt));
+      for (const a of this.actors.values()) {
+        if (a.objectId !== undefined && a.space === 'world' && ids.has(a.objectId)) {
+          pts.push({ x: a.placement.x, y: a.placement.y });
+        }
       }
     }
-    this.director.ensureVisible(pts);
+    this.director.keepVisible(pts);
   }
 
   // ── camera controls (design §7.3), delegated to the director ──────────────────

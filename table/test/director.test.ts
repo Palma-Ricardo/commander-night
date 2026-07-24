@@ -166,6 +166,9 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     dir.present(game('a', 'p2'), STEP);    // turn moves to Ana (display seat 1)
     expect(dir.cameraView()).toEqual(seatView(1));
     drain(dir);
+    // The camera rides its own clock now (CAMERA_FOLLOW_MS), which outlasts the step,
+    // so drain (which stops at step-settle) leaves a short tail — tick it out.
+    for (let i = 0; i < 40; i++) dir.tick(16);
     // the camera preset interpolated all the way to the seat framing
     const want = camera(seatView(1), VP);
     expect(dir.cameraPreset().scale).toBeCloseTo(want.scale, 3);
@@ -181,13 +184,39 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     expect(dir.cameraView()).toEqual(seatView(2));
   });
 
-  it('§14: a point the lens cannot see pulls back to the whole table', () => {
+  it('§14: a point the lens cannot see pulls back to the whole table, then restores the pin', () => {
     const { dir } = spy();
     dir.present(game('a', 'p1'), []);
     dir.focusSeat(0);                      // pinned bottom-left
-    const moved = dir.ensureVisible([{ x: 2200, y: 200 }]);   // deep in the far quadrant
+    const moved = dir.keepVisible([{ x: 2200, y: 200 }]);   // deep in the far quadrant
     expect(moved).toBe(true);
     expect(dir.cameraView()).toEqual(TABLE_VIEW);
+    // the prompt clears (or the spell resolves) → the transient pull-back releases
+    // and the camera returns to the pin it was on, rather than sticking on the table.
+    expect(dir.keepVisible([])).toBe(true);
+    expect(dir.cameraView()).toEqual(seatView(0));
+  });
+
+  it('a turn change eases the camera even when the state step is a cut (eventless)', () => {
+    const { dir } = spy();
+    dir.present(game('a', 'p1'), []);      // baseline
+    // An eventless advisory update settles instantly (a state cut), but a turn change
+    // rides its own camera clock, so the lens still glides rather than snapping.
+    dir.present(game('a', 'p2'), []);
+    expect(dir.settled).toBe(true);        // the *state* cut through with no animation…
+    const first = dir.cameraPreset().scale;
+    dir.tick(16);                          // …but the *camera* is mid-glide
+    const mid = dir.cameraPreset().scale;
+    expect(mid).not.toBeCloseTo(first, 4);
+    expect(mid).not.toBeCloseTo(camera(seatView(1), VP).scale, 4);
+  });
+
+  it('reduced motion cuts the follow camera outright', () => {
+    const { dir } = spy({ reducedMotion: true });
+    dir.present(game('a', 'p1'), []);
+    dir.present(game('a', 'p2'), STEP);
+    // no glide: the camera is already exactly at the seat framing on the same frame
+    expect(dir.cameraPreset().scale).toBeCloseTo(camera(seatView(1), VP).scale, 6);
   });
 
   it('a manual camera move interpolates rather than cutting', () => {
