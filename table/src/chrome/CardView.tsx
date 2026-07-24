@@ -129,8 +129,10 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
           {(card.counters ?? []).reduce((n, c) => n + c.count, 0)}
         </span>
       )}
-      {/* XMage sends power "0" for some non-creatures — badge creatures only */}
-      {image?.status === 'ok' && card.power !== undefined && card.types.includes('CREATURE') && (
+      {/* XMage sends power "0" for some non-creatures — badge creatures only. Ability
+          cards (trigger-order picker) hide it: the plate covers the whole lower card
+          and the source's P/T is noise there. */}
+      {image?.status === 'ok' && card.ability !== true && card.power !== undefined && card.types.includes('CREATURE') && (
         <span className="badge badge-pt">{card.power}/{card.toughness}</span>
       )}
       {selected && <span className="badge badge-check">✓</span>}
