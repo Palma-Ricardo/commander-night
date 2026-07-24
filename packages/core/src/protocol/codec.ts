@@ -157,6 +157,7 @@ const cardShape: Shape = {
   opt: {
     manaCost: str, power: str, toughness: str, loyalty: str, defense: str,
     counters: arr(counterC), token: bool, imageNumber: num, faceDown: bool,
+    ability: bool,
   },
 };
 const cardC = obj(cardShape);

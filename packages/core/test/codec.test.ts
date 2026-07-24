@@ -118,6 +118,30 @@ describe('deep GameState validation', () => {
     expect(r.msg.state.players[0]?.battlefield[0]?.imageNumber).toBe(0);
   });
 
+  it('accepts ability on a chooseTargets card in strict mode (§7 trigger-order picker)', () => {
+    // Regression guard. Live 2026-07-23: a trigger-order picker (Lattice Library's
+    // ETB) arrives as a chooseTargets whose cards carry `ability:true` (the source
+    // card's printing + that one ability's rule). The type + spec define the field
+    // but cardShape.opt omitted it, so dev-strict decode rejected `cards[0].ability`
+    // as unknown — silently dropping the whole prompt, no modal, wedging the game on
+    // XMage's waitForResponse. Both a card in a prompt grid and (below) any card path.
+    const frame = JSON.stringify({
+      t: 'game.prompt', seq: 1, gameId: 'g1', promptId: 9, message: 'Pick triggered ability',
+      kind: 'chooseTargets', candidates: ['ab-1'], min: 1, max: 1, required: true,
+      cards: [{
+        id: 'ab-1', name: 'Chishiro, the Shattered Blade', set: 'NEO', number: '215', manaValue: 3,
+        types: ['CREATURE'], subtypes: ['Snake', 'Warrior'], supertypes: ['Legendary'],
+        colors: ['R', 'G'], text: ['Whenever an Aura or Equipment you control enters, …'],
+        ability: true,
+      }],
+    });
+    const r = decode(frame, { strict: true });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (!r.ok || r.msg === null) throw new Error('unreachable');
+    if (r.msg.t !== 'game.prompt' || r.msg.kind !== 'chooseTargets') throw new Error('wrong type');
+    expect(r.msg.cards?.[0]?.ability).toBe(true);
+  });
+
   it('flags an unknown field nested deep in a player (strict), passes it leniently', () => {
     const doctored = JSON.parse(stateSample) as {
       state: { players: Record<string, unknown>[] };
