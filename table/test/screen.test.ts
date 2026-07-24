@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { StackItem } from '@night/core';
-import { handBandHeight, layoutScreen } from '../src/layout/screen';
+import { handBandHeight, layoutScreen, stackEffectText } from '../src/layout/screen';
 import { cid, fourSeats, mkCard, mkPlayer, mkState, SUPPORTED_VIEWPORTS } from './helpers';
 
 const spell = (name: string): StackItem =>
   ({ id: cid('stk'), kind: 'spell', controllerId: 'p1', text: [], card: mkCard(name, ['SORCERY']) });
+const abilityItem = (text: string[]): StackItem =>
+  ({ id: cid('stk'), kind: 'ability', controllerId: 'p1', text, card: mkCard('Krenko', ['CREATURE']) });
+const modalSpell = (chosen: string[]): StackItem =>
+  ({ id: cid('stk'), kind: 'spell', controllerId: 'p1', card: mkCard('Cryptic Command', ['INSTANT']),
+     text: ['Choose two —', '• A.', '• B.', ...chosen.map(m => `Chosen mode: ${m}`)] });
 
 describe('handBandHeight', () => {
   it('clamps between 132 and 240 across window sizes', () => {
@@ -140,6 +145,31 @@ describe('layoutScreen (the stack pile)', () => {
     const open = stackOf(layoutScreen(withStack(items), vp, 400))[0]!.placement.x;
     expect(open).toBeLessThan(closed);              // the gutter pushes it inward
     expect(open).toBeLessThanOrEqual(vp.w - 400);   // clear of the panel
+  });
+});
+
+describe('stackEffectText (what to overlay on a stack card)', () => {
+  it('surfaces a triggered ability\'s own rules under an ABILITY header', () => {
+    const e = stackEffectText(abilityItem(['Create a 1/1 red Goblin creature token.']));
+    expect(e).toEqual({ label: 'ABILITY', lines: ['Create a 1/1 red Goblin creature token.'] });
+  });
+
+  it('drops blank lines but keeps the ABILITY header even when the rules scrape to nothing', () => {
+    expect(stackEffectText(abilityItem(['', '  ']))).toEqual({ label: 'ABILITY', lines: [] });
+  });
+
+  it('leaves a plain spell untouched (its printed box is what resolves)', () => {
+    expect(stackEffectText(spell('Reality Shift'))).toBeUndefined();
+  });
+
+  it('surfaces the one chosen mode of a modal spell under a MODE header', () => {
+    expect(stackEffectText(modalSpell(['Counter target spell.'])))
+      .toEqual({ label: 'MODE', lines: ['Counter target spell.'] });
+  });
+
+  it('surfaces every chosen mode under a plural MODES header, prefix stripped', () => {
+    expect(stackEffectText(modalSpell(['Counter target spell.', 'Draw a card.'])))
+      .toEqual({ label: 'MODES', lines: ['Counter target spell.', 'Draw a card.'] });
   });
 });
 

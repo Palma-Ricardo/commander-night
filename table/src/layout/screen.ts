@@ -8,7 +8,7 @@
 // motion no longer crosses the world↔screen seam (T4 cast animation). Pure and
 // headless — no renderer, no camera, no time.
 
-import type { GameState } from '@night/core';
+import type { GameState, StackItem } from '@night/core';
 import type { PlacedActor, Point, Size } from './types';
 
 const CARD_TEX = { w: 200, h: 280 } as const;
@@ -74,6 +74,30 @@ function layoutHand(state: GameState, viewport: Size, rightInset: number, out: P
 // cards' worth. The carousel that scrubs buried items forward is a later phase; for
 // now the top is legible and the depth reads from the fan.
 
+// XMage tags each selected mode of a modal spell on the stack with this prefix in
+// the spell's rules (CardView: "Chosen mode: …"), so the chosen mode is legible
+// even though the printed box lists them all. The bridge strips the HTML but keeps
+// the line, so it rides through on StackItem.text.
+const CHOSEN_MODE_PREFIX = 'Chosen mode:';
+
+/** The effect text to lay over a stack card's text-box region — or undefined to
+ *  leave the printed face untouched (design §9, T4). See `ActorPlacement.stackEffect`
+ *  for the why: an ability's source card shows *all* its abilities and a modal
+ *  spell's box shows *all* its modes, so we surface just what's on the stack — the
+ *  triggered ability's own rules, or the chosen mode(s). A plain spell returns
+ *  undefined (its printed box already is what resolves). */
+export function stackEffectText(item: StackItem): { label: string; lines: string[] } | undefined {
+  if (item.kind === 'ability') {
+    return { label: 'ABILITY', lines: item.text.map(l => l.trim()).filter(l => l !== '') };
+  }
+  const chosen = item.text
+    .filter(l => l.startsWith(CHOSEN_MODE_PREFIX))
+    .map(l => l.slice(CHOSEN_MODE_PREFIX.length).trim())
+    .filter(l => l !== '');
+  if (chosen.length === 0) return undefined;
+  return { label: chosen.length > 1 ? 'MODES' : 'MODE', lines: chosen };
+}
+
 const STACK_MARGIN = 30;             // right edge → front card
 const STACK_SLIVER = 0.15;           // fraction of a card width each buried item shows
 const STACK_DEPTH_CAP = 8;           // buried-item falloff saturates here (deep stacks)
@@ -123,6 +147,7 @@ function layoutStack(state: GameState, viewport: Size, rightInset: number, out: 
     // depth: 0 for the top (front), growing as we descend toward the oldest item.
     const depth = n - 1 - i;
     const d = Math.min(depth, STACK_DEPTH_CAP);
+    const effect = stackEffectText(item);
     out.push({
       key: item.id, card: item.card, objectId: item.card?.id, space: 'screen',
       placement: {
@@ -133,7 +158,7 @@ function layoutStack(state: GameState, viewport: Size, rightInset: number, out: 
         zone: 'stack',
         ownerId: item.controllerId,
         faceUp: true,
-        ...(item.kind === 'ability' ? { ability: true } : {}),
+        ...(effect ? { stackEffect: effect } : {}),
       },
     });
   });
@@ -168,6 +193,7 @@ function layoutStackSpread(state: GameState, viewport: Size, rightInset: number,
   const cy = (viewport.h - band) / 2;
 
   items.forEach((item, i) => {
+    const effect = stackEffectText(item);
     out.push({
       key: item.id, card: item.card, objectId: item.card?.id, space: 'screen',
       placement: {
@@ -178,7 +204,7 @@ function layoutStackSpread(state: GameState, viewport: Size, rightInset: number,
         zone: 'stack',
         ownerId: item.controllerId,
         faceUp: true,
-        ...(item.kind === 'ability' ? { ability: true } : {}),
+        ...(effect ? { stackEffect: effect } : {}),
       },
     });
   });

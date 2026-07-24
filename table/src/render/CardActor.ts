@@ -117,17 +117,20 @@ export class CardActor {
       ? `${card.power}/${card.toughness}` : '';
     const counters = artbox ? countersLabel(card.counters) : '';
     const count = artbox ? Math.max(1, Math.round(p.count ?? 1)) : 1;
-    // A stack ability renders as its source card, so it gets an "ABILITY" banner
-    // to keep it from reading as the permanent itself (§9 T4).
-    const ability = p.zone === 'stack' && p.faceUp && p.ability === true;
-    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${counters}|${count}|${ability}`;
+    // A stack card's printed text box isn't always what's resolving (an ability's
+    // source lists all its abilities; a modal spell lists all its modes), so we lay
+    // the actual effect over the box — the ability's rules, or the chosen mode(s)
+    // (§9 T4). Undefined for plain spells: the printed box already is what resolves.
+    const effect = p.zone === 'stack' && p.faceUp ? p.stackEffect : undefined;
+    const effectSig = effect ? `${effect.label}~${effect.lines.join('¦')}` : '';
+    const sig = `${artbox}|${tapped}|${w}x${h}|${pt}|${counters}|${count}|${effectSig}`;
     if (sig === this.chromeSig) return;
     this.chromeSig = sig;
 
     // (face tint is applied per-frame in render — it blends the tap dim with the
     //  death ramp, so it can't be baked here.)
     for (const c of this.chrome.removeChildren()) c.destroy({ children: true });
-    if (ability) this.chrome.addChild(abilityBanner(w, h));
+    if (effect) this.chrome.addChild(stackEffectPanel(w, h, effect.label, effect.lines));
     if (!artbox) return;
     if (pt !== '') this.chrome.addChild(ptBadge(pt, w, h, identityColor(card)));
     if (counters !== '') this.chrome.addChild(counterBadge(counters, w, h));
@@ -388,27 +391,51 @@ function ptBadge(pt: string, w: number, h: number, edge: number): Container {
   return c;
 }
 
-/** A gilt "ABILITY" band laid over the type-line region of an ability's source
- *  card, so a triggered/activated ability on the stack doesn't read as the
- *  permanent itself (design §9, T4). Sized to the card texture, billboarded and
+/** A panel laid over a stack card's text-box region (design §9, T4): a gilt header
+ *  ("ABILITY" / "MODE") over the effect that's actually on the stack — a triggered/
+ *  activated ability's own rules, or a modal spell's chosen mode(s) — so it doesn't
+ *  read as the source permanent's full box or all of a modal's modes. Keeps the
+ *  card's name + art above it visible. Sized to the card texture, billboarded and
  *  scaled with the face by `render`. */
-function abilityBanner(w: number, h: number): Container {
+function stackEffectPanel(w: number, h: number, label: string, lines: string[]): Container {
   const c = new Container();
-  const label = new Text({
-    text: 'ABILITY',
+  const panelW = w * 0.88;
+  // The printed text box sits below the type line (~55% down) and runs to the
+  // bottom info bar; cover that band, leaving name + art above it in the clear.
+  const top = h * 0.05;
+  const bottom = h * 0.46;
+  const panelH = bottom - top;
+  const pad = w * 0.05;
+
+  const g = new Graphics();
+  g.roundRect(-panelW / 2, top, panelW, panelH, PLATE_RADIUS).fill({ color: 0x14100c, alpha: 0.9 });
+  g.roundRect(-panelW / 2 + 1.2, top + 1.2, panelW - 2.4, panelH - 2.4, PLATE_RADIUS)
+    .stroke({ width: 1.5, color: 0xc9a24a, alpha: 0.92 });                    // gilt edge
+  c.addChild(g);
+
+  const header = new Text({
+    text: label,
     style: new TextStyle({
-      fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.072), fontWeight: '800',
-      fill: 0xf1d792, letterSpacing: Math.round(h * 0.018),
+      fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.05), fontWeight: '800',
+      fill: 0xf1d792, letterSpacing: Math.round(h * 0.01),
     }),
   });
-  label.anchor.set(0.5, 0.5);
-  const bw = w * 0.86, bh = label.height + h * 0.028;
-  const g = new Graphics();
-  g.roundRect(-bw / 2, -bh / 2, bw, bh, PLATE_RADIUS).fill({ color: 0x14100c, alpha: 0.88 });
-  g.roundRect(-bw / 2 + 1.2, -bh / 2 + 1.2, bw - 2.4, bh - 2.4, PLATE_RADIUS)
-    .stroke({ width: 1.5, color: 0xc9a24a, alpha: 0.95 });                    // gilt edge
-  c.addChild(g, label);
-  c.position.set(0, h * 0.06);                                               // over the type line
+  header.anchor.set(0.5, 0);
+  header.position.set(0, top + pad * 0.5);
+  c.addChild(header);
+
+  if (lines.length > 0) {
+    const body = new Text({
+      text: lines.join('\n'),
+      style: new TextStyle({
+        fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.043), fill: 0xe8e2cf,
+        wordWrap: true, wordWrapWidth: panelW - pad * 2, align: 'center', lineHeight: Math.round(h * 0.057),
+      }),
+    });
+    body.anchor.set(0.5, 0);
+    body.position.set(0, top + pad * 0.6 + header.height);
+    c.addChild(body);
+  }
   return c;
 }
 
