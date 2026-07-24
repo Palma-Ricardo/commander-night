@@ -323,7 +323,7 @@ public final class ViewTranslator {
                 for (SimpleCardView v : l.getCards().values()) {
                     cs.add(new Card(v.getId().toString(), "", v.getExpansionSetCode(), v.getCardNumber(),
                             null, 0, List.of(), List.of(), List.of(), List.of(), List.of(),
-                            null, null, null, null, null, null, null, null));
+                            null, null, null, null, null, null, null, null, null));
                 }
             }
             windows.add(new NamedCards(l.getName(), cs));
@@ -448,16 +448,16 @@ public final class ViewTranslator {
         if (v instanceof AbilityView av && av.getSourceCard() != null) {
             return cardFrom(av.getSourceCard(),
                     CommanderDamage.scrape(av.getRules()).remainingRules(),
-                    av.getId().toString());
+                    av.getId().toString(), true);
         }
         return cardFrom(v, CommanderDamage.scrape(v.getRules()).remainingRules());
     }
 
     private static Card cardFrom(CardView v, List<String> rawRules) {
-        return cardFrom(v, rawRules, v.getId().toString());
+        return cardFrom(v, rawRules, v.getId().toString(), false);
     }
 
-    private static Card cardFrom(CardView v, List<String> rawRules, String id) {
+    private static Card cardFrom(CardView v, List<String> rawRules, String id, boolean ability) {
         String manaCost = v.getManaCostStr();
         return new Card(
                 id,
@@ -479,7 +479,8 @@ public final class ViewTranslator {
                 v.isToken() ? true : null,
                 // Only tokens need it, and only they lack a collector number.
                 v.isToken() ? v.getImageNumber() : null,
-                v.isFaceDown() ? true : null);
+                v.isFaceDown() ? true : null,
+                ability ? Boolean.TRUE : null);
     }
 
     public static List<Card> cards(CardsView cv) {

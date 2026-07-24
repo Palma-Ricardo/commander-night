@@ -87,6 +87,8 @@ export interface Card {
   token?: boolean;
   imageNumber?: number;        // tokens only: art discriminator within set+name
   faceDown?: boolean;          // face-down anywhere (exile, library plays, …)
+  ability?: boolean;           // stands in for a source's ability (trigger-order picker,
+                               // §7): `text` is that one ability's rule, not the full box
 }
 
 export interface Permanent extends Card {

@@ -469,7 +469,7 @@ class EventDeriverTest {
 
     private static Card card(String id, String name) {
         return new Card(id, name, "SET", "1", null, 0, List.of(), List.of(), List.of(), List.of(),
-                List.of(), null, null, null, null, null, null, null, null);
+                List.of(), null, null, null, null, null, null, null, null, null);
     }
 
     private static Permanent perm(String id, String name, String controller) {

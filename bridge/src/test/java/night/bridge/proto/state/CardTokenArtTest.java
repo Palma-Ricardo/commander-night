@@ -22,7 +22,7 @@ class CardTokenArtTest {
         return new Card("c1", "Spirit", "NEC", token == Boolean.TRUE ? "" : "42",
                 null, 0, List.of("CREATURE"), List.of("Spirit"), List.of(),
                 List.of(Color.W), List.of(), "1", "1", null, null, null,
-                token, imageNumber, null);
+                token, imageNumber, null, null);
     }
 
     @Test

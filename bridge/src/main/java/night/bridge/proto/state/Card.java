@@ -40,5 +40,14 @@ public record Card(
          * and anthems change it while the art stays put.
          */
         Integer imageNumber,
-        Boolean faceDown) {
+        Boolean faceDown,
+        /**
+         * True (null otherwise) when this Card stands in for a triggered/activated
+         * ability shown by its source — a trigger-order picker (§7). It carries the
+         * source card's printing (name + set/number, so the art resolves) but its
+         * {@code text} is that one ability's rule, not the card's full box. The
+         * client overlays a readable "ABILITY" plate so the specific trigger is
+         * legible at grid scale, where the printed card art alone is not.
+         */
+        Boolean ability) {
 }
