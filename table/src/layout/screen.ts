@@ -17,7 +17,7 @@ const CARD_TEX = { w: 200, h: 280 } as const;
  *  into the viewport *above* this band, so every seat stays clear of the hand
  *  (design §13 exit criterion). Shared with the camera's safe area. */
 export function handBandHeight(viewport: Size): number {
-  return Math.max(132, Math.min(240, Math.round(viewport.h * 0.19)));
+  return Math.max(150, Math.min(300, Math.round(viewport.h * 0.22)));
 }
 
 /** The hand fan + the stack pile, in screen (CSS-pixel) coordinates. `rightInset`
@@ -54,7 +54,7 @@ function layoutHand(state: GameState, viewport: Size, rightInset: number, out: P
       key: card.id, card, objectId: card.id, space: 'screen',
       placement: {
         x: startX + i * step,
-        y: baseY + Math.abs(t) * band * 0.14,      // slight downward arc at the ends
+        y: baseY + Math.abs(t) * band * 0.10,      // slight downward arc at the ends
         rotation: t * 0.1,
         scale,
         zone: 'hand',

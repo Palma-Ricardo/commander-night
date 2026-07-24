@@ -16,7 +16,7 @@
 // keystones with the face; the P/T / tap / count chrome billboards upright at the
 // projected centre so it stays legible on a leaned card.
 
-import { Container, Graphics, GraphicsPath, PerspectiveMesh, Text, TextStyle, type Texture } from 'pixi.js';
+import { Container, Graphics, GraphicsPath, PerspectiveMesh, Rectangle, Text, TextStyle, type Texture } from 'pixi.js';
 import type { Card } from '@night/core';
 import { identityColor } from './textures';
 import type { ActorPlacement, ActorSpace, Point, Transform } from '../layout/types';
@@ -36,8 +36,10 @@ const RING_PAD = 0.06;         // affordance ring inset outside the face, in nat
 // reads in place. HOVER_LIFT is capped so the *bottom* edge never rises above rest
 // — see handHoverLift — because a bottom edge sliding up out from under the pointer
 // would drop the hover, lower the card, re-enter, and flicker.
-const HOVER_GROW = 0.35;       // extra scale at full hover → 1.35×
-const HOVER_LIFT = 0.15;       // upward shift, as a fraction of texH·scale (= 0.30·halfHeight)
+const HOVER_GROW = 0.6;        // extra scale at full hover → 1.6× (legible in place)
+const HOVER_LIFT = 0.26;       // upward shift, as a fraction of texH·scale. MUST stay
+                               // ≤ HOVER_GROW/2 or the bottom edge rises above rest and
+                               // the hover flickers (see handHoverLift + hover-lift.test).
 
 /** ease-out cubic — cards decelerate into place (overshoot/spring is T4). */
 const ease = (t: number): number => 1 - (1 - t) ** 3;
@@ -340,6 +342,31 @@ export class CardActor {
     this.chrome.position.set(c.x, c.y);
     this.chrome.rotation = rot;
     this.chrome.scale.set(screenScale);
+
+    // Hit-test the *resting* footprint, not the lifted/enlarged visual: a hovered
+    // hand card grows 1.6× for legibility, but if its hit area grew too it would
+    // blanket its neighbours — they'd stop receiving pointerover, so the hover could
+    // never move on and the card would sit stuck on top. Hand cards live in screen
+    // space with an identity projector, so their resting rect is just texW·scale
+    // about the settled centre. Other zones keep the mesh's own (projected) hit test.
+    if (this.placement.zone === 'hand') {
+      const b = this.hitBounds();
+      this.view.hitArea = new Rectangle(b.left, b.top, b.width, b.height);
+    } else if (this.view.hitArea !== null) {
+      this.view.hitArea = null;
+    }
+  }
+
+  /** The resting (un-lifted) footprint used to hit-test a hand card, so the visual
+   *  hover-enlarge never grows the clickable area over its neighbours. Other cards
+   *  don't lift, so their hit area is simply their projected face bounds. */
+  hitBounds(): ScreenAnchor {
+    if (this.placement.zone === 'hand') {
+      const hw = (this.texW * this.current.scale) / 2;
+      const hh = (this.texH * this.current.scale) / 2;
+      return { left: this.current.x - hw, top: this.current.y - hh, width: hw * 2, height: hh * 2 };
+    }
+    return this.bounds();
   }
 
   /** The on-screen bounding box of the projected face, for anchoring a DOM hover

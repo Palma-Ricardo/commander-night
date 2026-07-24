@@ -87,7 +87,11 @@ button.danger { background: var(--error); color: #14161a; }
 /* Clicks fall through to the felt; each island re-enables them. */
 .table-overlay { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
 .table-overlay > * { pointer-events: auto; }
-.hover-preview { pointer-events: none; }
+/* The preview must stay click-through so the canvas keeps getting pointermove
+   under it (the hover backstop hit-tests against the live pointer) — only the
+   scrollable oracle re-enables events. Needs to out-specify `.table-overlay > *`
+   above, or the whole preview captures the pointer and the hover sticks. */
+.table-overlay > .hover-preview { pointer-events: none; }
 
 /* ── top HUD: turn ribbon (centre), compass + camstate (right) ───────────── */
 

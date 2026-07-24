@@ -1,12 +1,16 @@
 // Texture LOD (design §10). A full Scryfall face is ~488×680 → ~1.3 MB RGBA on
-// the GPU, so 300 cards at full res would be ~400 MB of VRAM and crash the tab.
-// Three tiers:
-//   • TABLE  ~200×280 — full portrait cards: the hand, the stack, the piles.
-//   • ARTBOX ~200×184 — battlefield permanents (design T4): a name bar over the
-//                       card's `art_crop`, rules text trimmed off. P/T and the tap
-//                       glyph are drawn as live overlays by CardActor, not baked.
-//   • DETAIL full res  — only the hover preview + focused/stack card, a handful
-//                        at a time, evicted LRU.
+// the GPU. We're not VRAM-constrained on the target machines, so every tier now
+// carries full-resolution pixels — the difference is only the *logical* footprint
+// each reports to the headless layout, and the art window each shows:
+//   • TABLE  logical 200×280 — full portrait cards (the hand, the stack, the
+//                       piles), rendered at detail pixels so they stay crisp when
+//                       enlarged (a lifted/previewed hand card) or shown on a 1440p+.
+//   • ARTBOX logical 200×184 — battlefield permanents (design T4): a name bar over
+//                       the card's `art_crop`, rules text trimmed off, supersampled
+//                       2× so it stays sharp when a permanent renders large. P/T and
+//                       the tap glyph are drawn as live overlays by CardActor.
+//   • DETAIL full res  — the stack's big front card (its own tight LRU).
+// Each cache is still LRU-capped, generously, so a long game can't leak unbounded.
 // The **text-frame** face (name + mana + P/T on a colour-identity panel) is
 // rendered into a texture — that is also the permanent fallback for an unresolved
 // image (§10: the frame is rendered into a texture, never dropped), so a card with
@@ -28,11 +32,13 @@ export const TIER_SIZE: Record<Tier, { w: number; h: number }> = {
   artbox: { w: 200, h: 184 },
 };
 
-const ARTBOX_NAME_H = 34;    // the name bar over the art (native px), rest is art
+const ARTBOX_NAME_H = 34;    // the name bar over the art (logical px), rest is art
+const ARTBOX_SS = 2.5;       // art-box supersample factor (crisp when rendered large)
 
-const DETAIL_LRU_CAP = 24;   // §10: only a handful of full-res faces live at once
-const IMAGE_LRU_CAP = 400;   // decoded table-tier art textures; 400 × ~224 KB ≈ 90 MB VRAM
-const DETAIL_ART_LRU_CAP = 12;   // full-res stack art (~1.3 MB each) — keep only a few live
+const DETAIL_LRU_CAP = 24;   // §10: only a handful of full-res text frames live at once
+const IMAGE_LRU_CAP = 400;   // decoded art-box textures (battlefield); ~590 KB each
+const PORTRAIT_HD_CAP = 220;   // full-res portrait art for hand/pile/table tier (~1.3 MB each)
+const DETAIL_ART_LRU_CAP = 24;   // full-res stack art (~1.3 MB each)
 
 // Colour-identity → frame fill. Single colour = its WUBRG hue, multicolour =
 // gold, artifact/colourless = steel, land = tan. Read at a glance from across
@@ -254,9 +260,11 @@ export class CardTextures {
     image.src = corsCacheKey(url);
   }
 
-  /** Portrait card art, downscaled to the table tier (§10 VRAM budget). */
+  /** Portrait card art for the table tier (hand, piles). Full-res pixels reported at
+   *  table-logical size, so a lifted/enlarged hand card and a 1440p+ table stay crisp
+   *  (VRAM is not the constraint on the target machines) — same LRU discipline. */
   private ensureArt(url: string): void {
-    this.loadImage(url, this.art, tableArtTexture);
+    this.loadImage(url, this.art, detailArtTexture, PORTRAIT_HD_CAP);
   }
 
   /** Full-res portrait art for the stack's large front card (its own tight LRU, as
@@ -362,11 +370,13 @@ function artboxCanvas(card: Card, image?: HTMLImageElement): Texture {
   const nameH = ARTBOX_NAME_H;
   const pad = 6;
   const edge = identityColor(card);
+  const R = ARTBOX_SS;   // supersample: full-res pixels, table-logical size (below)
   const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = w * R;
+  canvas.height = h * R;
   const ctx = canvas.getContext('2d');
   if (ctx === null) throw new Error('no 2d context');
+  ctx.scale(R, R);       // draw in logical coords; the backing store is R× denser
   ctx.imageSmoothingQuality = 'high';
 
   ctx.save();
@@ -420,7 +430,9 @@ function artboxCanvas(card: Card, image?: HTMLImageElement): Texture {
   ctx.strokeStyle = cssHex(edge);
   ctx.lineWidth = 3.5;
   ctx.stroke();
-  return Texture.from(canvas);
+  // Report the logical (table-tier) size so the headless layout is unchanged; the
+  // extra pixels just make the box sharp when a permanent renders large (T4).
+  return new Texture({ source: new CanvasSource({ resource: canvas, resolution: R }) });
 }
 
 /** A cream, bevelled "metal" plate with a colour-identity edge — the Arena look,

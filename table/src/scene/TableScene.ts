@@ -296,6 +296,13 @@ export class TableScene implements DirectorSink {
       if (!live.has(key)) { actor.destroy(); this.actors.delete(key); }
     }
 
+    // Keep a hovered hand card raised to the front through the transition — the
+    // placement loop just re-appended every actor in natural fan order.
+    if (this.hoveredKey !== undefined) {
+      const hv = this.actors.get(this.hoveredKey);
+      if (hv !== undefined && hv.space === 'screen') this.screenActors.addChild(hv.view);
+    }
+
     this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
@@ -805,13 +812,29 @@ export class TableScene implements DirectorSink {
     }
   }
 
-  /** Drop the current hover: lower the lifted card and dismiss the preview (with the
-   *  §9 grace, so the pointer can still reach the preview to scroll it). */
+  /** Drop the current hover: lower the lifted card, put it back in the fan's natural
+   *  z-order (setHovered raised it to the front to read it), and dismiss the preview
+   *  (with the §9 grace, so the pointer can still reach the preview to scroll it). */
   private clearHover(): void {
     if (this.hoveredKey === undefined) return;
     this.actors.get(this.hoveredKey)?.setHover(false);
     this.hoveredKey = undefined;
+    this.restackScreen();
     this.onObjectHover?.(undefined);
+  }
+
+  /** Re-append the screen-space actors (hand + stack) in layout order, restoring the
+   *  natural fan z-order after a hover raised one card to the front. Cheap — same
+   *  keys, no create/destroy, no tween. */
+  private restackScreen(): void {
+    const state = this.director.presented;
+    if (state === undefined) return;
+    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack);
+    for (const [key, p] of placed) {
+      if (p.space !== 'screen') continue;
+      const actor = this.actors.get(key);
+      if (actor !== undefined) this.screenActors.addChild(actor.view);
+    }
   }
 
   /** Per-frame backstop: Pixi fires `pointerout` only on pointer movement, so a card
@@ -822,7 +845,10 @@ export class TableScene implements DirectorSink {
   private verifyHover(): void {
     if (this.hoveredKey === undefined) return;
     const actor = this.actors.get(this.hoveredKey);
-    if (actor === undefined || this.pointer === undefined || !anchorContains(actor.bounds(), this.pointer)) {
+    // Test the *resting* hit footprint, not the lifted visual — otherwise a raised
+    // hand card's enlarged bounds would keep the pointer "inside" it while it's
+    // really over a neighbour, and the hover would never move on.
+    if (actor === undefined || this.pointer === undefined || !anchorContains(actor.hitBounds(), this.pointer)) {
       this.clearHover();
     }
   }

@@ -21,9 +21,9 @@ describe('handHoverLift', () => {
     expect(handHoverLift(TEX_H, SCALE, 0)).toEqual({ scale: SCALE, lift: 0 });
   });
 
-  it('grows the card toward 1.35× and raises it', () => {
+  it('grows the card toward 1.6× and raises it', () => {
     const full = handHoverLift(TEX_H, SCALE, 1);
-    expect(full.scale).toBeCloseTo(SCALE * 1.35, 6);
+    expect(full.scale).toBeCloseTo(SCALE * 1.6, 6);
     expect(full.lift).toBeGreaterThan(0);
   });
 

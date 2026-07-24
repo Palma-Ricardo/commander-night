@@ -12,12 +12,16 @@ const modalSpell = (chosen: string[]): StackItem =>
      text: ['Choose two —', '• A.', '• B.', ...chosen.map(m => `Chosen mode: ${m}`)] });
 
 describe('handBandHeight', () => {
-  it('clamps between 132 and 240 across window sizes', () => {
+  it('clamps between 150 and 300 across window sizes', () => {
     for (const vp of [...SUPPORTED_VIEWPORTS, { w: 800, h: 400 }, { w: 3840, h: 2160 }]) {
       const h = handBandHeight(vp);
-      expect(h).toBeGreaterThanOrEqual(132);
-      expect(h).toBeLessThanOrEqual(240);
+      expect(h).toBeGreaterThanOrEqual(150);
+      expect(h).toBeLessThanOrEqual(300);
     }
+  });
+
+  it('a tall 1440p window reserves a taller band than a 1080p one (the hand grows with room)', () => {
+    expect(handBandHeight({ w: 2560, h: 1440 })).toBeGreaterThan(handBandHeight({ w: 1920, h: 1080 }));
   });
 });
 
