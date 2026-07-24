@@ -31,8 +31,24 @@ const TWO_PI = Math.PI * 2;
 const FACE_VERTS = 8;          // mesh grid per axis — smooth keystone, cheap at card size
 const RING_PAD = 0.06;         // affordance ring inset outside the face, in native-tex fractions
 
+// Hand hover-lift (§9), restoring the classic client's `.hand-slot:hover`
+// (translateY up + scale 1.35): a pointed-at hand card rises and enlarges so it
+// reads in place. HOVER_LIFT is capped so the *bottom* edge never rises above rest
+// — see handHoverLift — because a bottom edge sliding up out from under the pointer
+// would drop the hover, lower the card, re-enter, and flicker.
+const HOVER_GROW = 0.35;       // extra scale at full hover → 1.35×
+const HOVER_LIFT = 0.15;       // upward shift, as a fraction of texH·scale (= 0.30·halfHeight)
+
 /** ease-out cubic — cards decelerate into place (overshoot/spring is T4). */
 const ease = (t: number): number => 1 - (1 - t) ** 3;
+
+/** The hand hover-lift transform at hover amount `amt` (0..1): the grown draw scale
+ *  and the upward shift (own-space px). Kept pure + exported so the no-flicker
+ *  invariant — the card's bottom edge never rises above its resting bottom — can be
+ *  asserted without Pixi. */
+export function handHoverLift(texH: number, scale: number, amt: number): { scale: number; lift: number } {
+  return { scale: scale * (1 + HOVER_GROW * amt), lift: amt * HOVER_LIFT * texH * scale };
+}
 
 /** Shortest signed angular delta a→b, so a tween never spins the long way. */
 function angleDelta(a: number, b: number): number {
@@ -66,6 +82,8 @@ export class CardActor {
   private glowColor = 0xffffff;
   private dying = false;       // destroy/sacrifice → ramp `mortis` toward 1
   private mortis = 0;          // 0..1 death desaturation + tip-over
+  private hoverAmt = 0;        // 0..1 hand hover-lift (eases toward hoverTarget)
+  private hoverTarget = 0;     // the scene sets this: 1 while a hand card is pointed at
   // The face's four screen corners from the last render (TL, TR, BR, BL), so the
   // scene can anchor a DOM hover preview to the actual projected quad (§10).
   private readonly corners: Point[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
@@ -202,6 +220,11 @@ export class CardActor {
    *  falls to the graveyard. Persists (ramps to full) until the actor is replaced. */
   die(): void { this.dying = true; }
 
+  /** Raise/lower the hand hover-lift (§9). The scene drives this for a pointed-at
+   *  hand card; the lift eases in `decayJuice` and is painted every frame. A no-op
+   *  read for non-hand cards (the scene never raises them). */
+  setHover(on: boolean): void { this.hoverTarget = on ? 1 : 0; }
+
   /** Place the actor's *current* position without touching its target — used to
    *  seed a freshly-created actor at its entry origin before animating it in. */
   seedCurrent(t: Transform): void {
@@ -234,6 +257,7 @@ export class CardActor {
     this.spin *= Math.exp(-dtMs / 110);
     if (Math.abs(this.spin) < 0.001) this.spin = 0;
     if (this.dying) this.mortis = Math.min(1, this.mortis + dtMs / 320);
+    this.hoverAmt += (this.hoverTarget - this.hoverAmt) * Math.min(1, dtMs / 70);   // ~snappy lift
   }
 
   /** Project the card through `proj` and paint it: the face's four corners
@@ -245,11 +269,13 @@ export class CardActor {
     // turn. None of these touch the settled transform — they vanish as the channels
     // decay, so `pos`, hit-testing, and the §12 harness stay on the true position.
     const sq = this.squash;
-    const hw = (this.texW * this.current.scale * (1 + 0.16 * sq)) / 2;
-    const hh = (this.texH * this.current.scale * (1 - 0.26 * sq)) / 2;
+    // hand hover-lift (§9): a grown draw scale + an upward shift, bottom edge pinned.
+    const { scale: drawScale, lift } = handHoverLift(this.texH, this.current.scale, this.hoverAmt);
+    const hw = (this.texW * drawScale * (1 + 0.16 * sq)) / 2;
+    const hh = (this.texH * drawScale * (1 - 0.26 * sq)) / 2;
     const rot = this.current.rotation + this.spin + this.mortis * DEATH_TIP;
     const cx = this.current.x;
-    const cy = this.current.y - Math.sin(Math.PI * this.lastT) * this.arc;
+    const cy = this.current.y - Math.sin(Math.PI * this.lastT) * this.arc - lift;
     const cos = Math.cos(rot);
     const sin = Math.sin(rot);
     // a space-corner from unit signs (sx, sy) ∈ {−1, +1}, then rotated + placed
@@ -270,7 +296,7 @@ export class CardActor {
     this.face.tint = this.mortis > 0 ? mixColor(base, DEATH_TINT, this.mortis) : base;
 
     const centre = { x: cx, y: cy };
-    const screenScale = this.current.scale * proj.scaleAt(centre);
+    const screenScale = drawScale * proj.scaleAt(centre);
 
     // cast/colour glow: a soft bloom just outside the face, behind everything.
     this.glowG.clear();

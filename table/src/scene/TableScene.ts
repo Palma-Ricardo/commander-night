@@ -126,6 +126,14 @@ export class TableScene implements DirectorSink {
   private currentPrompt: PromptStoreState | undefined;
   private lastPromptId: number | undefined;
   private lastViewKey = '';
+  /** The actor the pointer is over (drives the hover preview + hand lift). Tracked
+   *  by key, plus the live pointer position, so a per-frame backstop can drop the
+   *  hover when the scene moves the card out from under a still cursor — Pixi only
+   *  fires `pointerout` on pointer *movement*, so a card animating away or the camera
+   *  panning would otherwise leave the preview stuck up (§9/§10). */
+  private hoveredKey: string | undefined;
+  private pointer: Point | undefined;
+  private detachPointer?: () => void;
   /** True while the pending prompt targets a stack item (counter/copy/redirect):
    *  the pile un-fans into a clickable row so buried candidates are reachable (§7 T4). */
   private spreadStack = false;
@@ -193,6 +201,23 @@ export class TableScene implements DirectorSink {
     this.reducedMotion = reducedMotion;
     this.director = new Director(this, { viewport: this.size, reducedMotion });
     this.app.ticker.add(t => this.director.tick(t.deltaMS));
+
+    // Track the pointer in the renderer's own (screen) coords — the space actor
+    // bounds() report in — so the per-frame hover backstop can hit-test against it.
+    // Leaving the canvas dismisses any hover; the DOM preview holds itself open if
+    // the pointer crossed onto it (hover.ts grace).
+    const canvas = this.app.canvas;
+    const onMove = (e: PointerEvent): void => {
+      const r = canvas.getBoundingClientRect();
+      this.pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const onLeave = (): void => { this.pointer = undefined; this.clearHover(); };
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerleave', onLeave);
+    this.detachPointer = () => {
+      canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerleave', onLeave);
+    };
 
     setActiveScene(this);
   }
@@ -286,6 +311,7 @@ export class TableScene implements DirectorSink {
     const shake = this.effects.shakeOffset();
     this.app.stage.position.set(shake.x, shake.y);
     this.paint(preset);
+    this.verifyHover();   // drop a hover the scene moved out from under a still pointer (§10)
     // Re-dim only when the focused seat actually changed (a manual camera move
     // has no state transition to re-apply §7.3 dimming, so do it here).
     const key = this.cameraViewKey();
@@ -757,13 +783,48 @@ export class TableScene implements DirectorSink {
   }
 
   private handleActorOver(actor: CardActor): void {
-    if (actor.objectId !== undefined && actor.placement.faceUp) {
-      this.onObjectHover?.(actor.objectId, this.actorAnchor(actor));
+    if (actor.objectId === undefined || !actor.placement.faceUp) return;
+    this.setHovered(actor);
+    this.onObjectHover?.(actor.objectId, this.actorAnchor(actor));
+  }
+
+  private handleActorOut(actor: CardActor): void {
+    if (this.hoveredKey === actor.key) this.clearHover();
+  }
+
+  /** Mark `actor` as hovered: raise the hand lift (§9, hand cards only, drawn above
+   *  its neighbours) and remember it for the backstop. Lowers whatever was hovered
+   *  before, so moving between cards never leaves two lifted. */
+  private setHovered(actor: CardActor): void {
+    if (this.hoveredKey === actor.key) return;
+    if (this.hoveredKey !== undefined) this.actors.get(this.hoveredKey)?.setHover(false);
+    this.hoveredKey = actor.key;
+    if (actor.space === 'screen' && actor.placement.zone === 'hand') {
+      actor.setHover(true);
+      this.screenActors.addChild(actor.view);   // lift reads above the rest of the fan
     }
   }
 
-  private handleActorOut(_actor: CardActor): void {
+  /** Drop the current hover: lower the lifted card and dismiss the preview (with the
+   *  §9 grace, so the pointer can still reach the preview to scroll it). */
+  private clearHover(): void {
+    if (this.hoveredKey === undefined) return;
+    this.actors.get(this.hoveredKey)?.setHover(false);
+    this.hoveredKey = undefined;
     this.onObjectHover?.(undefined);
+  }
+
+  /** Per-frame backstop: Pixi fires `pointerout` only on pointer movement, so a card
+   *  that animates away or is panned/destroyed under a still cursor would strand the
+   *  hover. Drop it the moment the hovered actor is gone or no longer under the live
+   *  pointer (checked against its freshly-projected bounds). The DOM preview keeps
+   *  itself open if the pointer has crossed onto it (hover.ts). */
+  private verifyHover(): void {
+    if (this.hoveredKey === undefined) return;
+    const actor = this.actors.get(this.hoveredKey);
+    if (actor === undefined || this.pointer === undefined || !anchorContains(actor.bounds(), this.pointer)) {
+      this.clearHover();
+    }
   }
 
   /** The on-screen rect of an actor's card face, for anchoring a DOM hover
@@ -1069,6 +1130,7 @@ export class TableScene implements DirectorSink {
 
   destroy(): void {
     if (getActiveScene() === this) setActiveScene(null);
+    this.detachPointer?.();
     this.unsubResolver?.();
     this.effects.clear();
     this.timers = [];
@@ -1083,6 +1145,11 @@ export class TableScene implements DirectorSink {
 /** The centre of an on-screen bounding box (a projected actor face). */
 function centreOf(b: ScreenAnchor): Point {
   return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+}
+
+/** Whether a screen-space point falls inside a projected actor's bounding box. */
+function anchorContains(b: ScreenAnchor, p: Point): boolean {
+  return p.x >= b.left && p.x <= b.left + b.width && p.y >= b.top && p.y <= b.top + b.height;
 }
 
 /** The upward bow of a move's path (design §9), in the actor's own-space units
