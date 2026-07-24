@@ -17,7 +17,7 @@ import { appScryfall, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
 import { objectClick } from './interact';
-import { hoverCard, hoverCardSoon } from './hover';
+import { hoverCard, hideHover, hoverStore } from './hover';
 import { setCameraHud } from './camera-store';
 
 export function TableCanvas(): React.JSX.Element {
@@ -40,11 +40,16 @@ export function TableCanvas(): React.JSX.Element {
       scene.onObjectClick = (id) => { objectClick(appStores.prompt.getState(), id); };
 
       // Hover previews any face-up card, anchored beside the live actor (§9/§10).
+      // The scene decides *when* to dismiss (it tracks the pointer against the card
+      // and the preview rect), so undefined here is an immediate hide, not a timer.
       scene.onObjectHover = (id, anchor) => {
-        if (id === undefined) { hoverCardSoon(); return; }   // defer so a scroll can reach the preview
+        if (id === undefined) { hideHover('scene'); return; }
         const card = findObject(appStores.game.getState().state!, id);
-        if (card !== undefined) hoverCard(card, anchor);
+        if (card !== undefined) hoverCard(card, anchor, 'scene');
       };
+      // The scene reads the preview's laid-out rect to hold it open while the
+      // pointer is over the panel itself (published by HoverPreview).
+      scene.getPreviewRect = () => hoverStore.getState().previewRect;
 
       // The camera lives in the scene/director; mirror its view + follow-state
       // into a store so the compass minimap + override badge track it (§7.3).

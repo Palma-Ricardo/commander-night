@@ -10,7 +10,7 @@ import { appActions, appStores } from '../app';
 import type { GameState, LogEntry } from '@night/core/protocol/protocol';
 import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
 import { getActiveScene } from '../scene/TableScene';
-import { hoverCard, hoverCardSoon } from './hover';
+import { hoverCard, hideHover } from './hover';
 import { ManaText } from './ManaSymbols';
 
 const COLLAPSE_KEY = 'night.table.logCollapsed';
@@ -178,7 +178,7 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
           const r = e.currentTarget.getBoundingClientRect();
           hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
         } : undefined}
-        onMouseLeave={card !== undefined ? () => hoverCardSoon() : undefined}
+        onMouseLeave={card !== undefined ? () => hideHover('dom') : undefined}
       >
         {m.name}
       </span>,

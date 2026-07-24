@@ -52,6 +52,7 @@ const DMG_INK = 0xf0a89a;
 const DMG_FILL = 0x2a100c;
 const DMG_EDGE = 0x5e1f16;
 const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
+const HOVER_GRACE_MS = 140;     // let the pointer cross the gap from a card to its preview
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
 const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
 
@@ -126,12 +127,17 @@ export class TableScene implements DirectorSink {
   private currentPrompt: PromptStoreState | undefined;
   private lastPromptId: number | undefined;
   private lastViewKey = '';
-  /** The actor the pointer is over (drives the hover preview + hand lift). Tracked
-   *  by key, plus the live pointer position, so a per-frame backstop can drop the
-   *  hover when the scene moves the card out from under a still cursor — Pixi only
-   *  fires `pointerout` on pointer *movement*, so a card animating away or the camera
-   *  panning would otherwise leave the preview stuck up (§9/§10). */
+  /** Hover is two independent lifecycles, both driven by the live pointer so the
+   *  scene — not Pixi's movement-only pointerout, and not a DOM timer — is the sole
+   *  authority (that split is what let the preview get stuck):
+   *   • `hoveredKey`: the HAND card currently raised in place to read it (no panel).
+   *   • `previewActorKey` + `previewGrace`: the corner preview shown for any OTHER
+   *     face-up card. It persists only while the pointer is over that card or over
+   *     the preview panel's own rect (`getPreviewRect`), with a short grace to cross
+   *     the gap between them; otherwise the grace runs out and it hides. */
   private hoveredKey: string | undefined;
+  private previewActorKey: string | undefined;
+  private previewGrace = 0;
   private pointer: Point | undefined;
   private detachPointer?: () => void;
   /** True while the pending prompt targets a stack item (counter/copy/redirect):
@@ -146,6 +152,9 @@ export class TableScene implements DirectorSink {
    *  free of any React-chrome import. */
   onObjectClick?: (objectId: Id) => void;
   onObjectHover?: (objectId: Id | undefined, anchor?: ScreenAnchor) => void;
+  /** Reads the hover preview panel's current on-screen rect (chrome-owned), so the
+   *  scene can hold the preview open while the pointer is over the panel itself. */
+  getPreviewRect?: () => ScreenAnchor | undefined;
   /** Raised when the felt (an empty quadrant / a nameplate) is clicked — a manual
    *  camera focus (§7.3). */
   onFocusSeat?: (display: number) => void;
@@ -211,7 +220,9 @@ export class TableScene implements DirectorSink {
       const r = canvas.getBoundingClientRect();
       this.pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
     };
-    const onLeave = (): void => { this.pointer = undefined; this.clearHover(); };
+    // Pointer left the canvas entirely (to the log panel, off-window). Clearing the
+    // tracked position makes the next verifyHover drop both the lift and the preview.
+    const onLeave = (): void => { this.pointer = undefined; };
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
     this.detachPointer = () => {
@@ -318,7 +329,7 @@ export class TableScene implements DirectorSink {
     const shake = this.effects.shakeOffset();
     this.app.stage.position.set(shake.x, shake.y);
     this.paint(preset);
-    this.verifyHover();   // drop a hover the scene moved out from under a still pointer (§10)
+    this.verifyHover(dtMs);   // the scene's hover authority — never let a preview stick (§10)
     // Re-dim only when the focused seat actually changed (a manual camera move
     // has no state transition to re-apply §7.3 dimming, so do it here).
     const key = this.cameraViewKey();
@@ -791,35 +802,49 @@ export class TableScene implements DirectorSink {
 
   private handleActorOver(actor: CardActor): void {
     if (actor.objectId === undefined || !actor.placement.faceUp) return;
-    this.setHovered(actor);
-    this.onObjectHover?.(actor.objectId, this.actorAnchor(actor));
+    // Hand cards read via the in-place raise (§9) — no corner preview. Every other
+    // face-up card gets the preview panel instead.
+    if (actor.space === 'screen' && actor.placement.zone === 'hand') this.raiseHand(actor);
+    else this.showPreview(actor);
   }
 
   private handleActorOut(actor: CardActor): void {
-    if (this.hoveredKey === actor.key) this.clearHover();
+    // Only the lift reacts to a raw pointerout; the preview is dismissed by the
+    // frame-loop authority (verifyHover), so crossing onto the panel keeps it open.
+    if (this.hoveredKey === actor.key) this.lowerHand();
   }
 
-  /** Mark `actor` as hovered: raise the hand lift (§9, hand cards only, drawn above
-   *  its neighbours) and remember it for the backstop. Lowers whatever was hovered
-   *  before, so moving between cards never leaves two lifted. */
-  private setHovered(actor: CardActor): void {
+  /** Raise a hand card to the front and enlarge it in place (§9). Lowers any
+   *  previously-raised card and dismisses any board preview, so only one thing is
+   *  ever emphasised. */
+  private raiseHand(actor: CardActor): void {
     if (this.hoveredKey === actor.key) return;
+    this.hidePreview();
     if (this.hoveredKey !== undefined) this.actors.get(this.hoveredKey)?.setHover(false);
     this.hoveredKey = actor.key;
-    if (actor.space === 'screen' && actor.placement.zone === 'hand') {
-      actor.setHover(true);
-      this.screenActors.addChild(actor.view);   // lift reads above the rest of the fan
-    }
+    actor.setHover(true);
+    this.screenActors.addChild(actor.view);   // reads above the rest of the fan
   }
 
-  /** Drop the current hover: lower the lifted card, put it back in the fan's natural
-   *  z-order (setHovered raised it to the front to read it), and dismiss the preview
-   *  (with the §9 grace, so the pointer can still reach the preview to scroll it). */
-  private clearHover(): void {
+  /** Lower the raised hand card and restore the fan's natural z-order. */
+  private lowerHand(): void {
     if (this.hoveredKey === undefined) return;
     this.actors.get(this.hoveredKey)?.setHover(false);
     this.hoveredKey = undefined;
     this.restackScreen();
+  }
+
+  /** Show the corner preview for a non-hand card and (re)arm its dismissal grace. */
+  private showPreview(actor: CardActor): void {
+    this.previewActorKey = actor.key;
+    this.previewGrace = HOVER_GRACE_MS;
+    this.onObjectHover?.(actor.objectId, this.actorAnchor(actor));
+  }
+
+  /** Hide the corner preview outright. */
+  private hidePreview(): void {
+    if (this.previewActorKey === undefined) return;
+    this.previewActorKey = undefined;
     this.onObjectHover?.(undefined);
   }
 
@@ -837,19 +862,30 @@ export class TableScene implements DirectorSink {
     }
   }
 
-  /** Per-frame backstop: Pixi fires `pointerout` only on pointer movement, so a card
-   *  that animates away or is panned/destroyed under a still cursor would strand the
-   *  hover. Drop it the moment the hovered actor is gone or no longer under the live
-   *  pointer (checked against its freshly-projected bounds). The DOM preview keeps
-   *  itself open if the pointer has crossed onto it (hover.ts). */
-  private verifyHover(): void {
-    if (this.hoveredKey === undefined) return;
-    const actor = this.actors.get(this.hoveredKey);
-    // Test the *resting* hit footprint, not the lifted visual — otherwise a raised
-    // hand card's enlarged bounds would keep the pointer "inside" it while it's
-    // really over a neighbour, and the hover would never move on.
-    if (actor === undefined || this.pointer === undefined || !anchorContains(actor.hitBounds(), this.pointer)) {
-      this.clearHover();
+  /** The scene's per-frame hover authority — the fix for the sticking preview.
+   *  Pixi only fires `pointerout` on pointer *movement*, so a card that animates
+   *  away or a camera pan (or the pointer resting on the click-through preview) would
+   *  strand the hover. Instead we re-decide from the live pointer every frame:
+   *   • lift — held only while the pointer is over the raised hand card's *resting*
+   *     footprint (never the enlarged visual, or it would swallow its neighbours);
+   *   • preview — held only while the pointer is over its card or over the preview
+   *     panel's own rect, with a grace to bridge the gap; otherwise it hides. */
+  private verifyHover(dtMs: number): void {
+    if (this.hoveredKey !== undefined) {
+      const actor = this.actors.get(this.hoveredKey);
+      if (actor === undefined || this.pointer === undefined || !anchorContains(actor.hitBounds(), this.pointer)) {
+        this.lowerHand();
+      }
+    }
+    if (this.previewActorKey !== undefined) {
+      const actor = this.actors.get(this.previewActorKey);
+      const p = this.pointer;
+      const onCard = actor !== undefined && p !== undefined && anchorContains(actor.bounds(), p);
+      const rect = this.getPreviewRect?.();
+      const onPanel = rect !== undefined && p !== undefined && anchorContains(rect, p);
+      if (actor === undefined) this.hidePreview();                 // card gone → drop now
+      else if (onCard || onPanel) this.previewGrace = HOVER_GRACE_MS;
+      else if ((this.previewGrace -= dtMs) <= 0) this.hidePreview();
     }
   }
 

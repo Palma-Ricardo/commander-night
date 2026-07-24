@@ -12,10 +12,10 @@
 // and clamps to stay on-screen; falls back to the lower-left position when no
 // anchor is supplied (see the CSS default in styles.css).
 
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from 'zustand';
 import { appScryfall } from '../app';
-import { cancelHoverClear, hoverCard, hoverCardSoon, hoverStore } from './hover';
+import { hoverCard, hoverStore, setPreviewRect } from './hover';
 import { previewPosition } from './preview-position';
 import { TextFrame } from './CardView';
 
@@ -32,38 +32,42 @@ export function HoverPreview() {
 
     // The placement rules themselves live in preview-position.ts as pure
     // geometry, so they can be asserted without a browser.
+    const rect = el.getBoundingClientRect();
     const { left, top } = previewPosition(
       anchor,
-      el.getBoundingClientRect(),
+      rect,
       { width: window.innerWidth, height: window.innerHeight },
     );
     setStyle({ left: `${left}px`, top: `${top}px`, bottom: 'auto' });
+    // Publish the laid-out rect so the scene can hold the preview open while the
+    // pointer is over it (its own dismissal authority, hover.ts). getBoundingClientRect
+    // still reads the pre-position box, so report the placement we just computed.
+    setPreviewRect({ left, top, width: rect.width, height: rect.height });
 
-    // On resize, dismiss rather than reposition — the anchor is a plain
-    // snapshot taken at hover-time and any reflow invalidates it. The same
-    // applies when the camera moves under an open preview (canvas hovers): the
-    // TableCanvas clears the hover on a camera change, so the anchor is never
-    // stale for long. A dismiss can't be wrong; the next mouse move re-hovers.
+    // On resize, dismiss rather than reposition — the anchor is a plain snapshot
+    // taken at hover-time and any reflow invalidates it. A dismiss can't be wrong;
+    // the next mouse move re-hovers.
     const dismiss = () => hoverCard(undefined);
     window.addEventListener('resize', dismiss);
     return () => window.removeEventListener('resize', dismiss);
   }, [anchor, card, image?.status]);
 
+  // Clear the published rect when the preview goes away, so a stale rect can never
+  // keep the scene thinking the pointer is "over the preview".
+  useEffect(() => () => setPreviewRect(undefined), []);
+
   if (card === undefined) return null;
 
   return (
+    // Fully click-through (pointer-events: none, styles.css): the canvas keeps
+    // receiving pointermove under it so the scene's hover authority stays accurate,
+    // and a board click is never swallowed by the panel.
     <div className="hover-preview" ref={ref} style={style}>
       {image?.status === 'ok'
         ? <img src={image.url} alt={card.name} />
         : <TextFrame card={card} size="preview" />}
       {image?.status === 'ok' && card.text.length > 0 && (
-        // The one interactive part of the (otherwise click-through) preview: keep
-        // it alive while the pointer is on it so a long oracle box can be scrolled.
-        <div
-          className="hover-oracle"
-          onMouseEnter={cancelHoverClear}
-          onMouseLeave={hoverCardSoon}
-        >
+        <div className="hover-oracle">
           {card.text.map((l, i) => <p key={i}>{l}</p>)}
         </div>
       )}
