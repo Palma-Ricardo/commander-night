@@ -102,9 +102,14 @@ rsync -a target/lib/ vps:/opt/commander-night/bridge/lib/
 # bridge compiles against. Trivial next to the ~150 MB card database it sits beside and
 # the VPS's 8 GiB RAM / tens of GB disk; not worth trimming.
 
-# 5. build + ship the web client (on the dev machine)
-cd client && npm ci && npm run build
-rsync -a --delete dist/ vps:/opt/commander-night/client/
+# 5. build + ship the web clients (on the dev machine). Two SPAs (table
+#    design §2): the table client at /, the classic client under /classic —
+#    the latter needs its vite base to match, which is a build-time flag, not
+#    committed config (dev mode and the C5 test:preview tier assume root).
+cd table && npm run build
+rsync -a --delete dist/ vps:/opt/commander-night/table/
+cd ../client && npm run build -- --base=/classic/
+rsync -a --delete dist/ vps:/opt/commander-night/classic/
 
 # 6. config + units + caddy
 scp deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
@@ -222,8 +227,9 @@ any hostname.
 silent 403 rather than an error in caddy's log:
 
 ```sh
-sudo semanage fcontext -a -t httpd_sys_content_t "/opt/commander-night/client(/.*)?"
-sudo restorecon -Rv /opt/commander-night/client
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/commander-night/table(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/commander-night/classic(/.*)?"
+sudo restorecon -Rv /opt/commander-night/table /opt/commander-night/classic
 ```
 
 (`semanage` comes from `policycoreutils-python-utils`.) Verify with
@@ -234,7 +240,8 @@ always this.
 
 | Changed | Redeploy |
 |---|---|
-| anything under `client/` | rebuild + rsync `dist/`; no service restart — caddy serves from disk |
+| anything under `table/` or `packages/core/` | rebuild + rsync `dist/`; no service restart — caddy serves from disk |
+| anything under `client/` | rebuild **with `--base=/classic/`** + rsync `dist/`; no service restart |
 | anything under `bridge/` | rebuild + rsync the jar, then `systemctl restart night-bridge` (drops live seats) |
 | `deploy/Caddyfile` | `systemctl reload caddy` |
 

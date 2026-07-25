@@ -31,8 +31,25 @@ night.example.com {
 		reverse_proxy 127.0.0.1:8484
 	}
 
+	# The classic client stays as the fallback, served under /classic (table
+	# design §2). It is built with `--base=/classic/` so its asset URLs come
+	# back through this block; handle_path strips the prefix, so inside it
+	# paths look exactly like the root-served case. The bare /classic (no
+	# slash) must redirect or it falls through to the table client below.
+	redir /classic /classic/
+	handle_path /classic/* {
+		root * /opt/commander-night/classic
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@nothashed not path /assets/*
+		header @nothashed Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	# The table client is the main client, served at /.
 	handle {
-		root * /opt/commander-night/client
+		root * /opt/commander-night/table
 		# Vite emits content-hashed asset filenames, so /assets/* can cache
 		# forever. index.html must NOT: without this, pushing a fix mid-night
 		# leaves every browser on the previous bundle with no way to know.
