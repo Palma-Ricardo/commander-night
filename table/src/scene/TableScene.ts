@@ -977,8 +977,12 @@ export class TableScene implements DirectorSink {
     }
     // `aff === undefined` matters: when the ask targets stack items (a
     // counterspell pick), the top card is a *candidate* and the press must stay
-    // the plain candidate click, not become a source drag.
-    if (prompt.pending?.kind === 'chooseTargets' && actor.key === this.topStackKey && aff === undefined) {
+    // the plain candidate click, not become a source drag. Any non-candidate
+    // world actor can be the source — the asking spell on the stack top (§5.2),
+    // or a declared attacker whose "Select defender" follow-up arrived with no
+    // drag in flight (the All Attack path, §5.1). Legality stays with
+    // pointTarget: an off-candidate release records an intent that expires.
+    if (prompt.pending?.kind === 'chooseTargets' && actor.space === 'world' && aff === undefined) {
       this.armDrag('point', HL_TARGET, actor);
       return;
     }
