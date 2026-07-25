@@ -10,7 +10,7 @@ import { createActions } from '@night/core/net/actions';
 import { createSocketManager } from '@night/core/net/socket';
 import { applyKeyframe } from '@night/core/state/apply';
 import { wireIntentBuffer } from '@night/core/state/intent';
-import { wireRescindDetector } from '@night/core/state/rescind';
+import { wireNoLegalChoiceDetector, wireRescindDetector } from '@night/core/state/rescind';
 import { createStores } from '@night/core/stores';
 import { browserKV } from '@night/core/stores/storage';
 import { demoKeyframe } from './fixtures/keyframe';
@@ -50,6 +50,7 @@ export const appActions = createActions(appStores, appManager, appKV, { scryfall
 // post-announce step kills a cast — the client says so instead).
 wireIntentBuffer(appStores.prompt, (pid, a) => void appActions.answerPrompt(pid, a));
 wireRescindDetector(appStores);
+wireNoLegalChoiceDetector(appStores);
 
 /** T0: seed the demo keyframe so there is a table to render with no bridge
  *  running (design §13 exit). A live keyframe from the bridge overwrites it. */

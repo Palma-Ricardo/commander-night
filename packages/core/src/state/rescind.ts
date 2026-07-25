@@ -104,3 +104,67 @@ function keyword(text: string[]): string | undefined {
   }
   return undefined;
 }
+
+// ── §5.6c: the empty ask ─────────────────────────────────────────────────────
+//
+// Live-found 2026-07-25 (game 4CFQPJ): XMage pre-filters illegal choices out
+// of a GAME_TARGET's candidates instead of rejecting the attempt — "Select
+// attacker to block" against Tasigur wearing Sword of Feast and Famine arrived
+// with ZERO candidates, and no GAME_INFORM_PERSONAL fires anywhere in that
+// flow. The empty ask is the only signal there is, so the client tells the
+// story itself: name the blocking restriction when the declared attackers hold
+// exactly one, else toast generically that nothing is legal.
+
+/** A clause that stops a block, captured whole ("protection from black and
+ *  from green"), stopping at sentence/HTML boundaries. */
+const BLOCK_STOPPER = /\b(protection from[^,.;<]*|menace|can't be blocked[^,.;<]*)/i;
+
+const BLOCK_ASK = /attacker to block/i;
+
+/** Wire the empty-candidates toast. Returns the unsubscribe. */
+export function wireNoLegalChoiceDetector(stores: Stores): () => void {
+  let lastPromptId: number | undefined = stores.prompt.getState().pending?.promptId;
+
+  return stores.prompt.subscribe(s => {
+    const p = s.pending;
+    if (p?.promptId === lastPromptId) return;   // scratch churn, not a new ask
+    lastPromptId = p?.promptId;
+    if (p?.kind !== 'chooseTargets' || p.candidates.length > 0) return;
+    const state = stores.game.getState().state;
+    const blame = state !== undefined && BLOCK_ASK.test(p.message)
+      ? blockCulprit(state) : undefined;
+    pushNotice(stores.notices, 'info', blame !== undefined
+      ? `Nothing to choose — ${blame}.`
+      : `The server offered nothing legal for “${p.message}”.`);
+  });
+}
+
+/** Name the blocking restriction when exactly one declared attacker carries
+ *  one (own text; the granting attachment named when it also carries the
+ *  clause — XMage renders granted abilities into the creature's own rules).
+ *  More than one story → undefined, same rule as {@link culprit}. */
+export function blockCulprit(state: GameState): string | undefined {
+  const found: string[] = [];
+  const attacking = new Set((state.combat ?? []).flatMap(g => g.attackerIds));
+  for (const pl of state.players) {
+    const byId = new Map(pl.battlefield.map(perm => [perm.id, perm]));
+    for (const perm of pl.battlefield) {
+      if (!attacking.has(perm.id)) continue;
+      const clause = blockClause(perm.text);
+      if (clause === undefined) continue;
+      const grantor = (perm.attachments ?? [])
+        .map(id => byId.get(id))
+        .find(att => att !== undefined && blockClause(att.text) !== undefined);
+      found.push(`${perm.name} has ${clause}${grantor !== undefined ? ` (${grantor.name})` : ''}`);
+    }
+  }
+  return found.length === 1 ? found[0] : undefined;
+}
+
+function blockClause(text: string[]): string | undefined {
+  for (const line of text) {
+    const m = BLOCK_STOPPER.exec(line);
+    if (m !== null) return m[1]!.trim().toLowerCase();
+  }
+  return undefined;
+}

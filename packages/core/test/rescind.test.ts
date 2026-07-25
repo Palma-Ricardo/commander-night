@@ -11,7 +11,7 @@ import { PendingCommands } from '../src/net/pending';
 import { route, type RouteCtx } from '../src/net/route';
 import { SessionWriter } from '../src/net/session';
 import type { Card, GameState, Permanent, Prompt, StateKeyframe } from '../src/protocol/protocol';
-import { culprit, wireRescindDetector } from '../src/state/rescind';
+import { blockCulprit, culprit, wireNoLegalChoiceDetector, wireRescindDetector } from '../src/state/rescind';
 import { createStores, type Stores } from '../src/stores';
 import { memoryKV } from '../src/stores/storage';
 
@@ -132,6 +132,78 @@ describe('wireRescindDetector', () => {
     route(keyframe(20, { stack: [], hand: [melody] }), ctx);
     route(priority, ctx);
     expect(toasts()).toHaveLength(0);
+  });
+});
+
+// §5.6c: the empty ask (live-found in game 4CFQPJ, 2026-07-25) — "Select
+// attacker to block" against Tasigur wearing Sword of Feast and Famine arrives
+// with ZERO candidates and no personal message; the client tells the story.
+describe('wireNoLegalChoiceDetector', () => {
+  const tasigur = perm('tasigur', 'Tasigur, the Golden Fang', ['Creature'],
+    ['Delve', 'Protection from black and from green'], { attachments: ['sword'] });
+  const sword = perm('sword', 'Sword of Feast and Famine', ['Artifact'],
+    ['Equipped creature gets +2/+2 and has protection from black and from green.', 'Equip {2}'],
+    { attachedTo: 'tasigur' });
+
+  const blockAsk: Prompt = {
+    t: 'game.prompt', seq: 11, gameId: 'g1', promptId: 80,
+    message: 'Select attacker to block', kind: 'chooseTargets',
+    candidates: [], min: 0, max: 1, required: false,
+  };
+
+  function withCombat(): GameState {
+    const s = gameState({ battlefield: [tasigur, sword] });
+    s.combat = [{ attackerIds: ['tasigur'], defenderId: 'me', blockerIds: [], blocked: false }];
+    return s;
+  }
+
+  beforeEach(() => { wireNoLegalChoiceDetector(stores); });
+
+  it('the 4CFQPJ shape: empty block ask names Tasigur and the Sword', () => {
+    route({ t: 'game.state', seq: 10, gameId: 'g1', state: withCombat() }, ctx);
+    route(blockAsk, ctx);
+    expect(toasts()).toHaveLength(1);
+    expect(toasts()[0]!.text).toContain('Tasigur, the Golden Fang has protection from black and from green');
+    expect(toasts()[0]!.text).toContain('Sword of Feast and Famine');
+  });
+
+  it('an empty non-block ask toasts generically, quoting the ask', () => {
+    route({ t: 'game.state', seq: 10, gameId: 'g1', state: withCombat() }, ctx);
+    route({ ...blockAsk, message: 'Select a nonland card' }, ctx);
+    expect(toasts()).toHaveLength(1);
+    expect(toasts()[0]!.text).toContain('nothing legal');
+    expect(toasts()[0]!.text).toContain('Select a nonland card');
+  });
+
+  it('candidates present → silent', () => {
+    route({ t: 'game.state', seq: 10, gameId: 'g1', state: withCombat() }, ctx);
+    route({ ...blockAsk, candidates: ['tasigur'] }, ctx);
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it('scratch churn on the same promptId does not re-toast', () => {
+    route({ t: 'game.state', seq: 10, gameId: 'g1', state: withCombat() }, ctx);
+    route(blockAsk, ctx);
+    stores.prompt.setState({ inflight: true });
+    expect(toasts()).toHaveLength(1);
+  });
+});
+
+describe('blockCulprit', () => {
+  it('two restricted attackers → undefined (no accusation)', () => {
+    const a = perm('a1', 'Menace Bear', ['Creature'], ['Menace']);
+    const b = perm('b1', 'Pro Bear', ['Creature'], ['Protection from blue']);
+    const s = gameState({ battlefield: [a, b] });
+    s.combat = [{ attackerIds: ['a1', 'b1'], defenderId: 'me', blockerIds: [], blocked: false }];
+    expect(blockCulprit(s)).toBeUndefined();
+  });
+
+  it('a non-attacking protected creature tells no story', () => {
+    const a = perm('a1', 'Plain Bear', ['Creature'], []);
+    const b = perm('b1', 'Pro Bear', ['Creature'], ['Protection from blue']);
+    const s = gameState({ battlefield: [a, b] });
+    s.combat = [{ attackerIds: ['a1'], defenderId: 'me', blockerIds: [], blocked: false }];
+    expect(blockCulprit(s)).toBeUndefined();
   });
 });
 
