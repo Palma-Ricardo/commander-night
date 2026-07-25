@@ -236,6 +236,32 @@ class ProtocolSamplesTest {
                         .emitted(322, "g1"));
     }
 
+    // ---- M7: the object an ask is about (protocol §8) ----
+
+    @Test
+    void payManaWithAnAnchorIsReproducible() throws Exception {
+        assertProduces("game.prompt.payMana.for.json",
+                GamePrompt.payMana(19, "Pay {1}{G}Life from the Loam [4fb]", "{1}{G}",
+                                List.of("land-1", "land-2"), true,
+                                "4fb07bce-68ec-412b-91e6-8dfe2e629ae1")
+                        .emitted(323, "g1"));
+    }
+
+    @Test
+    void distributeWithRowAnchorsIsReproducible() throws Exception {
+        // Row 0 resolved (its label carried an object link); row 1 did not — a
+        // face-down blocker has no name to match and omits the field entirely.
+        assertProduces("game.prompt.distribute.objectId.json",
+                GamePrompt.distribute(48,
+                                "Assign combat damage among creatures blocking Goblin Guide, P/T: 2/2",
+                                2, 2, List.of(
+                                        new GamePrompt.Among("0", "Grizzly Bears [7d3], P/T: 2/2",
+                                                0, 2, 2, "7d3f9c21-4a8b-4e55-9f10-2c6d8b31e0a7"),
+                                        new GamePrompt.Among("1", "creature without name, P/T: 2/2",
+                                                0, 2, 0)), false)
+                        .emitted(903, "g1"));
+    }
+
     @Test
     void combatPrioritySampleIsReproducible() throws Exception {
         assertProduces("game.prompt.priority.combat.json",

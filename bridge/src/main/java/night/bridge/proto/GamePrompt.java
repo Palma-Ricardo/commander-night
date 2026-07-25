@@ -47,6 +47,8 @@ public record GamePrompt(
         String remaining,
         List<String> sources,
         Boolean canCancel,
+        // payMana: the object whose cost is being paid ("for" is a Java keyword)
+        @JsonProperty("for") String forObject,
         // chooseAbility ({id,text}) / chooseOption ({key,text}) / playerRequest ({key,text})
         List<Option> options,
         // choosePile
@@ -116,14 +118,24 @@ public record GamePrompt(
         }
     }
 
-    /** One distribute row; {@code id} is a bridge-synthesized row index (§8). */
-    public record Among(String id, String label, Integer min, Integer max, Integer suggested) {
+    /**
+     * One distribute row; {@code id} is a bridge-synthesized row index (§8).
+     * {@code objectId} is the game object the row divides onto when the bridge
+     * could resolve the label's object link — best-effort, absent when the row
+     * names no object or the match is ambiguous.
+     */
+    public record Among(String id, String label, Integer min, Integer max, Integer suggested,
+                        String objectId) {
+
+        public Among(String id, String label, Integer min, Integer max, Integer suggested) {
+            this(id, label, min, max, suggested, null);
+        }
     }
 
     public static GamePrompt confirm(long promptId, String message, String yesText, String noText) {
         return new GamePrompt(0, null, promptId, message, Kind.CONFIRM, yesText, noText,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public static GamePrompt priority(long promptId, String message,
@@ -135,7 +147,7 @@ public record GamePrompt(
                                       Map<String, List<PlayableAction>> playable, Combat combat) {
         return new GamePrompt(0, null, promptId, message, Kind.PRIORITY, null, null,
                 playable, true, combat, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public static GamePrompt chooseTargets(long promptId, String message, List<String> candidates,
@@ -143,61 +155,67 @@ public record GamePrompt(
                                            Progress progress, List<Card> cards) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_TARGETS, null, null,
                 null, null, null, candidates, min, max, required, zone, progress, cards, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public static GamePrompt payMana(long promptId, String message, String remaining,
                                      List<String> sources, boolean canCancel) {
+        return payMana(promptId, message, remaining, sources, canCancel, null);
+    }
+
+    /** {@code forObject}: the object whose cost this pays, when derivable (§8). */
+    public static GamePrompt payMana(long promptId, String message, String remaining,
+                                     List<String> sources, boolean canCancel, String forObject) {
         return new GamePrompt(0, null, promptId, message, Kind.PAY_MANA, null, null,
                 null, null, null, null, null, null, null, null, null, null, remaining, sources,
-                canCancel, null, null, null, null, null);
+                canCancel, forObject, null, null, null, null, null);
     }
 
     public static GamePrompt chooseAbility(long promptId, String message, List<Option> options) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_ABILITY, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                null, options, null, null, null, null);
+                null, null, options, null, null, null, null);
     }
 
     public static GamePrompt chooseOption(long promptId, String message, List<Option> options,
                                           boolean required) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_OPTION, null, null,
                 null, null, null, null, null, null, required, null, null, null, null, null,
-                null, options, null, null, null, null);
+                null, null, options, null, null, null, null);
     }
 
     public static GamePrompt choosePile(long promptId, String message,
                                         List<Card> pile1, List<Card> pile2) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_PILE, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, List.of(pile1, pile2), null, null, null);
+                null, null, null, List.of(pile1, pile2), null, null, null);
     }
 
     public static GamePrompt chooseAmount(long promptId, String message, int min, int max) {
         return new GamePrompt(0, null, promptId, message, Kind.CHOOSE_AMOUNT, null, null,
                 null, null, null, null, min, max, null, null, null, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public static GamePrompt distribute(long promptId, String message, int total, int min,
                                         List<Among> among, boolean canCancel) {
         return new GamePrompt(0, null, promptId, message, Kind.DISTRIBUTE, null, null,
                 null, null, null, null, min, null, null, null, null, null, null, null,
-                canCancel, null, null, total, among, null);
+                canCancel, null, null, null, total, among, null);
     }
 
     public static GamePrompt playerRequest(long promptId, String message, String requestKey,
                                            List<Option> options) {
         return new GamePrompt(0, null, promptId, message, Kind.PLAYER_REQUEST, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                null, options, null, null, null, requestKey);
+                null, null, options, null, null, null, requestKey);
     }
 
     /** Stamp the per-seat event seq and game id at emit time. */
     public GamePrompt emitted(long seq, String gameId) {
         return new GamePrompt(seq, gameId, promptId, message, kind, yesText, noText,
                 playable, canPass, combat, candidates, min, max, required, zone, progress, cards,
-                remaining, sources, canCancel, options, piles, total, among, requestKey);
+                remaining, sources, canCancel, forObject, options, piles, total, among, requestKey);
     }
 
     /** Alias of {@link #emitted} for resume re-emission readability. */
@@ -209,6 +227,6 @@ public record GamePrompt(
     public GamePrompt withPromptId(long promptId) {
         return new GamePrompt(seq, gameId, promptId, message, kind, yesText, noText,
                 playable, canPass, combat, candidates, min, max, required, zone, progress, cards,
-                remaining, sources, canCancel, options, piles, total, among, requestKey);
+                remaining, sources, canCancel, forObject, options, piles, total, among, requestKey);
     }
 }

@@ -499,7 +499,7 @@ public final class SeatPump implements AutoCloseable {
                 log.warn("GAME_GET_MULTI_AMOUNT observed live — capture this game's tap for §16.1");
                 GameClientMessage msg = (GameClientMessage) cb.getData();
                 updateState(msg.getGameView());
-                dialog(PromptTranslator.distribute(fsm.nextPromptId(), msg));
+                dialog(PromptTranslator.distribute(fsm.nextPromptId(), msg, msg.getGameView()));
             }
             case GAME_PLAY_XMANA -> {
                 // Dead code in the 1.4.60 server (no callers); mapped defensively (protocol §15).

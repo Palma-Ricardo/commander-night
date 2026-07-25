@@ -42,6 +42,11 @@ fallback. Milestones and exit criteria: table-client design §13.
   rematch into a second completed game). The **classic client is unregressed** — all three specs
   green against it too (`npm run e2e:classic`, 13.9 min). Next is T6: a real four-human night on
   the table client.
+- **M7 done** (2026-07-25): prompt anchoring for the prompts-on-the-table phase
+  (`docs/plans/2026-07-25-prompts-on-the-table.md` §7) — the additive `payMana.for` and
+  `distribute.among[].objectId`. The spike killed both planned derivations: the ask already
+  names its object, because 1.4.60 renders object names through `GameLog` and that HTML carries
+  the full UUID (`translate/ObjectLink`). Emit-only-when-confident; canary WARN on drift.
 
 Phase 1 history, still relevant below.
 

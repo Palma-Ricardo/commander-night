@@ -41,7 +41,7 @@ public final class PromptNames {
         return new GamePrompt(p.seq(), p.gameId(), p.promptId(), message, p.kind(),
                 yesText, noText, playable, p.canPass(), combat,
                 p.candidates(), p.min(), p.max(), p.required(), zone, p.progress(), p.cards(),
-                remaining, p.sources(), p.canCancel(), options, p.piles(),
+                remaining, p.sources(), p.canCancel(), p.forObject(), options, p.piles(),
                 p.total(), among, p.requestKey());
     }
 
@@ -66,7 +66,8 @@ public final class PromptNames {
                 .map(a -> {
                     String label = rename.apply(a.label());
                     return label == a.label() ? a
-                            : new GamePrompt.Among(a.id(), label, a.min(), a.max(), a.suggested());
+                            : new GamePrompt.Among(a.id(), label, a.min(), a.max(), a.suggested(),
+                                    a.objectId());
                 })
                 .toList();
         return changed(in, out) ? out : in;

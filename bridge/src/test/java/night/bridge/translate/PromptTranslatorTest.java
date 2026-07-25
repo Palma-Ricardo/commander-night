@@ -187,6 +187,88 @@ class PromptTranslatorTest {
         assertNull(p.sources());
     }
 
+    // ---- M7: the object an ask is about (protocol §8 payMana.for) ----
+
+    /** How 1.4.60 renders the paying object into the ask (ManaUtil + GameLog). */
+    private static String logName(UUID id, String name) {
+        return "<font color='#B0C4DE' object_id='" + id + "'>" + name + "</font> ["
+                + id.toString().substring(0, 3) + "]";
+    }
+
+    private static String payPrompt(String cost, UUID id, String name) {
+        return "Pay " + cost + "<div style='font-size:11pt'>" + logName(id, name) + "</div>";
+    }
+
+    @Test
+    void payManaCarriesTheObjectWhoseCostIsBeingPaid() {
+        UUID card = UUID.randomUUID();
+        GamePrompt p = PromptTranslator.payMana(20,
+                new GameClientMessage(null, null, payPrompt("{1}{U}", card, "Brainstorm")), null);
+        assertEquals("{1}{U}", p.remaining());
+        assertEquals(card.toString(), p.forObject());
+    }
+
+    @Test
+    void payManaWithoutAnObjectLinkOmitsFor() {
+        GamePrompt p = PromptTranslator.payMana(21,
+                new GameClientMessage(null, null, "Pay {2}"), null);
+        assertNull(p.forObject(), "absent beats wrong — the client falls back to its own anchor");
+    }
+
+    @Test
+    void payManaWithTwoObjectLinksOmitsFor() {
+        String message = "Pay {2}<div style='font-size:11pt'>"
+                + logName(UUID.randomUUID(), "Mogis, God of Slaughter")
+                + logName(UUID.randomUUID(), "Rhystic Study") + "</div>";
+        GamePrompt p = PromptTranslator.payMana(22,
+                new GameClientMessage(null, null, message), null);
+        assertNull(p.forObject(), "an ambiguous anchor is worse than none");
+    }
+
+    // ---- M7: which permanent a distribute row divides onto (protocol §8) ----
+
+    private static GameClientMessage rows(mage.util.MultiAmountMessage... rows) {
+        Map<String, Serializable> options = new HashMap<>();
+        options.put("header", "Assign combat damage");
+        return new GameClientMessage(null, options, java.util.List.of(rows), 4, 4);
+    }
+
+    @Test
+    void distributeRowsCarryTheObjectTheyDivideOnto() {
+        UUID bear = UUID.randomUUID();
+        UUID elf = UUID.randomUUID();
+        GamePrompt p = PromptTranslator.distribute(23, rows(
+                new mage.util.MultiAmountMessage(logName(bear, "Grizzly Bears") + ", P/T: 2/2", 0, 4, 2),
+                new mage.util.MultiAmountMessage(logName(elf, "Llanowar Elves") + ", P/T: 1/1", 0, 4, 2)),
+                null);
+        assertEquals(java.util.List.of(bear.toString(), elf.toString()),
+                p.among().stream().map(GamePrompt.Among::objectId).toList());
+        // The label is XMage's own presentation text — log names keep their "[7d3]"
+        // id fragment; only the font tags are stripped (protocol §8, Html.strip).
+        assertEquals(java.util.List.of(
+                        "Grizzly Bears [" + bear.toString().substring(0, 3) + "], P/T: 2/2",
+                        "Llanowar Elves [" + elf.toString().substring(0, 3) + "], P/T: 1/1"),
+                p.among().stream().map(GamePrompt.Among::label).toList());
+    }
+
+    @Test
+    void distributeRowsThatNameNoObjectOmitObjectId() {
+        // AddManaInAnyCombinationEffect and friends divide across mana letters.
+        GamePrompt p = PromptTranslator.distribute(24, rows(
+                new mage.util.MultiAmountMessage("R", 0, 4, 0),
+                new mage.util.MultiAmountMessage("G", 0, 4, 0)), null);
+        p.among().forEach(a -> assertNull(a.objectId()));
+    }
+
+    @Test
+    void distributeRowNamingAPlayerOmitsObjectId() {
+        // PlayerImpl.getLogName is getColoredPlayerName — no object_id attribute.
+        GamePrompt p = PromptTranslator.distribute(25, rows(
+                new mage.util.MultiAmountMessage("<font color='#20B2AA'>Ricardo</font>", 0, 4, 0)),
+                null);
+        assertNull(p.among().getFirst().objectId());
+    }
+
     @Test
     void htmlInPromptMessagesIsStripped() {
         GamePrompt p = PromptTranslator.confirm(8,
@@ -279,7 +361,7 @@ class PromptTranslatorTest {
                 new mage.util.MultiAmountMessage("Goblin Guide", 0, 4, 2),
                 new mage.util.MultiAmountMessage("Monastery Swiftspear", 0, 4, 2));
         GamePrompt p = PromptTranslator.distribute(14,
-                new GameClientMessage(null, options, rows, 4, 4));
+                new GameClientMessage(null, options, rows, 4, 4), null);
         assertEquals(GamePrompt.Kind.DISTRIBUTE, p.kind());
         assertEquals("Assign damage among targets", p.message());
         assertEquals(4, p.total());
