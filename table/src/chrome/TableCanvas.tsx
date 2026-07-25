@@ -16,6 +16,7 @@ import { useEffect, useRef } from 'react';
 import { appActions, appScryfall, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
+import { toggleBrowse } from '../scene/carousel-store';
 import { objectClick } from './interact';
 import { hoverCard, hideHover, hoverStore } from './hover';
 import { setCameraHud } from './camera-store';
@@ -43,6 +44,10 @@ export function TableCanvas(): React.JSX.Element {
       // the matching chooseTargets is already pending, else the buffered intent
       // the next prompt consumes or drops (core state/intent.ts).
       scene.onPointTarget = (id) => appActions.pointTarget(id);
+
+      // A graveyard/exile pile click (top card or bare footprint) toggles the
+      // §4.4 browse fan on that pile.
+      scene.onPileOpen = (playerId, zone) => toggleBrowse({ playerId, zone });
 
       // Hover previews any face-up card, anchored beside the live actor (§9/§10).
       // The scene decides *when* to dismiss (it tracks the pointer against the card

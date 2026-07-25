@@ -87,6 +87,15 @@ export async function dockControls(page: Page): Promise<number> {
       // corner cluster + amount selector instead of the table client's dock
       '.corner-cluster button:enabled',
       '.amount-selector button:enabled',
+      // T9: the dock + modals are gone from the table client — each remaining
+      // kind has its own screen-space surface. (Carousel prompt cards are
+      // canvas actors and count through highlights(), not here.)
+      '.pay-panel button:enabled',
+      '.option-list button:enabled',
+      '.option-tiles button:enabled',
+      '.pile-choice button:enabled',
+      '.distribute-panel button:enabled',
+      '.request-panel button:enabled',
       '.modal button:enabled',
       '.modal [role=button]',
       '.ability-popover button:enabled',

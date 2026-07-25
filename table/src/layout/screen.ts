@@ -9,6 +9,7 @@
 // headless — no renderer, no camera, no time.
 
 import type { GameState, StackItem } from '@night/core';
+import { HAND_PAGE_SIZE, HAND_PAGE_THRESHOLD } from '../tuning';
 import type { PlacedActor, Point, Size } from './types';
 
 const CARD_TEX = { w: 200, h: 280 } as const;
@@ -23,20 +24,41 @@ export function handBandHeight(viewport: Size): number {
 /** The hand fan + the stack pile, in screen (CSS-pixel) coordinates. `rightInset`
  *  is the width the open log sidebar steals from the right (§8): the hand centres
  *  in the felt *left* of it and the stack pins to that inset right edge, so nothing
- *  ever tucks under the panel. 0 ⇒ the whole viewport. */
-export function layoutScreen(state: GameState, viewport: Size, rightInset = 0, spreadStack = false): PlacedActor[] {
+ *  ever tucks under the panel. 0 ⇒ the whole viewport. `handPage` is the §4.4
+ *  hand-mode page (clamped here; only read when the hand is oversized). */
+export function layoutScreen(
+  state: GameState, viewport: Size, rightInset = 0, spreadStack = false, handPage = 0,
+): PlacedActor[] {
   const out: PlacedActor[] = [];
-  layoutHand(state, viewport, rightInset, out);
+  layoutHand(state, viewport, rightInset, handPage, out);
   if (spreadStack) layoutStackSpread(state, viewport, rightInset, out);
   else layoutStack(state, viewport, rightInset, out);
   return out;
 }
 
-/** Your hand, fanned and centred along the bottom edge. */
-function layoutHand(state: GameState, viewport: Size, rightInset: number, out: PlacedActor[]): void {
+/** Pages an oversized hand fans through (1 ⇒ the whole hand fits one fan). */
+export function handPageCount(handSize: number): number {
+  if (handSize <= HAND_PAGE_THRESHOLD) return 1;
+  return Math.max(1, Math.ceil(handSize / HAND_PAGE_SIZE));
+}
+
+/** Your hand, fanned and centred along the bottom edge. Past
+ *  HAND_PAGE_THRESHOLD it pages instead of cramming (§4.4 hand mode): only the
+ *  current page fans in the band; off-page cards are placed just below the
+ *  bottom edge on their page's side, so a page turn slides them in and out as
+ *  ordinary actor tweens and drag-to-cast never sees anything unusual. */
+function layoutHand(
+  state: GameState, viewport: Size, rightInset: number, handPage: number, out: PlacedActor[],
+): void {
   const hand = state.me.hand;
-  const n = hand.length;
-  if (n === 0) return;
+  const total = hand.length;
+  if (total === 0) return;
+
+  const pages = handPageCount(total);
+  const page = Math.min(Math.max(0, handPage), pages - 1);
+  const start = pages > 1 ? page * HAND_PAGE_SIZE : 0;
+  const end = pages > 1 ? Math.min(total, start + HAND_PAGE_SIZE) : total;
+  const n = end - start;
 
   const band = handBandHeight(viewport);
   const scale = (band * 0.9) / CARD_TEX.h;         // card height ≈ 90% of the band
@@ -47,20 +69,35 @@ function layoutHand(state: GameState, viewport: Size, rightInset: number, out: P
   const spanW = step * (n - 1);
   const startX = availW / 2 - spanW / 2;
   const baseY = viewport.h - band / 2;
+  const hiddenY = viewport.h + (band * 0.9) / 2 + 8;   // fully below the bottom edge
 
   hand.forEach((card, i) => {
-    const t = n > 1 ? i / (n - 1) - 0.5 : 0;       // -0.5 … 0.5 across the fan
+    const onPage = i >= start && i < end;
+    const j = i - start;
+    const t = onPage && n > 1 ? j / (n - 1) - 0.5 : 0;   // -0.5 … 0.5 across the fan
     out.push({
       key: card.id, card, objectId: card.id, space: 'screen',
-      placement: {
-        x: startX + i * step,
-        y: baseY + Math.abs(t) * band * 0.10,      // slight downward arc at the ends
-        rotation: t * 0.1,
-        scale,
-        zone: 'hand',
-        ownerId: state.me.playerId,
-        faceUp: true,
-      },
+      placement: onPage
+        ? {
+            x: startX + j * step,
+            y: baseY + Math.abs(t) * band * 0.10,        // slight downward arc at the ends
+            rotation: t * 0.1,
+            scale,
+            zone: 'hand',
+            ownerId: state.me.playerId,
+            faceUp: true,
+          }
+        : {
+            // Tucked out of sight on its page's side: earlier pages exit left,
+            // later ones right, so a turn reads as the fan sliding through.
+            x: i < start ? startX - cardW : startX + spanW + cardW,
+            y: hiddenY,
+            rotation: 0,
+            scale,
+            zone: 'hand',
+            ownerId: state.me.playerId,
+            faceUp: true,
+          },
     });
   });
 }

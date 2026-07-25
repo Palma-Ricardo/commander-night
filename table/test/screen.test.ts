@@ -95,6 +95,52 @@ describe('layoutScreen (the hand)', () => {
   });
 });
 
+describe('layoutScreen (paged hand, §4.4 hand mode)', () => {
+  const vp = { w: 1600, h: 900 };
+  const oversized = () => mkState([mkPlayer('p1', 'You', { human: true, handSize: 12 })], 'p1');
+
+  it('a hand at the threshold still fans whole', () => {
+    const state = mkState([mkPlayer('p1', 'You', { human: true, handSize: 10 })], 'p1');
+    const band = handBandHeight(vp);
+    const placed = hand(layoutScreen(state, vp));
+    expect(placed.length).toBe(10);
+    expect(placed.every(p => p.placement.y <= vp.h && p.placement.y >= vp.h - band)).toBe(true);
+  });
+
+  it('an oversized hand fans one page in the band, tucks the rest below the edge', () => {
+    const state = oversized();
+    const band = handBandHeight(vp);
+    const placed = hand(layoutScreen(state, vp, 0, false, 0));
+    expect(placed.length).toBe(12);                       // every card stays a placed actor
+    const inBand = placed.filter(p => p.placement.y <= vp.h);
+    const tucked = placed.filter(p => p.placement.y > vp.h);
+    expect(inBand.length).toBe(8);                        // HAND_PAGE_SIZE
+    expect(tucked.length).toBe(4);
+    expect(inBand.every(p => p.placement.y >= vp.h - band)).toBe(true);
+    // page 0 shows the first cards, in order
+    expect(inBand.map(p => p.key)).toEqual(state.me.hand.slice(0, 8).map(c => c.id));
+  });
+
+  it('page 1 fans the remainder; the page argument clamps', () => {
+    const state = oversized();
+    const page1 = hand(layoutScreen(state, vp, 0, false, 1));
+    const shown = page1.filter(p => p.placement.y <= vp.h);
+    expect(shown.map(p => p.key)).toEqual(state.me.hand.slice(8).map(c => c.id));
+    const clamped = hand(layoutScreen(state, vp, 0, false, 99));
+    expect(clamped.filter(p => p.placement.y <= vp.h).map(p => p.key))
+      .toEqual(state.me.hand.slice(8).map(c => c.id));
+  });
+
+  it('off-page cards keep the hand zone and stay inside the viewport width', () => {
+    const placed = hand(layoutScreen(oversized(), vp, 0, false, 0));
+    for (const p of placed) {
+      expect(p.placement.zone).toBe('hand');
+      expect(p.placement.x).toBeGreaterThanOrEqual(0);
+      expect(p.placement.x).toBeLessThanOrEqual(vp.w);
+    }
+  });
+});
+
 const stackOf = (placed: ReturnType<typeof layoutScreen>) => placed.filter(p => p.placement.zone === 'stack');
 const withStack = (items: StackItem[], handSize = 4) =>
   mkState([mkPlayer('p1', 'You', { human: true, handSize })], 'p1', { stack: items });

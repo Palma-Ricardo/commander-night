@@ -34,8 +34,12 @@ import {
 } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
-import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX } from '../tuning';
-import { stackAnchor } from '../layout/screen';
+import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX, PAGE_TURN_MS } from '../tuning';
+import { handPageCount, stackAnchor } from '../layout/screen';
+import {
+  carouselContent, carouselPageCount, layoutCarouselFan, type BrowseZone, type CarouselEntry,
+} from '../layout/carousel';
+import { carouselStore, pageFor, turnPage } from './carousel-store';
 import { promptObjectIds, stackTargetIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, HL_TARGET, isClickable, rectContains,
@@ -108,6 +112,15 @@ export class TableScene implements DirectorSink {
   private readonly worldActors = new Container();
   private readonly screenActors = new Container();  // fixed (the hand + the stack pile)
   private readonly actors = new Map<string, CardActor>();
+  // The carousel browser (prompts-on-the-table §4.4): a screen-space fan above
+  // the hand, its own actor map — its cards are not part of the keyframe layout
+  // (a library look's cards exist nowhere else), so the director's diff never
+  // touches them. Synced from prompt/state/store changes by syncCarousel.
+  private readonly carouselLayer = new Container();
+  private readonly carouselActors = new Map<string, CardActor>();
+  private carouselKey: string | undefined;          // last content identity, for open/turn juice
+  private unsubCarousel?: () => void;
+  private lastHandPage = -1;
   // Stack tethers (T4 §9): the source + target arrows of the top-of-stack item.
   // A screen-space overlay under the cards, redrawn every frame so the arrows
   // track the camera as their felt endpoints keystone across the seam. The links
@@ -177,6 +190,9 @@ export class TableScene implements DirectorSink {
    *  chooseTargets is already pending, else the buffered intent. */
   onPointTarget?: (objectId: Id) => void;
   onObjectHover?: (objectId: Id | undefined, anchor?: ScreenAnchor) => void;
+  /** A click on a graveyard/exile pile (its top card or its footprint) that no
+   *  prompt affordance consumed — the chrome wires this to the §4.4 browse fan. */
+  onPileOpen?: (playerId: Id, zone: BrowseZone) => void;
   /** Reads the hover preview panel's current on-screen rect (chrome-owned), so the
    *  scene can hold the preview open while the pointer is over the panel itself. */
   getPreviewRect?: () => ScreenAnchor | undefined;
@@ -223,7 +239,10 @@ export class TableScene implements DirectorSink {
     // Tethers sit above the felt/world actors (so an arrowhead lands visibly on a
     // target permanent) but below the screen cards (so the pile stays readable and
     // the arrow reads as emerging from beneath the top card).
-    this.app.stage.addChild(this.worldLayer, this.stackTethers, this.dragLine, this.screenActors, this.effects.screenFx);
+    // The carousel fan reads above the hand/stack (it is the active surface when
+    // open) but below the fixed screen effects (vignette, ribbon).
+    this.app.stage.addChild(this.worldLayer, this.stackTethers, this.dragLine, this.screenActors,
+      this.carouselLayer, this.effects.screenFx);
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
@@ -253,16 +272,31 @@ export class TableScene implements DirectorSink {
     // the viewport edge must still cast or come home, never strand mid-air.
     const onUp = (e: PointerEvent): void => this.endDrag(e);
     const onCancel = (): void => this.cancelDrag();
+    // Wheel pages the open carousel (§4.4: wheel/arrows/edge buttons, never
+    // vertical scroll). Closed ⇒ the wheel does nothing, as before.
+    const onWheel = (e: WheelEvent): void => this.handleWheel(e);
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
     this.detachPointer = () => {
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerleave', onLeave);
+      canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
     };
+
+    // The fan re-syncs on any UI-store change (browse open/close, filter, page);
+    // a hand-page change re-lays the screen layer like a log-inset move (§4.4).
+    this.unsubCarousel = carouselStore.subscribe(s => {
+      if (s.handPage !== this.lastHandPage) {
+        this.lastHandPage = s.handPage;
+        this.relayScreen(PAGE_TURN_MS);
+      }
+      this.syncCarousel();
+    });
 
     setActiveScene(this);
   }
@@ -287,7 +321,7 @@ export class TableScene implements DirectorSink {
     links: StackLinks,
   ): void {
     const size = this.size;
-    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack);
+    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack, this.handPageNow(to));
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
@@ -351,6 +385,7 @@ export class TableScene implements DirectorSink {
     this.rebuildFelt(to);
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
+    this.syncCarousel();         // browse contents live-update; prompt fans re-lay
     this.syncCameraFocus(to);    // §14: widen for a cross-board stack target, no prompt needed
     this.announcePhase(events);  // outside the juice gate on purpose — see below
     if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration, preset);
@@ -359,6 +394,7 @@ export class TableScene implements DirectorSink {
 
   frame(dtMs: number, preset: CameraPreset): void {
     for (const a of this.actors.values()) a.update(dtMs);
+    for (const a of this.carouselActors.values()) a.update(dtMs);
     this.updateDrag();   // the drag pin wins over any tween this frame (§9 drag-to-cast)
     this.advanceTimers(dtMs);
     this.effects.update(dtMs);
@@ -386,6 +422,7 @@ export class TableScene implements DirectorSink {
     this.updateFeltMesh(preset);
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
+    for (const a of this.carouselActors.values()) a.render(screen);
     this.drawStackTethers(preset);   // arrows read the actors' fresh projected bounds
     this.drawDragLine();             // the §4.2 chalk line tracks the same fresh bounds
     this.effects.render(world);   // effects live in world space (they self-project)
@@ -821,7 +858,7 @@ export class TableScene implements DirectorSink {
    *  after first paint (resolver store change or onArtReady). Idempotent: face()
    *  returns the same cached texture until the art is ready. */
   private refreshAllTextures(): void {
-    for (const a of this.actors.values()) {
+    for (const a of [...this.actors.values(), ...this.carouselActors.values()]) {
       if (a.card !== undefined && a.placement.faceUp) {
         const zone = a.placement.zone;
         a.setTexture(this.textures.face(a.card, imgTier(zone), imgPriority(zone)));
@@ -918,6 +955,7 @@ export class TableScene implements DirectorSink {
     const changed = newId !== this.lastPromptId;
     this.currentPrompt = prompt;
     this.refreshAffordances();
+    this.syncCarousel();              // §4.4 prompt mode opens/closes with its ask
     this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
     // Nameplates carry prompt state now (§5.2 candidate ring), so the furniture
     // model re-derives on prompt-store changes too — it is spec-cheap (a few
@@ -935,7 +973,7 @@ export class TableScene implements DirectorSink {
    *  transition change. */
   private refreshAffordances(): void {
     const prompt = this.currentPrompt;
-    for (const a of this.actors.values()) {
+    for (const a of [...this.actors.values(), ...this.carouselActors.values()]) {
       const aff = prompt !== undefined && a.objectId !== undefined
         ? affordanceFor(prompt, a.objectId) : undefined;
       a.setHighlight(highlightForAffordance(aff));
@@ -945,7 +983,96 @@ export class TableScene implements DirectorSink {
 
   private handleActorTap(actor: CardActor): void {
     if (this.dragSwallowsTap) { this.dragSwallowsTap = false; return; }
-    if (actor.objectId !== undefined) this.onObjectClick?.(actor.objectId);
+    if (actor.objectId === undefined) return;
+    // A graveyard/exile pile top that no prompt affordance claims opens the §4.4
+    // browse fan instead of clicking into the void. Candidate cards in a pile
+    // keep their prompt meaning — the affordance wins.
+    const zone = actor.placement.zone;
+    if (actor.space === 'world' && (zone === 'graveyard' || zone === 'exile')
+      && actor.placement.ownerId !== undefined
+      && (this.currentPrompt === undefined || affordanceFor(this.currentPrompt, actor.objectId) === undefined)) {
+      this.onPileOpen?.(actor.placement.ownerId, zone);
+      return;
+    }
+    this.onObjectClick?.(actor.objectId);
+  }
+
+  // ── the carousel browser (prompts-on-the-table §4.4) ─────────────────────────
+
+  /** The clamped §4.4 hand page for the current hand size. */
+  private handPageNow(state: GameState | undefined): number {
+    const n = state?.me.hand.length ?? 0;
+    return Math.min(carouselStore.getState().handPage, handPageCount(n) - 1);
+  }
+
+  /** Reconcile the fan with what should be showing: derive the content
+   *  (prompt mode wins over browse), lay out the current page, and diff the
+   *  carousel actors against it. Safe to call from any trigger — prompt change,
+   *  state transition, UI-store change, resize — it is pure over those inputs. */
+  private syncCarousel(): void {
+    if (this.director === undefined) return;
+    const state = this.director.presented;
+    const ui = carouselStore.getState();
+    const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
+    const entries = content?.entries ?? [];
+    const fan = layoutCarouselFan(entries.length, pageFor(content?.key), this.size, this.rightInset);
+    this.carouselKey = content?.key;
+
+    const live = new Set<string>();
+    for (const [index, placement] of fan.placements) {
+      const e = entries[index]!;
+      const key = `car:${e.id}`;
+      live.add(key);
+      let actor = this.carouselActors.get(key);
+      if (actor === undefined) {
+        actor = this.createCarouselActor(key, e);
+        this.carouselActors.set(key, actor);
+        this.carouselLayer.addChild(actor.view);
+        if (this.reducedMotion) {
+          actor.snapTo(placement);
+        } else {
+          // rise in from just below the bottom edge — open and page turns read
+          // as the fan sliding up through the table's edge
+          actor.seedCurrent({ x: placement.x, y: this.size.h + 180, rotation: 0, scale: placement.scale });
+          actor.animateTo(placement, PAGE_TURN_MS);
+        }
+      } else {
+        actor.animateTo(placement, PAGE_TURN_MS);
+      }
+      // prompt-mode candidates ring exactly like their board twins (§7)
+      const aff = this.currentPrompt !== undefined ? affordanceFor(this.currentPrompt, e.id) : undefined;
+      actor.setHighlight(highlightForAffordance(aff));
+      actor.view.cursor = isClickable(aff) ? 'pointer' : 'default';
+    }
+    for (const [key, actor] of this.carouselActors) {
+      if (!live.has(key)) { actor.destroy(); this.carouselActors.delete(key); }
+    }
+  }
+
+  private createCarouselActor(key: string, e: CarouselEntry): CardActor {
+    const card = carouselCard(e);
+    const actor = new CardActor(key, e.id, this.textures.face(card, 'table', 0));
+    actor.card = card;
+    actor.space = 'screen';
+    // Tap + hover only — no pointerdown, so a carousel card can never arm a
+    // drag (it answers by click; §4.2 point drags belong to the felt).
+    actor.view.eventMode = 'static';
+    actor.view.on('pointertap', () => this.handleActorTap(actor));
+    actor.view.on('pointerover', () => this.handleActorOver(actor));
+    actor.view.on('pointerout', () => this.handleActorOut(actor));
+    return actor;
+  }
+
+  /** Wheel over the canvas pages the open carousel (§4.4); closed, it is inert. */
+  private handleWheel(e: WheelEvent): void {
+    if (this.carouselKey === undefined) return;
+    const state = this.director?.presented;
+    const ui = carouselStore.getState();
+    const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
+    if (content === undefined) return;
+    e.preventDefault();
+    const delta = (e.deltaY !== 0 ? e.deltaY : e.deltaX) > 0 ? 1 : -1;
+    turnPage(content.key, delta, carouselPageCount(content.entries.length));
   }
 
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
@@ -1164,7 +1291,8 @@ export class TableScene implements DirectorSink {
   private restackScreen(): void {
     const state = this.director.presented;
     if (state === undefined) return;
-    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack);
+    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
+      this.handPageNow(state));
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
@@ -1188,7 +1316,7 @@ export class TableScene implements DirectorSink {
       }
     }
     if (this.previewActorKey !== undefined) {
-      const actor = this.actors.get(this.previewActorKey);
+      const actor = this.actors.get(this.previewActorKey) ?? this.carouselActors.get(this.previewActorKey);
       const p = this.pointer;
       const onCard = actor !== undefined && p !== undefined && anchorContains(actor.bounds(), p);
       const rect = this.getPreviewRect?.();
@@ -1228,8 +1356,27 @@ export class TableScene implements DirectorSink {
         }
       }
     }
+    // A graveyard/exile footprint click opens the §4.4 browse fan — checked
+    // before the quadrant focus, or an *empty* pile (no top-card actor to tap)
+    // could never be browsed.
+    for (const seat of seatLayouts(state)) {
+      for (const zone of ['graveyard', 'exile'] as const) {
+        const a = seat.piles[zone];
+        const rect: Rect = {
+          x: a.x - PILE_FOOTPRINT.w / 2, y: a.y - PILE_FOOTPRINT.h / 2,
+          w: PILE_FOOTPRINT.w, h: PILE_FOOTPRINT.h,
+        };
+        if (rectContains(rect, local)) { this.onPileOpen?.(seat.player.id, zone); return; }
+      }
+    }
     const seat = seatLayouts(state).findIndex(s => rectContains(s.quadrant, local));
     if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
+  }
+
+  /** The on-screen rect of the actor rendering `objectId`, if any — the anchor
+   *  for a DOM prompt surface pinned to its subject (§5.4 chooseAbility). */
+  anchorFor(objectId: Id): ScreenAnchor | undefined {
+    return this.actorByObject(objectId)?.bounds();
   }
 
   /** §14: keep everything that must be seen in shot — pull back to the whole table
@@ -1298,7 +1445,8 @@ export class TableScene implements DirectorSink {
   private relayScreen(durationMs: number): void {
     const state = this.director?.presented;
     if (state === undefined) return;
-    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack);
+    const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
+      this.handPageNow(state));
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
@@ -1551,7 +1699,7 @@ export class TableScene implements DirectorSink {
     const prompt = this.currentPrompt;
     if (prompt === undefined) return [];
     const ids: Id[] = [];
-    for (const a of this.actors.values()) {
+    for (const a of [...this.actors.values(), ...this.carouselActors.values()]) {
       if (a.objectId === undefined || ids.includes(a.objectId)) continue;
       if (isClickable(affordanceFor(prompt, a.objectId))) ids.push(a.objectId);
     }
@@ -1572,10 +1720,13 @@ export class TableScene implements DirectorSink {
     if (getActiveScene() === this) setActiveScene(null);
     this.detachPointer?.();
     this.unsubResolver?.();
+    this.unsubCarousel?.();
     this.effects.clear();
     this.timers = [];
     for (const a of this.actors.values()) a.destroy();
     this.actors.clear();
+    for (const a of this.carouselActors.values()) a.destroy();
+    this.carouselActors.clear();
     this.feltTex?.destroy(true);
     this.textures?.destroy();
     this.app?.destroy(true, { children: true });
@@ -1585,6 +1736,16 @@ export class TableScene implements DirectorSink {
 /** The centre of an on-screen bounding box (a projected actor face). */
 function centreOf(b: ScreenAnchor): Point {
   return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+}
+
+/** The card a carousel entry renders: the real card when the state resolves
+ *  one, else a minimal text-frame stand-in carrying the candidate's label —
+ *  the click answers by id either way (§4.4). */
+function carouselCard(e: CarouselEntry): Card {
+  return e.card ?? {
+    id: e.id, name: e.label, set: '', number: '', manaValue: 0,
+    types: [], subtypes: [], supertypes: [], colors: [], text: [],
+  };
 }
 
 /** Whether a screen-space point falls inside a projected actor's bounding box. */

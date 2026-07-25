@@ -202,7 +202,7 @@ button.danger { background: var(--error); color: #14161a; }
 }
 .mana-pool-empty { color: var(--muted); font-size: 0.72rem; font-style: italic; letter-spacing: 0.04em; }
 
-/* ── bottom-right: prompt dock + turn controls ───────────────────────────── */
+/* ── bottom-right: corner cluster + panels + turn controls ───────────────── */
 
 .dock-corner {
   position: fixed; right: calc(var(--rail-w) + 12px); bottom: 12px; z-index: 16;
@@ -211,33 +211,30 @@ button.danger { background: var(--error); color: #14161a; }
   transition: right 180ms ease;
 }
 
-.prompt-dock {
+.dock-hint { color: var(--muted); font-style: italic; font-size: 0.85rem; }
+.dock-cost { display: flex; align-items: center; }
+.dock-spinner { position: static; margin: 0; display: inline-block; width: 1rem; height: 1rem; }
+button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
+.amount-input { width: 5rem; text-align: center; }
+.turn-controls kbd {
+  margin-left: 0.3rem; padding: 0 0.25rem; font-size: 0.65rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+
+/* payMana's corner panel (§5.3 no-anchor position; T10 anchors it) and the
+   playerRequest pop-panel — the same chrome family as the cluster below. */
+.pay-panel, .request-panel {
   display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end;
   max-width: 100%;
-  /* On-scheme dark blue-gray, matching the turn-controls / log chrome rather than a
-     saturated accent slab (play-test #5). The primary button carries the accent so
-     the call-to-action still reads; a faint accent rim marks "a prompt is waiting". */
   background: color-mix(in srgb, var(--panel) 90%, #000 10%);
   border: 1px solid var(--border); border-radius: 10px; padding: 0.5rem 0.8rem;
   box-shadow: 0 8px 30px #000a, inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.dock-msg { font-weight: 600; }
-.dock-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.dock-hint { color: var(--muted); font-style: italic; font-size: 0.85rem; }
-.dock-cost { display: flex; align-items: center; }
-.dock-busy .dock-controls { opacity: 0.6; }
-.dock-spinner { position: static; margin: 0; display: inline-block; width: 1rem; height: 1rem; }
-.dock-list { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-.dock-list-col { flex-direction: column; align-items: stretch; max-height: 14rem; overflow-y: auto; }
-button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
-.amount-input { width: 5rem; text-align: center; }
-.prompt-dock kbd, .turn-controls kbd {
-  margin-left: 0.3rem; padding: 0 0.25rem; font-size: 0.65rem; color: var(--muted);
-  border: 1px solid var(--border); border-radius: 3px;
-}
-.stranded-targets { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
-.stranded-target { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
-.stranded-target.card-selected { border-color: var(--accent); color: var(--accent); }
+.pay-panel.dock-busy, .request-panel.dock-busy { opacity: 0.75; }
+.request-panel { flex-direction: column; align-items: stretch; }
+.request-panel h4 { margin: 0; font-size: 0.85rem; letter-spacing: 0.04em; color: var(--muted); }
+.request-panel p { margin: 0; }
+.request-options { display: flex; flex-direction: column; gap: 0.4rem; }
 
 /* The corner cluster (prompts-on-the-table §4.1): Pass + contextual
    primary/secondary/special. Same chrome family as the dock it is eating. */
@@ -403,7 +400,7 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   border-radius: 6px; background: var(--panel);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
-.card.card-grid { width: calc(var(--card-unit) * 1.42); }
+.card.card-small { width: calc(var(--card-unit) * 1.15); }
 .card.card-preview { width: calc(var(--card-unit) * 2.85); }
 .card-face { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
 .card-tapped { transform: rotate(90deg); }
@@ -500,29 +497,82 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 /* the bundled colour pip (disc + glyph baked in) — just sized to the text pip */
 .mana-img { width: 1.05rem; height: 1.05rem; vertical-align: middle; display: inline-block; flex: none; }
 
-/* ── modals + hover preview ──────────────────────────────────────────────── */
+/* ── screen-space prompt surfaces (§5 — zero backdrop-modals remain) ─────── */
 
-.modal-backdrop {
-  position: fixed; inset: 0; background: #000a; z-index: 100;
-  display: flex; align-items: center; justify-content: center;
+.modal-msg { color: var(--text); }   /* the concede pop-panel's caption */
+.pile-filter { padding: 0.35rem 0.5rem; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; }
+
+/* chooseAbility (§5.4): the option list pinned under the acted-on card. */
+.option-list {
+  position: fixed; z-index: 40;
+  display: flex; flex-direction: column; gap: 0.3rem; width: 17.5rem; max-height: 60vh; overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--accent); border-radius: 8px; padding: 0.5rem;
+  box-shadow: 0 12px 40px #000c;
 }
-.modal {
-  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
-  padding: 0.8rem 1rem; max-width: min(76rem, 92vw); max-height: 85vh; overflow-y: auto;
-  box-shadow: 0 12px 40px #000d;
+.option-list button { text-align: left; font-size: 0.85rem; }
+.option-list-center { left: calc(50% - var(--rail-w) / 2); top: 45%; transform: translate(-50%, -50%); }
+
+/* chooseOption (§5.4): centred tiles, the acted-on card beside them. */
+.option-tiles {
+  position: fixed; left: calc(50% - var(--rail-w) / 2); top: 42%; transform: translate(-50%, -50%); z-index: 40;
+  display: flex; align-items: center; gap: 1rem; max-width: min(60rem, 80vw);
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1.1rem;
+  box-shadow: 0 12px 40px #000c, inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
-.modal header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.modal h3 { margin: 0 0 0.5rem; font-size: 1rem; }
-.modal-close { background: none; color: var(--muted); font-size: 1rem; padding: 0.1rem 0.4rem; }
-.modal-msg { color: var(--text); }
-.modal-actions { display: flex; gap: 0.6rem; margin-top: 0.8rem; }
-.pile-filter { width: 100%; margin: 0 0 0.6rem; padding: 0.35rem 0.5rem; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; }
-.card-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.piles { display: flex; gap: 1.2rem; }
+.option-tile-list { display: flex; gap: 0.6rem; flex-wrap: wrap; justify-content: center; }
+.option-tile-col { flex-direction: column; align-items: stretch; max-height: 55vh; overflow-y: auto; flex-wrap: nowrap; }
+.option-tile { font-size: 0.95rem; padding: 0.6rem 1rem; }
+
+/* choosePile (§5): two fans side by side, a pick button per fan. */
+.pile-choice {
+  position: fixed; left: calc(50% - var(--rail-w) / 2); top: 42%; transform: translate(-50%, -50%); z-index: 40;
+  display: flex; gap: 1.4rem; max-width: min(76rem, 88vw); max-height: 70vh; overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1.1rem;
+  box-shadow: 0 12px 40px #000c;
+}
+.pile-choice.dock-busy { opacity: 0.75; }
 .pile-col { display: flex; flex-direction: column; gap: 0.6rem; flex: 1; }
-.distribute-rows { display: flex; flex-direction: column; gap: 0.4rem; }
-.distribute-row { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
-.distribute-row input { width: 4.5rem; text-align: center; }
+.pile-fan { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* distribute (§5.5): the chip fallback panel, low-centre above the hand. */
+.distribute-panel {
+  position: fixed; left: calc(50% - var(--rail-w) / 2); bottom: 26vh; transform: translateX(-50%); z-index: 40;
+  display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 1rem;
+  box-shadow: 0 12px 40px #000c, inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.distribute-panel.dock-busy { opacity: 0.75; }
+.distribute-panel p { margin: 0; font-size: 0.85rem; }
+.distribute-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
+.distribute-chip { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.7rem; }
+.chip-count { font-size: 1.05rem; min-width: 1.2rem; text-align: center; }
+
+/* the carousel bar (§4.4): the fan's DOM chrome, floating above the canvas fan */
+.carousel-bar {
+  position: fixed; left: calc(50% - var(--rail-w) / 2); transform: translateX(-50%); z-index: 40;
+  display: flex; align-items: center; gap: 0.7rem; max-width: min(50rem, 80vw);
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--border); border-radius: 999px; padding: 0.35rem 0.9rem;
+  box-shadow: 0 8px 30px #000a;
+}
+.carousel-bar[data-carousel='prompt'] { border-color: var(--accent); }
+.carousel-title { font-weight: 600; font-size: 0.9rem; white-space: nowrap; }
+.carousel-pager { display: inline-flex; align-items: center; gap: 0.4rem; font-variant-numeric: tabular-nums; }
+.carousel-pager button, .carousel-close { padding: 0.15rem 0.55rem; }
+.carousel-close { background: none; color: var(--muted); }
+.carousel-bar .pile-filter { width: 11rem; }
+
+/* the hand pager (§4.4 hand mode): over the hand band's right shoulder */
+.hand-pager {
+  position: fixed; right: calc(var(--rail-w) + 12px); bottom: calc(min(300px, max(150px, 22vh)) + 8px); z-index: 16;
+  display: inline-flex; align-items: center; gap: 0.4rem; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--panel) 88%, #000 12%);
+  border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.6rem;
+}
 
 .hover-preview {
   position: fixed; left: 0.8rem; bottom: 0.8rem; z-index: 200;
