@@ -51,8 +51,31 @@ export function App() {
     );
   }
 
+  // §11 fatal, full-screen like the takeover screen (prompts-on-the-table §5:
+  // zero backdrop-modals) — a lost seat replaces the game rather than dimming it.
+  if (conn.status === 'fatal') {
+    return (
+      <div className="table-root">
+        <TableCanvas />
+        <div className="table-screen">
+          <div className="fatal-screen">
+            <h1>Connection failed</h1>
+            <p>{conn.lastError ?? 'the seat was lost'}</p>
+            <div className="fatal-actions">
+              <button className="use-here" onClick={() => appManager.connect()}>Reconnect</button>
+              {inGame && (
+                <button onClick={() => appActions.leaveGame()}>Back to home</button>
+              )}
+            </div>
+          </div>
+        </div>
+        <Toaster />
+      </div>
+    );
+  }
+
   const screen = inGame ? 'game' : inLobby ? 'lobby' : 'home';
-  const showReconnect = conn.status === 'fatal' || conn.status === 'idle';
+  const showReconnect = conn.status === 'idle';
 
   return (
     <div className={`table-root${screen === 'game' ? ' in-game' : ''}`}>
@@ -73,19 +96,6 @@ export function App() {
       {screen === 'home' && <div className="table-screen"><Home /></div>}
       {screen === 'lobby' && <div className="table-screen"><Lobby /></div>}
       {screen === 'game' && <GameOverlay />}
-
-      {conn.status === 'fatal' && (
-        <div className="fatal-overlay">
-          <div className="fatal-modal">
-            <h2>Connection failed</h2>
-            <p>{conn.lastError ?? 'the seat was lost'}</p>
-            <button onClick={() => appManager.connect()}>Reconnect</button>
-            {inGame && (
-              <button onClick={() => appActions.leaveGame()}>Back to home</button>
-            )}
-          </div>
-        </div>
-      )}
 
       <Toaster />
     </div>

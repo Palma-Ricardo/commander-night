@@ -34,6 +34,7 @@ import {
 } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
+import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX } from '../tuning';
 import { stackAnchor } from '../layout/screen';
 import { promptObjectIds, stackTargetIds } from './prompt-objects';
 import {
@@ -140,6 +141,14 @@ export class TableScene implements DirectorSink {
   private previewGrace = 0;
   private pointer: Point | undefined;
   private detachPointer?: () => void;
+  /** Drag-to-cast (prompts-on-the-table §9): a press on a castable hand card
+   *  arms a drag; past DRAG_SLOP_PX it lifts and follows the pointer, and the
+   *  release side of the CAST_THRESHOLD line decides cast vs slide home. */
+  private drag?: { key: string; objectId: Id; startX: number; startY: number; moved: boolean };
+  /** Pixi still fires `pointertap` after a moved drag (the card follows the
+   *  pointer, so down and up land on the same object) — the release handler
+   *  raises this so handleActorTap ignores exactly that one tap. */
+  private dragSwallowsTap = false;
   /** True while the pending prompt targets a stack item (counter/copy/redirect):
    *  the pile un-fans into a clickable row so buried candidates are reachable (§7 T4). */
   private spreadStack = false;
@@ -223,11 +232,19 @@ export class TableScene implements DirectorSink {
     // Pointer left the canvas entirely (to the log panel, off-window). Clearing the
     // tracked position makes the next verifyHover drop both the lift and the preview.
     const onLeave = (): void => { this.pointer = undefined; };
+    // The drag release listens on window, not the canvas — a card dragged past
+    // the viewport edge must still cast or come home, never strand mid-air.
+    const onUp = (e: PointerEvent): void => this.endDrag(e);
+    const onCancel = (): void => this.cancelDrag();
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
     this.detachPointer = () => {
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerleave', onLeave);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
 
     setActiveScene(this);
@@ -325,6 +342,7 @@ export class TableScene implements DirectorSink {
 
   frame(dtMs: number, preset: CameraPreset): void {
     for (const a of this.actors.values()) a.update(dtMs);
+    this.updateDrag();   // the drag pin wins over any tween this frame (§9 drag-to-cast)
     this.advanceTimers(dtMs);
     this.effects.update(dtMs);
     const shake = this.effects.shakeOffset();
@@ -758,6 +776,7 @@ export class TableScene implements DirectorSink {
     // Every actor is hit-testable (§10: Pixi owns the table). Clicks route through
     // the pending prompt's affordance; hover previews any face-up card.
     actor.view.eventMode = 'static';
+    actor.view.on('pointerdown', () => this.maybeBeginDrag(actor));
     actor.view.on('pointertap', () => this.handleActorTap(actor));
     actor.view.on('pointerover', () => this.handleActorOver(actor));
     actor.view.on('pointerout', () => this.handleActorOut(actor));
@@ -903,10 +922,81 @@ export class TableScene implements DirectorSink {
   }
 
   private handleActorTap(actor: CardActor): void {
+    if (this.dragSwallowsTap) { this.dragSwallowsTap = false; return; }
     if (actor.objectId !== undefined) this.onObjectClick?.(actor.objectId);
   }
 
+  // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
+
+  /** A press on a hand card with a real action affordance arms a drag. Arming is
+   *  not dragging: the press stays an ordinary click until the pointer travels
+   *  DRAG_SLOP_PX. manaOnly never lifts (§7 — never a click target either), and
+   *  target/source affordances on hand cards keep their click-select meaning. */
+  private maybeBeginDrag(actor: CardActor): void {
+    this.dragSwallowsTap = false;   // a fresh press always clears a stale swallow
+    const prompt = this.currentPrompt;
+    if (this.pointer === undefined || prompt === undefined || prompt.inflight) return;
+    if (actor.space !== 'screen' || actor.placement.zone !== 'hand' || actor.objectId === undefined) return;
+    if (affordanceFor(prompt, actor.objectId)?.kind !== 'action') return;
+    this.drag = {
+      key: actor.key, objectId: actor.objectId,
+      startX: this.pointer.x, startY: this.pointer.y, moved: false,
+    };
+  }
+
+  /** Per-frame drag pin, after the tweens and before paint: the dragged card
+   *  sits under the pointer whatever the layout is doing. A mid-drag transition
+   *  can retarget the actor's tween freely — the pin wins each frame, and the
+   *  release hands a clean current-position back to the tween system. */
+  private updateDrag(): void {
+    const d = this.drag;
+    if (d === undefined) return;
+    const actor = this.actors.get(d.key);
+    if (actor === undefined) { this.drag = undefined; return; }   // re-keyed away mid-drag
+    const p = this.pointer;
+    if (p === undefined) return;                                  // off-canvas: hold the last pin
+    if (!d.moved) {
+      if (Math.hypot(p.x - d.startX, p.y - d.startY) < DRAG_SLOP_PX) return;
+      d.moved = true;
+      this.lowerHand();
+      this.hidePreview();
+      this.screenActors.addChild(actor.view);   // reads above the fan while dragged
+    }
+    actor.seedCurrent({ x: p.x, y: p.y, rotation: 0, scale: actor.placement.scale });
+  }
+
+  /** Release: above the cast line → the same {object} answer a click sends; at
+   *  or below it → nothing. Either way the card slides home: on a successful
+   *  cast the next transition retargets the tween mid-flight from wherever the
+   *  card is (§6.3), so the slide never fights the fly-to-stack, and on a
+   *  rejected answer the card is simply back in the fan. The felt never sees
+   *  this release (the press began on the card, so no felt tap can fire). */
+  private endDrag(e: PointerEvent): void {
+    const d = this.drag;
+    if (d === undefined) return;
+    this.drag = undefined;
+    if (!d.moved) return;                        // plain click — pointertap handles it
+    this.dragSwallowsTap = true;
+    const actor = this.actors.get(d.key);
+    if (actor === undefined) return;
+    const r = this.app.canvas.getBoundingClientRect();
+    const y = e.clientY - r.top;
+    if (y < this.size.h * (1 - CAST_THRESHOLD)) this.onObjectClick?.(d.objectId);
+    actor.animateTo(actor.placement, DRAG_HOME_MS);
+  }
+
+  /** pointercancel (tab switch, pen lift-off): never cast — just come home. */
+  private cancelDrag(): void {
+    const d = this.drag;
+    if (d === undefined) return;
+    this.drag = undefined;
+    if (!d.moved) return;
+    this.dragSwallowsTap = true;
+    this.actors.get(d.key)?.animateTo(this.actors.get(d.key)!.placement, DRAG_HOME_MS);
+  }
+
   private handleActorOver(actor: CardActor): void {
+    if (this.drag?.moved === true) return;   // a dragged card crossing others pops nothing
     if (actor.objectId === undefined || !actor.placement.faceUp) return;
     // Hand cards read via the in-place raise (§9) — no corner preview. Every other
     // face-up card gets the preview panel instead.

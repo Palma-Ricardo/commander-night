@@ -83,6 +83,10 @@ export async function dockControls(page: Page): Promise<number> {
   return await page.locator(
     [
       '.prompt-dock button:enabled',
+      // T7 (prompts-on-the-table): confirm/priority/chooseAmount render in the
+      // corner cluster + amount selector instead of the table client's dock
+      '.corner-cluster button:enabled',
+      '.amount-selector button:enabled',
       '.modal button:enabled',
       '.modal [role=button]',
       '.ability-popover button:enabled',
@@ -252,9 +256,9 @@ export async function driveGame(page: Page, opts: DriveOpts): Promise<DriveResul
       throw new Error(`[${opts.label}] stuck ≥${stuckMs / 1000}s on ${fingerprint} (${snap.promptKind})`);
     }
 
-    // the dock must render for the pending prompt — DOM in both clients (§7)
-    const dock = page.locator('.prompt-dock');
-    if (await dock.count() === 0) {
+    // a prompt surface must render for the pending prompt — the dock (classic,
+    // and the table's unmigrated kinds) or the corner cluster (table, T7+)
+    if (await page.locator('.prompt-dock, .corner-cluster').count() === 0) {
       await page.waitForTimeout(TICK_MS);
       continue;
     }
@@ -263,7 +267,8 @@ export async function driveGame(page: Page, opts: DriveOpts): Promise<DriveResul
     // Polled, not sampled once — the dock is React DOM and the table's affordance
     // rings are painted from a Pixi effect, so the two can legitimately be one
     // frame apart. A dead end is a *sustained* absence of any way to answer.
-    if (!(await dock.getAttribute('class'))?.includes('dock-busy')) {
+    // `.dock-busy` marks an answer in flight on whichever surface sent it.
+    if (await page.locator('.dock-busy').count() === 0) {
       await expect.poll(() => enabledControls(page), {
         timeout: 3000,
         message: `[${opts.label}] dead-end prompt ${snap.promptId} (${snap.promptKind})`,

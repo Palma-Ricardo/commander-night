@@ -8,7 +8,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import type { GameState } from '@night/core/protocol/protocol';
-import { Modal } from './Modal';
 
 type SkipMode = NonNullable<GameState['me']['skip']>;
 
@@ -119,15 +118,30 @@ export function TurnControls() {
   );
 }
 
-/** Concede is irreversible → type-to-confirm (§7). */
+/** Concede is irreversible → type-to-confirm (§7), in a corner pop-panel
+ *  (prompts-on-the-table §5: zero backdrop-modals). Closes on outside click,
+ *  like the menus; no Escape handling, so it can never race the document
+ *  shortcut listener for a pending prompt — while typing, `isTextInput`
+ *  suspends shortcuts anyway. */
 function ConcedeControl() {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
+  const rootRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
   return (
-    <>
-      <button className="concede-btn" onClick={() => { setText(''); setOpen(true); }}>Concede</button>
+    <span className="menu-root" ref={rootRef}>
+      <button className="concede-btn" onClick={() => { setText(''); setOpen(o => !o); }}>Concede</button>
       {open && (
-        <Modal title="Concede the game?" onClose={() => setOpen(false)} suspendsShortcuts>
+        <div className="menu-pop concede-pop">
           <p className="modal-msg">This cannot be undone. Type <b>concede</b> to confirm.</p>
           <input
             autoFocus
@@ -135,7 +149,7 @@ function ConcedeControl() {
             onChange={e => setText(e.target.value)}
             placeholder="concede"
           />
-          <footer className="modal-actions">
+          <div className="concede-actions">
             <button
               className="danger"
               disabled={text.trim().toLowerCase() !== 'concede'}
@@ -147,9 +161,9 @@ function ConcedeControl() {
               Concede
             </button>
             <button onClick={() => setOpen(false)}>Keep playing</button>
-          </footer>
-        </Modal>
+          </div>
+        </div>
       )}
-    </>
+    </span>
   );
 }

@@ -19,6 +19,9 @@ import { getActiveScene } from '../scene/TableScene';
 import { displaySeats, seatOfPlayer } from '../layout/world';
 import { cameraHudStore } from './camera-store';
 import { PromptDock } from './PromptDock';
+import { CornerCluster } from './CornerCluster';
+import { InstructionLine } from './InstructionLine';
+import { AmountSelector } from './AmountSelector';
 import { TurnControls } from './TurnControls';
 import { LogPanel, useRematchCode } from './LogPanel';
 import { HoverPreview } from './HoverPreview';
@@ -66,6 +69,7 @@ export function GameOverlay() {
       )}
 
       <Ribbon state={state} />
+      <InstructionLine />
       <Camstate />
 
       <div className="hud-topright">
@@ -76,9 +80,12 @@ export function GameOverlay() {
 
       <ManaPool />
 
+      <AmountSelector />
+
       <div className="dock-corner">
         <TurnControls />
         <PromptDock />
+        <CornerCluster />
       </div>
 
       <HoverPreview />

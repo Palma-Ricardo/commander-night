@@ -110,6 +110,22 @@ button.danger { background: var(--error); color: #14161a; }
 .ribbon b { color: var(--brass); font-weight: 700; }
 .ribbon .sep { color: var(--border); }
 
+/* The instruction line (prompts-on-the-table §8): the prompt message's one
+   home, under the ribbon, same centring formula. Accent-rimmed — it is the
+   ask. Click-through: it must never eat felt clicks. */
+.instruction-line {
+  position: fixed; top: 52px; left: calc(50% - var(--rail-w) / 2); transform: translateX(-50%); z-index: 18;
+  transition: left 180ms ease;
+  pointer-events: none;
+  max-width: min(48rem, 70vw);
+  font-weight: 600; font-size: 0.95rem; text-align: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 90%, #000 10%);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 30px #000a, inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  padding: 0.45rem 1rem; backdrop-filter: blur(6px);
+}
+
 .hud-topright {
   position: fixed; top: 12px; right: calc(var(--rail-w) + 12px); z-index: 20;
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
@@ -218,6 +234,36 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .stranded-targets { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
 .stranded-target { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
 .stranded-target.card-selected { border-color: var(--accent); color: var(--accent); }
+
+/* The corner cluster (prompts-on-the-table §4.1): Pass + contextual
+   primary/secondary/special. Same chrome family as the dock it is eating. */
+.corner-cluster {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;
+  background: color-mix(in srgb, var(--panel) 90%, #000 10%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.5rem 0.8rem;
+  box-shadow: 0 8px 30px #000a;
+}
+.corner-cluster button { font-size: 0.95rem; padding: 0.45rem 1rem; }
+.corner-cluster kbd {
+  margin-left: 0.3rem; padding: 0 0.25rem; font-size: 0.65rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+/* On an accent-filled primary (Pass holding priority) the muted gray hint
+   vanishes into the blue — take the button's own dark ink instead. */
+.corner-cluster .primary kbd {
+  color: inherit;
+  border-color: color-mix(in srgb, #14161a 45%, transparent);
+}
+.corner-cluster.dock-busy button { opacity: 0.6; }
+
+/* The chooseAmount selector (§5): screen-centre until M7 gives it an anchor. */
+.amount-selector {
+  position: fixed; left: calc(50% - var(--rail-w) / 2); top: 45%; transform: translate(-50%, -50%); z-index: 30;
+  display: flex; align-items: center; gap: 0.5rem;
+  background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem;
+  box-shadow: 0 12px 40px #000c, inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
 
 .turn-controls {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;
@@ -501,10 +547,21 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .bumped-screen p { color: var(--muted); }
 .bumped-screen .use-here { margin-top: 1rem; font-size: 1rem; padding: 0.5rem 1.5rem; }
 
-.fatal-overlay { position: fixed; inset: 0; background: #000a; z-index: 120; display: flex; align-items: center; justify-content: center; }
-.fatal-modal { background: var(--bg); border: 1px solid var(--error); border-radius: 8px; padding: 1.5rem 2rem; max-width: 30rem; display: flex; flex-direction: column; gap: 0.75rem; }
-.fatal-modal h2 { margin: 0; color: var(--error); }
-.fatal-modal p { margin: 0; color: var(--muted); }
+/* fatal, full-screen (prompts-on-the-table §5): same shape as .bumped-screen */
+.fatal-screen {
+  max-width: 32rem; margin: auto; text-align: center;
+  display: flex; flex-direction: column; gap: 0.75rem;
+  border: 1px solid var(--error); border-radius: 10px; padding: 2rem 2.5rem;
+  background: var(--bg);
+}
+.fatal-screen h1 { margin: 0; color: var(--error); font-size: 1.4rem; }
+.fatal-screen p { margin: 0; color: var(--muted); }
+.fatal-actions { margin-top: 0.5rem; display: flex; gap: 0.6rem; justify-content: center; }
+
+.concede-pop { min-width: 16rem; gap: 0.5rem; padding: 0.6rem; right: 0; left: auto; }
+.concede-pop .modal-msg { margin: 0; font-size: 0.85rem; color: var(--muted); }
+.concede-pop input { width: 100%; }
+.concede-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
 
 .toaster { position: fixed; right: 1rem; bottom: 1rem; z-index: 130; display: flex; flex-direction: column; gap: 0.5rem; max-width: 24rem; }
 .toast {

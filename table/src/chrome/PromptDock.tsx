@@ -1,10 +1,11 @@
-// The prompt dock (§7): at most one pending prompt, rendered in one fixed surface
-// above the hand; all board affordances derive from the same pending prompt — but
-// in the table client the *board* is the canvas (§10), so highlighting and
-// hit-testing live there (TableScene), and this dock carries the message, the
-// non-board controls, and the modal card-grid kinds. Answers capture the promptId
-// they rendered with; `inflight` disables the dock until promptDone or a
-// superseding prompt. All prompt kinds render here. Ported and adapted from
+// The prompt dock (§7), mid-strangulation (prompts-on-the-table §2): the
+// not-yet-migrated prompt kinds render their non-board controls here, in one
+// fixed surface by the corner. The message moved to InstructionLine, and
+// confirm / priority / chooseAmount moved to the corner cluster + amount
+// selector at T7 — this file shrinks kind-by-kind until T9 deletes it.
+// Board highlighting and hit-testing live on the canvas (TableScene); answers
+// capture the promptId they rendered with; `inflight` disables the dock until
+// promptDone or a superseding prompt. Ported and adapted from
 // client/src/ui/prompt/PromptDock.tsx.
 //
 // One deliberate divergence from the classic dock: chooseAbility does not anchor
@@ -16,19 +17,23 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
-import type { AnswerValue, Card, Prompt } from '@night/core/protocol/protocol';
+import type { AnswerValue, Card, Prompt, PromptKind } from '@night/core/protocol/protocol';
 import { parseManaCost } from '@night/core/state/mana';
 import { me, unreachableCandidates } from '@night/core/state/selectors';
 import { CardGrid, Modal } from './Modal';
-import { ManaSymbols, ManaText } from './ManaSymbols';
+import { ManaSymbols } from './ManaSymbols';
 
 const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'] as const;
+
+/** Kinds whose controls have moved off the dock (T7). The corner cluster and
+ *  AmountSelector own them now; rendering them here too would double up. */
+const MIGRATED: ReadonlySet<PromptKind> = new Set(['confirm', 'priority', 'chooseAmount']);
 
 export function PromptDock() {
   const prompt = useStore(appStores.prompt);
   const state = useStore(appStores.game, s => s.state);
   const p = prompt.pending;
-  if (p === undefined || state === undefined) return null;
+  if (p === undefined || state === undefined || MIGRATED.has(p.kind)) return null;
 
   const pid = p.promptId;
   const busy = prompt.inflight;
@@ -36,7 +41,6 @@ export function PromptDock() {
 
   return (
     <div className={`prompt-dock dock-${p.kind}${busy ? ' dock-busy' : ''}`} data-prompt-kind={p.kind}>
-      <span className="dock-msg"><ManaText text={p.message} /></span>
       <span className="dock-controls">
         <DockControls key={pid} p={p} busy={busy} answer={answer} prompt={prompt} state={state} />
       </span>
@@ -55,60 +59,6 @@ interface CtrlProps {
 
 function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
   switch (p.kind) {
-    case 'confirm':
-      return (
-        <>
-          <button className="primary" data-answer="yes" disabled={busy}
-            onClick={() => answer({ type: 'confirm', value: true })}>
-            {p.yesText ?? 'Yes'}
-          </button>
-          <button data-answer="no" disabled={busy} onClick={() => answer({ type: 'confirm', value: false })}>
-            {p.noText ?? 'No'}
-          </button>
-        </>
-      );
-
-    case 'priority': {
-      if (p.combat !== undefined) {
-        // toggles happen on the canvas (one round trip each, §8); the dock
-        // carries Done + the special shortcut.
-        return (
-          <>
-            <span className="dock-hint">
-              {p.combat.candidates.length > 0
-                ? `click creatures to ${p.combat.role === 'attackers' ? 'attack' : 'block'}`
-                : 'nothing can be declared'}
-            </span>
-            {p.combat.special !== undefined && (
-              <button data-answer="special" disabled={busy}
-                onClick={() => answer({ type: 'option', key: 'special' })}>
-                {p.combat.special} <kbd>A</kbd>
-              </button>
-            )}
-            <button className="primary" data-answer="done" disabled={busy}
-              onClick={() => answer({ type: 'confirm', value: true })}>
-              Done
-            </button>
-          </>
-        );
-      }
-      const anyAction = Object.values(p.playable)
-        .some(actions => actions.some(a => a.kind !== 'mana'));
-      return (
-        <>
-          {anyAction && <span className="dock-hint">click a highlighted card to act</span>}
-          <button
-            className={anyAction ? '' : 'primary'}
-            data-answer="pass"
-            disabled={busy}
-            onClick={() => answer({ type: 'confirm', value: false })}
-          >
-            Pass
-          </button>
-        </>
-      );
-    }
-
     case 'chooseTargets':
       return <ChooseTargetsControls p={p} busy={busy} answer={answer} prompt={prompt} state={state} />;
 
@@ -166,9 +116,6 @@ function DockControls({ p, busy, answer, prompt, state }: CtrlProps) {
           </div>
         </Modal>
       );
-
-    case 'chooseAmount':
-      return <AmountControls min={p.min} max={p.max} busy={busy} answer={answer} />;
 
     case 'distribute':
       return <DistributeControls p={p} busy={busy} answer={answer} />;
@@ -313,35 +260,6 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
       {declinable && (
         <button data-answer="decline" disabled={busy} onClick={() => answer({ type: 'cancel' })}>Decline</button>
       )}
-    </>
-  );
-}
-
-// ── chooseAmount (§7): stepper clamped to min(max,99), free input to max ─────
-
-function AmountControls({ min, max, busy, answer }: {
-  min: number; max: number; busy: boolean; answer(a: AnswerValue): void;
-}) {
-  const [value, setValue] = useState(min);
-  const stepMax = Math.min(max, 99);
-  const valid = value >= min && value <= max;
-  return (
-    <>
-      <button disabled={busy || value <= min} onClick={() => setValue(v => v - 1)}>−</button>
-      <input
-        className="amount-input"
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={e => setValue(Number(e.target.value))}
-      />
-      <button disabled={busy || value >= stepMax} onClick={() => setValue(v => v + 1)}>+</button>
-      {/* no cancel control — the answer is required (§8) */}
-      <button className="primary" data-answer="ok" disabled={busy || !valid}
-        onClick={() => answer({ type: 'number', value })}>
-        OK
-      </button>
     </>
   );
 }
