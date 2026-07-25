@@ -22,6 +22,13 @@ function bridgeUrl(): string {
   return `${proto}://${location.host}/ws`;
 }
 
+/** Dev, or a build explicitly flagged for the harness (`--mode harness`, which the
+ *  deploy path never sets). Gates the `window.__night` handle and the §6
+ *  keyframe-verify probe — the built-bundle tier exists to probe the real bundle's
+ *  patch/keyframe conformance, and tying the probe to `DEV` alone left it off in
+ *  exactly that tier (T5, 2026-07-24). */
+const HARNESS = import.meta.env.DEV || import.meta.env.VITE_NIGHT_HARNESS === '1';
+
 export const appKV = browserKV();
 export const appStores = createStores(appKV);
 export const appManager = createSocketManager({
@@ -30,7 +37,7 @@ export const appManager = createSocketManager({
   recorder,
   url: bridgeUrl(),
   strictDecode: import.meta.env.DEV,
-  devVerify: import.meta.env.DEV,
+  devVerify: HARNESS,
 });
 export const appScryfall = createScryfallResolver({ kv: appKV });
 export const appActions = createActions(appStores, appManager, appKV, { scryfall: appScryfall });
@@ -59,11 +66,15 @@ export function bootApp(): void {
 // Semantic harness (§12), identical contract to the classic client. scene()
 // reads the live Pixi actors; before the first frame it falls back to the
 // state-derived scene so the handle is never empty.
-const HARNESS = import.meta.env.DEV || import.meta.env.VITE_NIGHT_HARNESS === '1';
 if (HARNESS && typeof window !== 'undefined') {
   installHarness(
     window,
     createCoreHarness(appStores, appActions),
-    () => getActiveScene()?.scene() ?? sceneFromState(appStores.game.getState().state),
+    {
+      scene: () => getActiveScene()?.scene() ?? sceneFromState(appStores.game.getState().state),
+      // §13's no-dead-end invariant over a canvas board: the ringed actors, read
+      // from the live scene. Before the first layout there are no rings yet.
+      highlights: () => getActiveScene()?.highlights() ?? [],
+    },
   );
 }

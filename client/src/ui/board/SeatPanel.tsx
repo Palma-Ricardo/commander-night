@@ -44,6 +44,7 @@ export function SeatPanel({ player, state, mine, onBrowse }: Props) {
     <div
       className={classes.join(' ')}
       data-player-name={player.name}
+      data-object-id={player.id}
       onClick={aff !== undefined ? () => objectClick(prompt, player.id) : undefined}
       role={aff !== undefined ? 'button' : undefined}
     >

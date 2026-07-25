@@ -27,6 +27,7 @@ export function StackPanel({ state }: { state: GameState }) {
             <li
               key={item.id}
               className={classes.join(' ')}
+              data-object-id={item.id}
               onClick={aff !== undefined ? () => objectClick(prompt, item.id) : undefined}
               role={aff !== undefined ? 'button' : undefined}
             >

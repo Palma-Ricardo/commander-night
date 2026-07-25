@@ -332,9 +332,24 @@ harness, removed at the end of the milestone.
 
 **New at C5: the built bundle is tested.** Every tier through C4 ran against the
 Vite dev server, and `window.__night` is `DEV`-gated — so the production bundle,
-the thing that actually ships, had never been driven. `npm run test:preview`
-runs the auto-player against a `--mode harness` build (`playwright.preview.config.ts`);
-`npm run build`, the deploy path, still emits no harness.
+the thing that actually ships, had never been driven. The auto-player runs against
+a `--mode harness` build; `npm run build`, the deploy path, still emits no harness.
+(At C5 that was `npm run test:preview` + `client/playwright.preview.config.ts`;
+the table client's T5 moved the whole browser tier to the root `e2e/` workspace,
+so it is now `npm run preview:harness` here plus `npm run e2e:classic:preview`
+at the root — same tier, one config for both clients.)
+
+**Corrected at T5** (2026-07-24): the §6 keyframe-verify probe was gated on
+`import.meta.env.DEV`, so it was *off* in exactly the tier built to exercise the
+real bundle — and the auto-player asserts `verifies ≥ 1`, which a built bundle
+could therefore never satisfy. Both clients now gate the probe (and the
+`window.__night` handle) on the same `HARNESS` flag: dev, or a build explicitly
+flagged `--mode harness`. `npm run build`, the deploy path, still ships neither.
+**Still unverified:** a full preview-tier run has not completed *since* that fix —
+the built bundle boots, connects and plays (observed to turn 40), but the run was
+cut short. Worth one clean `npm run e2e:classic:preview` before the next deploy,
+especially as the same session found the build itself broken (see the table-client
+design §14).
 
 ## 15. Risks
 

@@ -236,10 +236,17 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
   // them and they have to be offered right here.
   const stranded = p.cards !== undefined ? [] : unreachableCandidates(state, p.candidates);
 
-  const grid = p.cards !== undefined && p.cards.length > 0 && (
+  // When the server sends the candidates as `cards` they are usually *not* on the
+  // felt at all (a library look, an opponent's graveyard), so the modal grid is the
+  // whole affordance and the "click a highlighted target" hint below is a lie —
+  // there is nothing highlighted to click. Live-caught 2026-07-24 on Mosswort
+  // Bridge's Hideaway ("Select a card to exile face down").
+  const hasGrid = p.cards !== undefined && p.cards.length > 0;
+
+  const grid = hasGrid && (
     <Modal title={p.message}>
       <CardGrid
-        cards={p.cards}
+        cards={p.cards ?? []}
         selectedIds={prompt.selected}
         onCardClick={(c: Card) => {
           if (busy) return;
@@ -291,7 +298,8 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
         </span>
       )}
       {oneClick
-        ? stranded.length === 0 && <span className="dock-hint">click a highlighted target</span>
+        ? stranded.length === 0 && !hasGrid
+          && <span className="dock-hint">click a highlighted target</span>
         : (
           <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
             onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>

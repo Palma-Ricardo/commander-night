@@ -1,0 +1,21 @@
+{
+  "name": "@night/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "classic": "playwright test",
+    "table": "NIGHT_CLIENT=table playwright test",
+    "classic:preview": "NIGHT_CLIENT=classic-preview playwright test autoplayer",
+    "table:preview": "NIGHT_CLIENT=table-preview playwright test autoplayer"
+  },
+  "dependencies": {
+    "@night/core": "*"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
+  }
+}

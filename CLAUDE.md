@@ -10,16 +10,49 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
 - `docs/bridge/design.md` — bridge implementation spec (threading, translation, FSM, milestones)
 - `docs/client/design.md` — TS web client spec (stores, prompt UX, Scryfall, milestones C0–C5)
 - `docs/protocol/v1.md` — browser ⇄ bridge wire contract (**normative** for message shapes)
+- `docs/plans/2026-07-21-table-client-design.md` — **the table client** (Pixi), bridge M6 +
+  milestones T0–T6. This is the current work; `docs/client/design.md` is the classic client it
+  replaces
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-**Status:** Client C5 engineering done 2026-07-19 — deck-text image warm-up (own deck only:
+## Status
+
+**Phase 1 is closed** (2026-07-21): the React "classic" client shipped and a real 4-human night was
+played on the VPS. **Phase 2 is the PixiJS "table client"** — one felt, four place settings, a camera,
+animation — living in `table/` beside the classic client, which stays deployed at `/classic` as the
+fallback. Milestones and exit criteria: table-client design §13.
+
+- **M6 · T0–T2 done** (2026-07-22): bridge event derivation (`EventDeriver`, the additive
+  `events?` field, protocol §7.1); npm workspaces with `@night/core` extracted and shared by both
+  clients; quadrant world layout + camera rig; the `Director` two-clock animation queue.
+- **T3 done** (2026-07-22, exit criterion met 2026-07-23): the table client is fully interactive —
+  home → lobby → game, every prompt kind in a canvas-overlay dock, canvas hit-testing through the
+  shared `affordanceFor` model. Ricardo played a full game vs 3 AIs to `game.over` through it, which
+  cleared the switchable gate.
+- **T4 done** (2026-07-24): the juice — every §7.1 event kind emitted by the bridge, and the client's
+  §9 catalogue (tap/untap, three-lane combat with damage lunges, death, sacrifice, exile, counters,
+  triggers, particles, camera easing). Reviewed at the table, not by assertion; three passes.
+- **T5 done** (2026-07-24): resilience parity. The browser tier moved to a root `e2e/` workspace
+  (`@night/e2e`) that drives *either* client by baseURL, and the auto-player became semantic — it
+  reads the pending prompt off `window.__night.prompt()` and answers through `click`/`answer`/`pass`
+  instead of driving the dock's DOM, because a canvas board is opaque to CSS. Harness grew `prompt()`,
+  `highlights()`, `snapshot().seats` and `snapshot().socket`. **Exit criterion met: both specs green
+  against the table client** — auto-player 2.8 min to `game.over` with combat, and the 12.6-min
+  resilience run (reloads on both seats, chat, bumped round-trip, cleared-storage recovery join,
+  rematch into a second completed game). The **classic client is unregressed** — all three specs
+  green against it too (`npm run e2e:classic`, 13.9 min). Next is T6: a real four-human night on
+  the table client.
+
+Phase 1 history, still relevant below.
+
+**Client C5 engineering done 2026-07-19** — deck-text image warm-up (own deck only:
 opponents' lists are hidden info), large-screen layout pass (`--card-unit` scales cards and the
 sidebar with the viewport; the table is 1080p/1440p+, so the enemy was whitespace, not cramming),
 anchored hover previews, pile filter/sort/Escape, and a background-tab title-flash nudge (the
-chime was cut). The production bundle is now exercised for the first time: `npm run test:preview`
-drives the auto-player against a `--mode harness` build, and caddy serves `dist/` at `/` with
-`/ws` proxied to the bridge (immutable assets, `no-cache` index.html). **Remaining for both
-C5 and bridge M5: the real 4-human night on the deployed host.**
+chime was cut). The production bundle is now exercised for the first time: the auto-player runs
+against a `--mode harness` build, and caddy serves `dist/` at `/classic` with `/ws` proxied to the
+bridge (immutable assets, `no-cache` index.html). C5's and M5's shared exit — the real 4-human night
+on the deployed host — was **played 2026-07-21**, closing Phase 1.
 
 C4 detail, still relevant — multi-human resilience, **live-verified** end to end
 (`e2e/pw/resilience.spec.ts`, 10.2 min): two browsers, mid-game reload on *both* seats with the
@@ -70,6 +103,10 @@ declaration (§8 `priority.combat`). Milestone table in design.md §14.
 
 - `bridge/` — Maven project `night-bridge` (the daemon). Spike/capture tool under
   `bridge/src/spike/java`, activated by `-Pspike`.
+- npm workspaces (root `package.json`): `packages/core` (`@night/core` — protocol, net, stores,
+  state, images, the semantic test harness; shared by both clients), `client/` (the classic React
+  client, deployed at `/classic`), `table/` (the Pixi table client, deployed at `/`), `e2e/`
+  (`@night/e2e` — the live Playwright tier, one spec set for either client).
 - `vendor/` (gitignored) — `xmage-dist/` runnable server + client jars; `mage/` shallow source
   clone for reading XMage internals; `tools/`.
 - `docs/` — specs above; `docs/protocol/samples/` is the conformance corpus (bridge tests
@@ -91,6 +128,15 @@ cd bridge && mvn -Plive test                   # live tier: full game vs 3 AIs t
 cd bridge && mvn -Prun compile exec:exec       # the bridge daemon (repo-root cwd, JDK-26 flags)
 cd bridge && mvn -Pharness compile exec:exec   # interactive terminal client (human seat)
 cd bridge && mvn -Pspike compile exec:exec     # the spike/fixture-capture tool (repo-root cwd)
+
+npm test                          # every JS workspace's unit tier (core · client · table)
+cd table && npm run dev           # the table client on :5273  (classic: cd client, :5173)
+
+# Live browser tier (`e2e/`, one spec set for either client — needs XMage + bridge + that
+# client's dev server up). NIGHT_BASE_URL overrides the port, e.g. a deployed host:
+npm run e2e:table                 # the table client   ·  e2e:classic for the classic one
+npm run e2e:table:preview         # ...against the built bundle (needs `npm run preview:harness`)
+npx playwright test -c e2e/playwright.config.ts two-browser   # one spec (12 s smoke)
 ```
 
 ## Hard constraints
@@ -117,3 +163,10 @@ cd bridge && mvn -Pspike compile exec:exec     # the spike/fixture-capture tool 
 - Modern Java (release 25): records + sealed interfaces for protocol types, virtual threads.
 - One owning executor per piece of mutable state (design §4) — no shared-state shortcuts.
 - Wire-protocol changes happen in `docs/protocol/v1.md` first, then code follows.
+- **Both client packages need `resolve.dedupe: ['react', 'react-dom']`** in their vite config. The
+  root `overrides` pin keeps react inside each package while zustand hoists to the repo root, so
+  bundling the root's zustand leaves its `import 'react'` unresolvable — and rolldown does *not*
+  fail the build over it: it emits a top-level `throw Error("Could not resolve \"react\"…")` and
+  drops everything after it. The classic client shipped that for two days (a bundle with no UI, and
+  `npm run build` exit 0). After any build, sanity-check the output by grepping it for one of its own
+  class names (`grep -c prompt-dock dist/assets/index-*.js`) — size alone won't tell you.

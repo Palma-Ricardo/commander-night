@@ -13,7 +13,8 @@
 // table client reads it from its Pixi actors + camera.
 
 import type { createActions } from './net/actions';
-import type { AnswerValue, GameState, Id, Zone } from './protocol/protocol';
+import type { AnswerValue, GameState, Id, Prompt, Zone } from './protocol/protocol';
+import type { SocketStatus } from './stores/connection';
 import type { Stores } from './stores';
 
 type Actions = ReturnType<typeof createActions>;
@@ -34,6 +35,33 @@ export interface NightSnapshot {
   combatRole: 'attackers' | 'blockers' | null;
   inflight: boolean;
   turn: number | null;
+  /** Players the state knows about — the view-independent "the board is up"
+   *  signal (T5). The classic client counted `.seat-panel` DOM nodes; the table
+   *  client's seats are canvas furniture, so the specs read this instead. */
+  seats: number;
+  /** The socket's own state (§11). Without it a driver cannot tell "the game is
+   *  slow" from "this seat has no connection": both look like `promptId === null`,
+   *  and the stuck detector only watches a *pending* prompt, so a dead socket used
+   *  to spin silently until the game deadline. Live-caught 2026-07-24 when the dev
+   *  server died mid-run and the specs kept polling for another 8 minutes. */
+  socket: SocketStatus;
+}
+
+/** The pending prompt exactly as the wire sent it (protocol §8), plus the
+ *  interaction scratch around it. Added at T5: the auto-player used to read the
+ *  dock's DOM to learn what a prompt offered (option keys, distribute rows, pool
+ *  colours, combat candidates). A canvas client renders none of that on the
+ *  board, and the dock is not where game meaning lives anyway — so the driver
+ *  now computes a first-legal answer from the protocol data itself and submits it
+ *  through the semantic actions below. */
+export interface NightPromptView {
+  pending: Prompt;
+  /** chooseTargets accumulation, in click order (§7). */
+  selected: Id[];
+  /** payMana sources a click provably didn't progress payment through (§7). */
+  cantPay: Id[];
+  /** my floating mana pool — payMana spends the pool before tapping sources. */
+  pool: { W: number; U: number; B: number; R: number; G: number; C: number } | undefined;
 }
 
 /** One rendered object, keyed by its stable actor key (§6.1). Positions are
@@ -58,20 +86,36 @@ export interface NightScene {
   animating: boolean;
 }
 
+/** The half of the harness only the view can answer (§12). `scene()` reads the
+ *  rendered actors; `highlights()` reports which objects the view is actually
+ *  offering as clickable — the canvas-capable form of §13's no-dead-end
+ *  invariant, which the classic client used to prove with a `.hl-*` DOM count. */
+export interface NightHarnessView {
+  scene(): NightScene;
+  highlights(): Id[];
+}
+
 /** What `window.__night` exposes. Both clients implement it; the driver types
  *  against this and never against a client's internals. */
-export interface NightHarness {
+export interface NightHarness extends NightHarnessView {
   snapshot(): NightSnapshot;
-  scene(): NightScene;
+  /** The pending prompt itself, for computing a legal answer (T5). */
+  prompt(): NightPromptView | null;
   /** Submit an arbitrary answer to the current prompt (multi-target submit,
-   *  option key, number, pile, distribution, cancel…). */
-  answer(value: AnswerValue): void;
+   *  option key, number, pile, distribution, cancel…).
+   *
+   *  `promptId` is the id the caller decided its answer *for*: pass it and a
+   *  supersede between deciding and submitting drops the answer instead of
+   *  misapplying it to the new prompt (§7 stale-click rule). The dock gets this
+   *  for free by capturing the id it rendered with; a semantic caller has to say
+   *  so. Omit it to answer whatever is pending, as a live click does. */
+  answer(value: AnswerValue, promptId?: number): void;
   /** Pass priority / decline (confirm=false) on the current prompt. */
-  pass(): void;
+  pass(promptId?: number): void;
   /** Interact semantically with an object, dispatched on the pending prompt
    *  kind: declare in combat, toggle a target, click a mana source, pick an
    *  ability. The board affordance without the CSS. */
-  click(objectId: Id): void;
+  click(objectId: Id, promptId?: number): void;
 }
 
 declare global {
@@ -80,12 +124,13 @@ declare global {
   }
 }
 
-/** The view-independent half: snapshot + semantic actions, backed by the shared
- *  stores/actions. `scene()` is supplied per-client by installHarness(). */
+/** The view-independent half: snapshot, the pending prompt, and the semantic
+ *  actions, all backed by the shared stores/actions. The `NightHarnessView` half
+ *  is supplied per-client by installHarness(). */
 export function createCoreHarness(
   stores: Stores,
   actions: Actions,
-): Omit<NightHarness, 'scene'> {
+): Omit<NightHarness, keyof NightHarnessView> {
   const snapshot = (): NightSnapshot => {
     const g = stores.game.getState();
     const p = stores.prompt.getState();
@@ -101,29 +146,51 @@ export function createCoreHarness(
       combatRole: p.pending?.kind === 'priority' ? p.pending.combat?.role ?? null : null,
       inflight: p.inflight,
       turn: g.state?.turn.n ?? null,
+      seats: g.state?.players.length ?? 0,
+      socket: stores.connection.getState().status,
     };
   };
 
   return {
     snapshot,
 
-    answer(value: AnswerValue): void {
-      const id = stores.prompt.getState().pending?.promptId;
+    prompt(): NightPromptView | null {
+      const p = stores.prompt.getState();
+      if (p.pending === undefined) return null;
+      const state = stores.game.getState().state;
+      return {
+        pending: p.pending,
+        selected: [...p.selected],
+        cantPay: [...p.cantPay],
+        pool: state === undefined ? undefined
+          : state.players.find(pl => pl.id === state.me.playerId)?.manaPool,
+      };
+    },
+
+    // Every action funnels its promptId through the core actions, which drop a
+    // submit whose id is no longer pending — so an explicit `promptId` makes a
+    // stale answer a no-op rather than a wrong answer to the next prompt.
+    answer(value: AnswerValue, promptId?: number): void {
+      const id = promptId ?? stores.prompt.getState().pending?.promptId;
       if (id !== undefined) void actions.answerPrompt(id, value);
     },
 
-    pass(): void {
-      const id = stores.prompt.getState().pending?.promptId;
+    pass(promptId?: number): void {
+      const id = promptId ?? stores.prompt.getState().pending?.promptId;
       if (id !== undefined) void actions.answerPrompt(id, { type: 'confirm', value: false });
     },
 
-    click(objectId: Id): void {
+    click(objectId: Id, promptId?: number): void {
       const pending = stores.prompt.getState().pending;
-      if (pending === undefined) return;
+      if (pending === undefined || (promptId !== undefined && pending.promptId !== promptId)) return;
       const id = pending.promptId;
       switch (pending.kind) {
         case 'chooseTargets':
-          actions.toggleTarget(id, objectId);
+          // mirrors a board click exactly (client interact.ts): a single-target
+          // pick answers in one click (§8 allows {object} one-at-a-time), a
+          // multi-target pick accumulates scratch and is submitted whole (§7).
+          if (pending.max === 1) void actions.answerPrompt(id, { type: 'object', objectId });
+          else actions.toggleTarget(id, objectId);
           break;
         case 'payMana':
           void actions.clickManaSource(id, objectId);
@@ -168,12 +235,12 @@ export function sceneFromState(state: GameState | undefined): NightScene {
   return { actors, animating: false };
 }
 
-/** Assemble `window.__night` from the shared core + a client-supplied `scene()`,
- *  gated on the harness flag so production builds ship no handle. */
+/** Assemble `window.__night` from the shared core + the client-supplied view
+ *  half, gated on the harness flag so production builds ship no handle. */
 export function installHarness(
   win: Window,
-  core: Omit<NightHarness, 'scene'>,
-  scene: () => NightScene,
+  core: Omit<NightHarness, keyof NightHarnessView>,
+  view: NightHarnessView,
 ): void {
-  win.__night = { ...core, scene };
+  win.__night = { ...core, ...view };
 }

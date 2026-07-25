@@ -1307,6 +1307,22 @@ export class TableScene implements DirectorSink {
     };
   }
 
+  /** §12/§13 highlights accessor — the object ids the felt is currently ringing
+   *  as clickable. The classic client proves its no-dead-end invariant with a
+   *  `.hl-*` DOM count; on the canvas the ring is a Pixi graphic, so the harness
+   *  reports it from the same affordance the ring was painted from. Dock and modal
+   *  buttons are DOM in both clients and counted by the driver separately. */
+  highlights(): Id[] {
+    const prompt = this.currentPrompt;
+    if (prompt === undefined) return [];
+    const ids: Id[] = [];
+    for (const a of this.actors.values()) {
+      if (a.objectId === undefined || ids.includes(a.objectId)) continue;
+      if (isClickable(affordanceFor(prompt, a.objectId))) ids.push(a.objectId);
+    }
+    return ids;
+  }
+
   destroy(): void {
     if (getActiveScene() === this) setActiveScene(null);
     this.detachPointer?.();

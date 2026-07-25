@@ -1,22 +1,25 @@
-// The C4 exit criterion (design §14): a two-browser Playwright game with
-// mid-game reloads on both sides (same-promptId re-render asserted, protocol
-// §14), chat both ways (echo-only rendering + unread badge), a live bumped
-// round-trip (§10 single-session rule + "Use here"), recovery-join takeover
-// from a cleared-storage context (protocol §5 name re-bind), and a rematch
-// into a second completed game (§10 chat-convention flow). The client-side
-// mirror of the bridge's MultiHumanLiveTest.
+// The resilience exit criterion (design §14; T5 for the table client): a
+// two-browser Playwright game with mid-game reloads on both sides (same-promptId
+// re-render asserted, protocol §14), chat both ways (echo-only rendering + unread
+// badge), a live bumped round-trip (§10 single-session rule + "Use here"),
+// recovery-join takeover from a cleared-storage context (protocol §5 name
+// re-bind), and a rematch into a second completed game (§10 chat-convention
+// flow). The client-side mirror of the bridge's MultiHumanLiveTest.
+//
+// Client-agnostic (T5): the board is driven through the semantic harness and the
+// chrome through the DOM both clients share, so this is the table client's
+// resilience proof as much as the classic client's.
 
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { driveGame, snapshot } from './driver';
+import {
+  createLobby, joinViaLink, openChat, openHome, repoFile, sendChat, startGame, submitDeckAndReady,
+} from './chrome';
+import { attachConsole, driveGame, snapshot, waitForBoard } from './driver';
+import { SHOTS } from './target';
 
-const repoFile = (rel: string) =>
-  fs.readFileSync(fileURLToPath(new URL(`../../../${rel}`, import.meta.url)), 'utf8');
-const DECK_A = repoFile('upgrades_unleashed.dck');
+const DECK_A = repoFile('bridge/src/test/resources/decks/upgrades_unleashed.dck');
 const DECK_B = repoFile('bridge/decks/coverage_bgu.dck');
-
-const SHOTS = process.env['NIGHT_SHOT_DIR'] ?? 'e2e/pw/artifacts';
 
 const GAME_MS = 45 * 60_000;         // per game, AI pace (§2)
 // Two coasting humans + 2 AIs race, and the finish is wildly variable: 8 min
@@ -27,25 +30,7 @@ const RELOAD_A_MS = 30_000;
 const RELOAD_B_MS = 45_000;
 const TAKEOVER_AFTER_PROMPTS = 5;    // ...answered after B's reload completes
 
-async function fillDeckAndReady(page: Page, deck: string): Promise<void> {
-  await page.locator('.deck-editor textarea').fill(deck);
-  await page.getByRole('button', { name: 'Submit deck' }).click();
-  // own seat's verdict; the other seat's may land before/after — poll ready gate
-  await expect(page.locator('.deck-controls input[type=checkbox]')).toBeEnabled({ timeout: 20_000 });
-  await page.locator('.deck-controls input[type=checkbox]').click();
-}
-
-async function waitForBoard(page: Page, timeout: number): Promise<void> {
-  await expect(page.locator('.status-line')).toBeVisible({ timeout });
-  await expect(page.locator('.seat-panel')).toHaveCount(4);
-}
-
-async function sendChat(page: Page, text: string): Promise<void> {
-  await page.locator('.chat-input input').fill(text);
-  await page.locator('.chat-input input').press('Enter');
-}
-
-test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two game.overs', async ({ browser }) => {
+test('reloads, chat, bumped, recovery join, rematch — two browsers to two game.overs', async ({ browser }) => {
   test.setTimeout(2 * GAME_MS + 20 * 60_000);
   fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -54,25 +39,17 @@ test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two 
   let ctxB: BrowserContext = await browser.newContext();
   const pageA = await ctxA.newPage();
   let pageB: Page = await ctxB.newPage();
+  attachConsole(pageA, 'A');
+  attachConsole(pageB, 'B');
 
-  await pageA.goto('/');
-  await expect(pageA.locator('.status')).toHaveText('connected');
-  await pageA.getByPlaceholder('how the table sees you').fill('Ricardo');
-  await pageA.getByRole('button', { name: 'Create lobby' }).click();
-  await expect(pageA.locator('.lobby-code .code')).toBeVisible();
-  const code = (await pageA.locator('.lobby-code .code').textContent())!.trim();
+  await openHome(pageA, 'Ricardo');
+  const code = await createLobby(pageA);
+  await joinViaLink(pageB, code, 'Marta');
 
-  await pageB.goto(`/#/join/${code}`);
-  await pageB.getByPlaceholder('how the table sees you').fill('Marta');
-  await expect(pageB.getByPlaceholder('XKCD42')).toHaveValue(code);
-  await pageB.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(pageB.locator('.lobby-code .code')).toHaveText(code);
-
-  await fillDeckAndReady(pageA, DECK_A);
-  await fillDeckAndReady(pageB, DECK_B);
+  await submitDeckAndReady(pageA, DECK_A);
+  await submitDeckAndReady(pageB, DECK_B);
   await expect(pageA.locator('.seat-ready')).toHaveCount(2, { timeout: 15_000 });
-  await expect(pageA.locator('.host-controls')).toBeVisible();
-  await pageA.getByRole('button', { name: 'Start game' }).click();
+  await startGame(pageA);
 
   await waitForBoard(pageA, 120_000);
   await waitForBoard(pageB, 30_000);
@@ -83,26 +60,27 @@ test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two 
   await sendChat(pageA, 'hello from A');
   // B sees the unread badge before opening the tab, then the line itself
   await expect(pageB.locator('.chat-unread')).toBeVisible({ timeout: 15_000 });
-  await pageB.getByRole('button', { name: 'Chat' }).click();
+  await openChat(pageB);
   await expect(pageB.locator('.log-chat', { hasText: 'hello from A' })).toBeVisible();
   await expect(pageB.locator('.chat-unread')).toHaveCount(0);   // read
   await sendChat(pageB, 'hello from B');
-  await pageA.getByRole('button', { name: 'Chat' }).click();
+  await openChat(pageA);
   await expect(pageA.locator('.log-chat', { hasText: 'hello from B' })).toBeVisible({ timeout: 15_000 });
   // the sender renders only the echo — its own line came back through game.log
   await expect(pageA.locator('.log-chat', { hasText: 'hello from A' })).toBeVisible();
-  await pageA.screenshot({ path: `${SHOTS}/c4-chat.png`, fullPage: true });
+  await pageA.screenshot({ path: `${SHOTS}/chat.png`, fullPage: true });
 
   // ── bumped round-trip (§10): a second tab with the same storage takes the
   //    seat; "Use here" takes it back; no auto-bump loop ─────────────────────
   const pageA2 = await ctxA.newPage();
+  attachConsole(pageA2, 'A2');
   await pageA2.goto('/');
   await expect(pageA.locator('.bumped-screen')).toBeVisible({ timeout: 30_000 });
   await waitForBoard(pageA2, 30_000);                    // the thief resumed mid-game
   await pageA.getByRole('button', { name: 'Use here' }).click();
   await waitForBoard(pageA, 30_000);
   await expect(pageA2.locator('.bumped-screen')).toBeVisible({ timeout: 30_000 });
-  await pageA.screenshot({ path: `${SHOTS}/c4-bumped-recovered.png`, fullPage: true });
+  await pageA.screenshot({ path: `${SHOTS}/bumped-recovered.png`, fullPage: true });
   await pageA2.close();
 
   // ── game 1: drive both; each side reloads once mid-game (same-promptId
@@ -136,19 +114,18 @@ test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two 
 
   const ctxB2 = await browser.newContext();              // cleared storage
   const newPageB = await ctxB2.newPage();
-  await newPageB.goto(`/#/join/${code}`);
-  await newPageB.getByPlaceholder('how the table sees you').fill('Marta');
-  await newPageB.getByRole('button', { name: 'Join', exact: true }).click();
+  attachConsole(newPageB, 'B2');
+  await joinViaLink(newPageB, code, 'Marta', { expectLobby: false });
   await waitForBoard(newPageB, 60_000);
   if (tookOverMidGame) {
     // §14: the re-emitted prompt keeps its promptId across the takeover
     await expect.poll(async () => (await snapshot(newPageB))?.promptId ?? null,
       { timeout: 30_000 }).toBe(promptBefore);
   } else {
-    console.log('[C4] game 1 ended before the takeover — asserting post-game resume instead');
+    console.log('[resilience] game 1 ended before the takeover — asserting post-game resume instead');
     await expect(newPageB.locator('.over-banner')).toBeVisible({ timeout: 30_000 });
   }
-  await newPageB.screenshot({ path: `${SHOTS}/c4-recovery-join.png`, fullPage: true });
+  await newPageB.screenshot({ path: `${SHOTS}/recovery-join.png`, fullPage: true });
   ctxB = ctxB2;
   pageB = newPageB;
 
@@ -180,10 +157,10 @@ test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two 
   await pageB.getByRole('button', { name: 'Join rematch' }).click();
   await expect(pageB.locator('.lobby-code .code')).toHaveText(code2, { timeout: 15_000 });
   // B's context was minted at the recovery join — no persisted deck to resubmit
-  await fillDeckAndReady(pageB, DECK_B);
+  await submitDeckAndReady(pageB, DECK_B);
   await pageA.locator('.deck-controls input[type=checkbox]').click();
   await expect(pageA.locator('.seat-ready')).toHaveCount(2, { timeout: 15_000 });
-  await pageA.getByRole('button', { name: 'Start game' }).click();
+  await startGame(pageA);
 
   // ── game 2: a genuinely different game, driven to its own game.over ────────
   await waitForBoard(pageA, 120_000);
@@ -202,8 +179,8 @@ test('C4: reloads, chat, bumped, recovery join, rematch — two browsers to two 
   await expect(pageA.locator('.over-banner')).toBeVisible();
   await expect(pageB.locator('.over-banner')).toBeVisible({ timeout: 30_000 });
 
-  await pageA.screenshot({ path: `${SHOTS}/c4-game2-over-host.png`, fullPage: true });
-  await pageB.screenshot({ path: `${SHOTS}/c4-game2-over-guest.png`, fullPage: true });
+  await pageA.screenshot({ path: `${SHOTS}/game2-over-host.png`, fullPage: true });
+  await pageB.screenshot({ path: `${SHOTS}/game2-over-guest.png`, fullPage: true });
   await ctxA.close();
   await ctxB.close();
 });

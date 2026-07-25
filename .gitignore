@@ -8,7 +8,7 @@ dist/
 table/shots/
 test-results/
 playwright-report/
-e2e/pw/artifacts/
+e2e/artifacts/
 mage-full_*/
 mage-full_*.zip
 bridge/logs/

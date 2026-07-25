@@ -6,11 +6,16 @@
   "workspaces": [
     "packages/*",
     "client",
-    "table"
+    "table",
+    "e2e"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "e2e:classic": "npm run classic -w @night/e2e",
+    "e2e:table": "npm run table -w @night/e2e",
+    "e2e:classic:preview": "npm run classic:preview -w @night/e2e",
+    "e2e:table:preview": "npm run table:preview -w @night/e2e"
   },
   "overrides": {
     "react": "19.2.7",
