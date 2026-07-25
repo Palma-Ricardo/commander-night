@@ -530,5 +530,6 @@
   "kind" : "payMana",
   "remaining" : "{1}{G}",
   "sources" : [ "2b1f0afd-9720-42e4-abdb-4ffe9b89c49a", "5617421c-9cfa-4472-81de-d783d1b596f9", "74f4e082-da08-4f08-9388-83405bec5577", "8874b141-ad8f-4bc7-9eee-5c14ed3a2127", "e0857b9f-7726-4db6-b753-4ca76ff72777" ],
-  "canCancel" : true
+  "canCancel" : true,
+  "for" : "4fb07bce-68ec-412b-91e6-8dfe2e629ae1"
 } ]

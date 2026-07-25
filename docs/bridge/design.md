@@ -214,6 +214,21 @@ lives on the attacker; the protocol field on the victim). Scrape failure → can
 the field, never fail translation. If 1.4.61+ changes the text, fixtures catch it at upgrade
 time.
 
+**Object links in prompts** (`ObjectLink`; implemented M7, protocol §8): two asks are *about*
+an object that no field on the callback names — `payMana` (which cost is this?) and
+`distribute` (which permanent is this row?). Both name it in prose instead, and 1.4.60 renders
+every such name through `GameLog.getColoredObjectIdName`, which carries the object's full UUID
+in an `object_id='…'` attribute — the same attribute the log pipeline already mines for `refs`.
+`payMana.for` is the sole link in the ask's message (`ManaUtil.addSpecialManaPayAbilities`
+appends the paying object's log name); `distribute.among[].objectId` is the sole link in the
+row label (`CombatGroup` builds rows as `"<logName>, P/T: p/t"`), falling back to a unique
+name match against the visible battlefield. Two links in one text, an ambiguous name, or no
+link at all → the field is omitted: an anchor under the wrong card misleads worse than none.
+Canary WARN on a name rendered without a parseable link (the CommanderDamage pattern). The
+M7 spike (2026-07-25, `PayManaAnchorReplayTest` over 20 captures, 1114 asks) established the
+link as 100 % present and preferred it to the stack-top derivation, whose ephemeral stack id
+is not the id clients key a cast card by.
+
 **Log pipeline** (`LogTranslator`): `CHATMESSAGE` per protocol §10 — drop `color:ORANGE`
 structure announcements, strip HTML, extract `object_id='…'` attributes into `refs`,
 `GAME_INFORM_PERSONAL` → `kind:'personal'`. Every entry lands in the seat's ring buffer
@@ -388,6 +403,9 @@ what the spike was, promoted to CI.
 | | *M5 engineering done 2026-07-18.* Commander damage/tax scrape (§7): pinned regexes over the watcher's info lines with a drift-canary WARN, castCount on command-zone objects, damage on the *victim's* `commanderDamage` (sorted for patch stability), watcher lines stripped from all card text (they had been leaking). Callback tap productionized (§12): pre-decompression `.ser` + `.jsonl` index per seat, on by default in the live tier. Golden tier realized (§13): `FixtureSelectMain` curation + `GoldenFixtureTest` over 10 live-captured fixtures — incl. real `castCount:1`, a real 4-damage commander entry, and the combat-declaration ask — goldens are wire-message arrays; regen flow for upgrades. Corpus audited complete (47 samples, every type/kind/variant asserted; added hello-keyframes + chat-echo). §5 seat recovery live-verified (SIGSTOP test above). `deploy/`: both systemd units, Caddyfile, prod config, runbook; `-Pdist` package profile, launch command smoke-tested. Unit tier 168 tests. **Remaining for exit: the actual 4-human night on the deployed host** | |
 | M6 | Semantic event derivation (table-client phase): `EventDeriver` log⋈delta join, `move`/`hidden`/`stackLink`/`step` on the additive `events?` field (protocol §7.1) | Event-coverage assertion green across the full-game captures; classic client provably unaffected (it ignores the new field) |
 | | *M6 engineering done 2026-07-22.* `proto/event/` records + `events?` on `StateKeyframe`/`StatePatch` (nullable, NON_NULL → omitted, so existing goldens/corpus are byte-identical — the classic client is untouched, protocol §13/§3). `EventDeriver` (§7): state-authoritative delta + log-enriched verb/cause, pinned to 1.4.60 phrasings, degrades to silence. Threaded through `StateStore.update` (events ride the transition-carrying message, never the backstop keyframe) and `SeatPump.updateState`/`logLine` (log buffered, drained on non-empty delta only). Tests: `EventDeriverTest` (14 synthetic cases), `EventCoverageReplayTest` (§13, tagged `live`, offline — **0 unexplained across 20 `.ser` captures / 4,816 transitions**, independent zone-map cross-check), `game.patch.events.json` corpus sample. Scope: the design's speculated `mageObjectType`/`gameCycle`/`original` retention proved unnecessary — the coverage assertion holds on the trimmed delta + log alone; the T4 event kinds (`tap`/`attack`/`damage`/…) are frozen in the protocol but not yet emitted. **Remaining for exit: nothing bridge-side — the table client (T0–T6) consumes it.** | |
+
+| M7 | Prompt anchoring (prompts-on-the-table phase): `payMana.for` + `distribute.among[].objectId` on protocol §8, additive | Fields present and correct on live captures where derivable, absent (never wrong) elsewhere; classic client provably unaffected (corpus additive) |
+| | *M7 done 2026-07-25.* Spike first (`PayManaAnchorReplayTest`, offline over the 20 tap captures, 1114 `GAME_PLAY_MANA` asks): the planned stack-top and FSM-tracking derivations both lose to the link XMage already puts in the ask's own text — `object_id='…'` on the paying object's log name, present 1114/1114, never twice, always an id the seat had seen as a card actor. The stack-top id matched it 0/1114 (a spell's stack key is its ability id, not the card id the client keys the actor by) and is semantically wrong for the 10 "unless you pay {2}" asks whose stack top is someone else's trigger. Implemented in `translate/ObjectLink` (§7) + `PromptTranslator.payMana`/`distribute`; `distribute` also name-matches the visible battlefield when a row carries no link, and omits on ambiguity. Corpus grew by `game.prompt.payMana.for.json` + `game.prompt.distribute.objectId.json` (52 samples); `game_play_mana.golden.json` regenerated to carry the new field (the only golden affected). Both clients' codec learned the optional fields — no behaviour change; the classic client never reads them | |
 
 ## 15. Risks
 

@@ -285,18 +285,44 @@ when they're absent.
 
 ```ts
 | { kind:'payMana'; remaining: string; sources?: Id[]; canCancel: boolean;
-    for?: Id }   // NEW — the object whose cost is being paid (stack object or permanent),
-                 // when the bridge can determine it; anchoring hint only, never load-bearing
+    for?: Id }   // NEW — the object whose cost is being paid (the card being cast, or the
+                 // permanent whose ability is activating); anchoring hint only, never load-bearing
 ```
 
-The `GAME_PLAY_MANA` callback itself carries no source (`PromptTranslator.payMana`: the
-message is just "Pay {cost}"). Candidate derivations, in order of preference — **M7 opens
-with a spike** to establish which is reliable on 1.4.60: (a) the newest stack object whose
-controller is this seat in the accompanying `GameView` (casting puts the spell on the stack
-before costs are paid); (b) the ask that *immediately preceded* this payment chain — the FSM
-knows which `{object}` answer started it (the same actedOn idea, bridge-side, and it also
-covers activated-ability costs where nothing new is on the stack yet). Emit only when
-confident; absent beats wrong (a cost panel under the wrong card actively misleads).
+The `GAME_PLAY_MANA` callback itself carries no source *field* (`HumanPlayer.playManaHandling`
+fires the event with an empty options map). Candidate derivations were (a) the newest stack
+object whose controller is this seat, and (b) FSM-side tracking of the `{object}` answer that
+opened the payment chain.
+
+**Spike result, 2026-07-25 — neither; a third derivation won.** Replayed all 20 callback-tap
+captures offline (`bridge/.../golden/PayManaAnchorReplayTest`, `mvn test
+-Dsurefire.excludedGroups= -Dtest=PayManaAnchorReplayTest`): **1114 `GAME_PLAY_MANA` asks**.
+
+- The ask's own *message* names the paying object. `ManaCostsImpl.pay` builds its prompt text
+  through `ManaUtil.addSpecialManaPayAbilities`, which appends
+  `baseObject.getLogName()` — and `GameLog.getColoredObjectIdName` writes the object's **full
+  UUID** into an `object_id='…'` attribute (the Swing client's card-popup hook). Present on
+  **1114/1114** asks; **never twice** in one ask; the linked id was, in every case, an id this
+  seat had already seen as a real card actor (hand 771, command zone 333, battlefield 10).
+  Nothing to infer — the ask carries the answer.
+- (a) is *sound but points at the wrong id*. The stack was non-empty on all 1114 asks and its
+  top was still unpaid on 1104 (`CardView.paid`, which `GameView` fills from
+  `getManaCostsToPay().isPaid()`), confirming the spell/ability really is pushed before costs
+  are paid. But a spell's stack key is `spell.getId()` (the ability id), **not** the card id —
+  and the table client canonicalizes a cast's stack actor onto the stable card id
+  (`scene/keys.ts` stackLink adoption), so the stack id is not an actor key at all. It matched
+  the message link 0/1114 times. The other 10 asks are the case (a) gets *semantically* wrong:
+  an opponent's "unless you pay {2}" trigger (Mogis) sits on top, fully paid, while the object
+  the cost belongs to is the one the message names.
+- (b) was not needed, and would have been worse: the `{object}` answer that starts a cast is
+  the *hand card* id, which the message link already gives, and it requires new FSM state
+  that would have to survive re-asks.
+
+Implemented as: emit `for` iff the raw message carries exactly one `object_id` link
+(`translate/ObjectLink`); canary WARN when the message renders an object name (`<font …`) but
+no pinned link parses — an upgrade moving `GameLog`'s attribute degrades the field to absent,
+never to wrong. Emit-only-when-confident holds: absent beats wrong (a cost panel under the
+wrong card actively misleads).
 
 ### 7.2 `distribute.among[].objectId`
 
@@ -305,11 +331,17 @@ among: { id: Id; label: string; min?: number; max?: number; suggested?: number;
          objectId?: Id }   // NEW — the game object this row divides onto, when resolvable
 ```
 
-`MultiAmountMessage` rows are positional text. The bridge resolves each label against the
-`GameView` by name-match (the division messages name the creatures); ambiguous or unmatched
-rows (two Grizzly Bears; a player row) simply omit the field and render as chips (§5.5).
-Best-effort by design, same as the commander-damage scrape: pinned to 1.4.60 strings, canary
-WARN on drift.
+`MultiAmountMessage` rows are positional text. **Implemented 2026-07-25** with the same
+`object_id` link the payMana spike found: 1.4.60 builds the object-bearing rows as
+`String.format("%s, P/T: %d/%d", permanent.getLogName(), power, toughness)`
+(`CombatGroup.assignDamageToBlockers`/`ToAttackers`, and the handful of cards that divide
+damage themselves), so the row label carries the permanent's UUID exactly. Rows without a
+link fall back to a **unique** name match against the visible battlefield; ambiguous matches
+(two Grizzly Bears), rows that name no object (mana letters `R`/`G`, counter names) and
+player rows (`PlayerImpl.getLogName` is `getColoredPlayerName` — no id attribute) omit the
+field and render as chips (§5.5). Best-effort by design, same as the commander-damage scrape:
+pinned to 1.4.60 strings, canary WARN when a row matches the pinned `", P/T: p/t"` shape yet
+resolves to nothing. Answers stay keyed by the row `id`; `objectId` is never load-bearing.
 
 ## 8. Invariants that survive the redesign
 

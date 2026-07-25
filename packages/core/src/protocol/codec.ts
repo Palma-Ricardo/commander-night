@@ -341,7 +341,7 @@ const promptKindChecks: Record<string, Check> = {
   }),
   payMana: obj({
     req: { ...promptBaseReq, kind: lit('payMana'), remaining: str, canCancel: bool },
-    opt: { sources: arr(idc) },
+    opt: { sources: arr(idc), for: idc },
   }),
   chooseAmount: obj({
     req: { ...promptBaseReq, kind: lit('chooseAmount'), min: num, max: num },
@@ -349,7 +349,10 @@ const promptKindChecks: Record<string, Check> = {
   distribute: obj({
     req: {
       ...promptBaseReq, kind: lit('distribute'), total: num, min: num,
-      among: arr(obj({ req: { id: idc, label: str }, opt: { min: num, max: num, suggested: num } })),
+      among: arr(obj({
+        req: { id: idc, label: str },
+        opt: { min: num, max: num, suggested: num, objectId: idc },
+      })),
     },
     opt: { canCancel: bool },
   }),

@@ -282,8 +282,13 @@ export type Prompt = PromptBase & (
 
   // GAME_PLAY_MANA — pay a cost. A source click may NOT progress payment
   // (progress ⇔ the remaining cost in the re-ask shrank).
+  // `for` is the object whose cost this pays (the card being cast / the permanent
+  // whose ability is activating), when the bridge could name it — an anchoring
+  // hint only, and NOT necessarily an id present in the current state: a card
+  // mid-cast sits on the stack under its ephemeral stack id (`event stackLink`
+  // binds the two). Absent beats wrong; render sanely without it.
   | { kind:'payMana'; remaining: string;          // e.g. "{1}{U}", "{1}{B/P}{B/P}"
-      sources?: Id[]; canCancel: boolean }
+      sources?: Id[]; canCancel: boolean; for?: Id }
 
   // GAME_GET_AMOUNT — announce X / pick a number. The answer is required:
   // {type:'cancel'} is rejected with INVALID_ANSWER.
@@ -295,7 +300,8 @@ export type Prompt = PromptBase & (
   | { kind:'distribute'; total: number; min: number;
       among: { id: Id; label: string;
                min?: number; max?: number;      // per-row bounds when XMage sends them
-               suggested?: number }[];          // XMage's default split
+               suggested?: number;              // XMage's default split
+               objectId?: Id }[];               // the object the row divides onto, when resolvable
       canCancel?: boolean }
 
   // USER_REQUEST_DIALOG — meta requests (rollback permission, …). Option keys are

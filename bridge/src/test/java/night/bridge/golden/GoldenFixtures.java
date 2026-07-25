@@ -130,7 +130,7 @@ final class GoldenFixtures {
             case GAME_GET_MULTI_AMOUNT -> {
                 GameClientMessage msg = (GameClientMessage) data;
                 addKeyframe(out, msg.getGameView());
-                out.add(emit(PromptTranslator.distribute(1, msg)));
+                out.add(emit(PromptTranslator.distribute(1, msg, msg.getGameView())));
             }
             case GAME_PLAY_XMANA -> {
                 GameClientMessage msg = (GameClientMessage) data;

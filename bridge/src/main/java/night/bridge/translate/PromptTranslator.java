@@ -49,6 +49,13 @@ public final class PromptTranslator {
     private static final Pattern PROGRESS_SUFFIX =
             Pattern.compile("\\s*\\(selected \\d+(?: of \\d+)?(?:, min \\d+)?\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern MANA_COST = Pattern.compile("((?:\\{[^}]+\\})+)");
+    // MultiAmountMessage rows that name a permanent are built as
+    // String.format("%s, P/T: %d/%d", permanent.getLogName(), power, toughness)
+    // — CombatGroup.assignDamageToBlockers/assignDamageToAttackers, and the
+    // handful of cards that divide damage themselves (Master of the Wild Hunt).
+    private static final Pattern ROW_PERMANENT = Pattern.compile(",\\s*P/T:\\s*-?\\d+/-?\\d+\\s*$");
+    // GameLog's trailing "[3d2]" id fragment, which rides every log name.
+    private static final Pattern ID_SUFFIX = Pattern.compile("\\s*\\[[0-9a-fA-F]{3}\\]\\s*$");
 
     /** GAME_ASK → confirm. Custom button texts ride the options map (HumanPlayer.chooseUse). */
     public static GamePrompt confirm(long promptId, GameClientMessage msg) {
@@ -200,6 +207,16 @@ public final class PromptTranslator {
      * GAME_PLAY_MANA → payMana. Message is "Pay {cost}" (+ control hints);
      * sources are exactly canPlayObjects (spike-confirmed, 577 samples).
      * Cancel is always available: a boolean(false) aborts the payment.
+     *
+     * <p>{@code for} (protocol §8, M7 spike 2026-07-25) is the object whose cost
+     * is being paid. The callback carries no source field — its options map is
+     * empty ({@code HumanPlayer.playManaHandling}) — but the prompt <em>text</em>
+     * does: {@code ManaUtil.addSpecialManaPayAbilities} appends the paying
+     * object's log name, and that HTML carries its full UUID
+     * ({@link ObjectLink}). Present on 1114/1114 recorded asks, never twice in
+     * one ask. Deliberately <b>not</b> the top stack object: a cast card's stack
+     * id is ephemeral and not the id clients key the card by, and a "pay {2} or
+     * …" cost during someone else's spell has an unrelated stack top.
      */
     public static GamePrompt payMana(long promptId, GameClientMessage msg, GameView view) {
         String text = Html.strip(msg.getMessage());
@@ -210,7 +227,11 @@ public final class PromptTranslator {
         if (canPlay != null && !canPlay.getObjects().isEmpty()) {
             sources = canPlay.getObjects().keySet().stream().map(UUID::toString).toList();
         }
-        return GamePrompt.payMana(promptId, text, remaining, sources, true);
+        String forObject = ObjectLink.sole(msg.getMessage());
+        if (forObject == null && ObjectLink.canaryMissed(msg.getMessage())) {
+            ObjectLink.warnDrift("payMana", msg.getMessage());
+        }
+        return GamePrompt.payMana(promptId, text, remaining, sources, true, forObject);
     }
 
     /**
@@ -273,14 +294,25 @@ public final class PromptTranslator {
      * (MultiAmountMessage carries no ids) — row indexes become the wire ids
      * (protocol §8). The overall message is XMage's dialog header (options
      * "header", falling back to "title"); msg.min/max are the Σ-bounds.
+     *
+     * <p>{@code objectId} (protocol §8, M7) recovers the object a row divides
+     * onto. 1.4.60 builds the object-bearing rows as
+     * {@code "<logName>, P/T: p/t"} ({@code CombatGroup.assignDamage*},
+     * {@code MasterOfTheWildHunt}), and a log name carries the object's UUID
+     * ({@link ObjectLink}) — so the primary derivation is exact, not a guess.
+     * Rows without a link fall back to a <em>unique</em> name match against the
+     * visible battlefield; two same-named creatures, mana letters ("R"/"G"),
+     * counter names and player rows (player log names carry no id) all omit the
+     * field, and the client renders those rows as labelled chips.
      */
-    public static GamePrompt distribute(long promptId, GameClientMessage msg) {
+    public static GamePrompt distribute(long promptId, GameClientMessage msg, GameView view) {
+        Map<String, List<String>> byName = battlefieldByName(view);
         List<GamePrompt.Among> among = new ArrayList<>();
         if (msg.getMessages() != null) {
             for (int i = 0; i < msg.getMessages().size(); i++) {
                 MultiAmountMessage m = msg.getMessages().get(i);
                 among.add(new GamePrompt.Among(String.valueOf(i), Html.strip(m.message),
-                        m.min, m.max, m.defaultValue));
+                        m.min, m.max, m.defaultValue, rowObject(m.message, byName)));
             }
         }
         String message = option(msg, "header");
@@ -291,6 +323,55 @@ public final class PromptTranslator {
                 && Boolean.TRUE.equals(msg.getOptions().get("canCancel"));
         return GamePrompt.distribute(promptId, Html.strip(message),
                 msg.getMax(), msg.getMin(), among, canCancel);
+    }
+
+    /** The object a distribute row divides onto, or null when not resolvable. */
+    private static String rowObject(String rawLabel, Map<String, List<String>> byName) {
+        String linked = ObjectLink.sole(rawLabel);
+        if (linked != null) {
+            return linked;
+        }
+        String name = rowName(rawLabel);
+        List<String> hits = name.isEmpty() ? List.of() : byName.getOrDefault(name, List.of());
+        if (hits.size() == 1) {
+            return hits.getFirst();
+        }
+        if (hits.isEmpty() && rawLabel != null && ROW_PERMANENT.matcher(rawLabel).find()) {
+            // Shaped like a permanent row, yet neither the link nor the name resolved:
+            // either an XMage upgrade moved the strings, or the object left the board.
+            ObjectLink.warnDrift("distribute row", rawLabel);
+        }
+        return null;                    // ambiguous (two same-named creatures) or no object
+    }
+
+    /** A row label's bare object name: HTML stripped, the pinned P/T suffix dropped. */
+    private static String rowName(String rawLabel) {
+        String text = Html.strip(rawLabel);
+        Matcher m = ROW_PERMANENT.matcher(text);
+        if (m.find()) {
+            text = text.substring(0, m.start());
+        }
+        return ID_SUFFIX.matcher(text).replaceFirst("").strip();
+    }
+
+    /** Visible permanent names → ids, across every seat's battlefield. */
+    private static Map<String, List<String>> battlefieldByName(GameView view) {
+        if (view == null || view.getPlayers() == null) {
+            return Map.of();
+        }
+        Map<String, List<String>> byName = new LinkedHashMap<>();
+        for (var player : view.getPlayers()) {
+            if (player.getBattlefield() == null) {
+                continue;
+            }
+            player.getBattlefield().forEach((id, perm) -> {
+                String name = perm.getName();
+                if (name != null && !name.isBlank()) {
+                    byName.computeIfAbsent(name, k -> new ArrayList<>()).add(id.toString());
+                }
+            });
+        }
+        return byName;
     }
 
     /**
