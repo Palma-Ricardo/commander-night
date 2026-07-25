@@ -83,6 +83,7 @@ export function createActions(
     if (pending === undefined || pending.promptId !== promptId || inflight || gameId === undefined) return;
     stores.prompt.setState({
       inflight: true,
+      lastAnswer: answer,   // the §5.6 rescind detector tells a server rescind from our own Cancel
       // the acted-on object gets the spinner badge (§7)
       ...(answer.type === 'object' ? { actedOn: answer.objectId } : {}),
     });
@@ -110,6 +111,19 @@ export function createActions(
     const gameId = stores.game.getState().state?.gameId;
     if (gameId === undefined) return;
     unwrap(await manager.send(gameAction(ctx, { gameId, action })));
+  }
+
+  /** chooseTargets scratch: toggle a candidate in/out, capped at `max`.
+   *  Local (also reachable via the returned actions) so pointTarget composes it. */
+  function toggleTarget(promptId: number, id: Id): void {
+    const { pending, inflight, selected } = stores.prompt.getState();
+    if (pending?.kind !== 'chooseTargets' || pending.promptId !== promptId || inflight) return;
+    if (!pending.candidates.includes(id)) return;
+    if (selected.includes(id)) {
+      stores.prompt.setState({ selected: selected.filter(s => s !== id) });
+    } else if (selected.length < pending.max) {
+      stores.prompt.setState({ selected: [...selected, id] });
+    }
   }
 
   /** lobby.create seats nobody (the host learns the code from lobby.state,
@@ -150,7 +164,7 @@ export function createActions(
   function resetGameStores(opts: { keepLobby: boolean }): void {
     stores.game.setState(freshGame());
     stores.log.setState({ entries: [], unreadChat: 0 });
-    stores.prompt.setState({ pending: undefined, ...emptyScratch() });
+    stores.prompt.setState({ pending: undefined, ...emptyScratch(), intent: undefined, lastAnswer: undefined });
     if (!opts.keepLobby) stores.lobby.setState({ state: undefined });
     // walking away deliberately — a later hello must not resume this game
     stores.session.setState({ resume: undefined });
@@ -214,16 +228,21 @@ export function createActions(
       unwrap(await manager.send(lobbyStart(ctx, fillAI ? { fillAI } : {})));
     },
 
-    /** chooseTargets scratch: toggle a candidate in/out, capped at `max`. */
-    toggleTarget(promptId: number, id: Id): void {
-      const { pending, inflight, selected } = stores.prompt.getState();
-      if (pending?.kind !== 'chooseTargets' || pending.promptId !== promptId || inflight) return;
-      if (!pending.candidates.includes(id)) return;
-      if (selected.includes(id)) {
-        stores.prompt.setState({ selected: selected.filter(s => s !== id) });
-      } else if (selected.length < pending.max) {
-        stores.prompt.setState({ selected: [...selected, id] });
+    toggleTarget,
+
+    /** A pointer-to-target release landed on `targetId` (prompts-on-the-table
+     *  §4.2/§4.3). If a matching chooseTargets is already pending, this IS the
+     *  target click (one-click answer for a single pick, scratch toggle for a
+     *  multi); otherwise the id is buffered as the pending intent, consumed or
+     *  dropped by the next prompt to arrive (state/intent.ts). */
+    pointTarget(targetId: Id): void {
+      const { pending, inflight } = stores.prompt.getState();
+      if (pending?.kind === 'chooseTargets' && !inflight && pending.candidates.includes(targetId)) {
+        if (pending.max === 1) void answerPrompt(pending.promptId, { type: 'object', objectId: targetId });
+        else toggleTarget(pending.promptId, targetId);
+        return;
       }
+      stores.prompt.setState({ intent: { targetId } });
     },
 
     /** payMana source click: one round trip; records the no-progress probe (§7). */

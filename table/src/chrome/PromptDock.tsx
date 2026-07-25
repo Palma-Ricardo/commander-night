@@ -17,23 +17,22 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
-import type { AnswerValue, Card, Prompt, PromptKind } from '@night/core/protocol/protocol';
+import type { AnswerValue, Card, Prompt } from '@night/core/protocol/protocol';
 import { parseManaCost } from '@night/core/state/mana';
 import { me, unreachableCandidates } from '@night/core/state/selectors';
 import { CardGrid, Modal } from './Modal';
 import { ManaSymbols } from './ManaSymbols';
+import { dockOwns } from './migration';
 
 const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'] as const;
-
-/** Kinds whose controls have moved off the dock (T7). The corner cluster and
- *  AmountSelector own them now; rendering them here too would double up. */
-const MIGRATED: ReadonlySet<PromptKind> = new Set(['confirm', 'priority', 'chooseAmount']);
 
 export function PromptDock() {
   const prompt = useStore(appStores.prompt);
   const state = useStore(appStores.game, s => s.state);
   const p = prompt.pending;
-  if (p === undefined || state === undefined || MIGRATED.has(p.kind)) return null;
+  // Migrated kinds render on the canvas + corner cluster (migration.ts); the
+  // dock shrinks kind-by-kind until T9 deletes it.
+  if (p === undefined || state === undefined || !dockOwns(p, state)) return null;
 
   const pid = p.promptId;
   const busy = prompt.inflight;
@@ -244,15 +243,14 @@ function ChooseTargetsControls({ p, busy, answer, prompt, state }: {
           ))}
         </span>
       )}
-      {oneClick
-        ? stranded.length === 0 && !hasGrid
-          && <span className="dock-hint">click a highlighted target</span>
-        : (
-          <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
-            onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
-            Submit {k} of {range}
-          </button>
-        )}
+      {/* A felt/hand-reachable chooseTargets never reaches the dock since T8
+          (migration.ts) — no "click a highlighted target" hint to render. */}
+      {!oneClick && (
+        <button className="primary" data-answer="submit" disabled={busy || k < p.min || k > p.max}
+          onClick={() => answer({ type: 'objects', objectIds: prompt.selected })}>
+          Submit {k} of {range}
+        </button>
+      )}
       {/* incremental flow (§8): once the server has ≥ min, confirm=true means done */}
       {p.progress !== undefined && p.progress.chosen >= p.min && (
         <button data-answer="done" disabled={busy} onClick={() => answer({ type: 'confirm', value: true })}>Done</button>

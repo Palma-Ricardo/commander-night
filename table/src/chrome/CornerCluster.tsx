@@ -3,31 +3,32 @@
 // the priority indicator, enabled exactly when a plain priority ask is
 // pending — plus the contextual primary/secondary/special for the kinds that
 // have moved off the dock (T7: confirm, priority incl. combat controls,
-// chooseAmount). Everything resolves through promptControls, the same module
-// the keyboard reads (§8), so a button and its key can never disagree.
+// chooseAmount; T8: board-reachable chooseTargets). Everything resolves
+// through promptControls, the same module the keyboard reads (§8), so a
+// button and its key can never disagree.
 //
-// Strangler discipline: a control renders in exactly one place per kind.
-// Unmigrated kinds keep their controls in PromptDock until their milestone,
-// so primary/secondary/special here are gated to the migrated set even though
-// the module computes them for every kind.
+// Strangler discipline: a control renders in exactly one place per prompt.
+// Unmigrated bodies keep their controls in PromptDock until their milestone;
+// dockOwns (migration.ts) is the single split both components read, so
+// primary/secondary/special here are gated on it even though the module
+// computes them for every kind.
 
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
-import type { PromptKind } from '@night/core/protocol/protocol';
 import { promptControls, type ControlSpec } from '@night/core/state/prompt-controls';
 import { amountStore } from './amount-store';
-
-const MIGRATED: ReadonlySet<PromptKind> = new Set(['confirm', 'priority', 'chooseAmount']);
+import { dockOwns } from './migration';
 
 export function CornerCluster() {
   const prompt = useStore(appStores.prompt);
   const over = useStore(appStores.game, s => s.over !== undefined);
+  const state = useStore(appStores.game, s => s.state);
   const draft = useStore(amountStore, s => s.draft);
   if (over) return null;
 
   const p = prompt.pending;
   const controls = promptControls(prompt);
-  const owned = p !== undefined && MIGRATED.has(p.kind);
+  const owned = p !== undefined && !dockOwns(p, state);
   const busy = prompt.inflight && owned;
 
   const fire = (c: ControlSpec) => {

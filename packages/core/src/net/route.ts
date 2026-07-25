@@ -149,6 +149,13 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
         // others' chat counts as unread; the chat tab clears it (§8)
         stores.log.setState(s => ({ unreadChat: s.unreadChat + 1 }));
       }
+      if (appended && msg.kind === 'personal' && inCurrentGame(stores, msg.gameId)) {
+        // §5.6a (prompts-on-the-table): a personal line is rules feedback
+        // addressed to this seat alone ("Zurgo Helmsmasher can't block this
+        // way.") — buried in the log panel it goes unread mid-combat, so it
+        // also toasts. The log copy stays; `appended` fences replayed lines.
+        pushNotice(stores.notices, 'info', msg.text);
+      }
       if (msg.kind === 'status') {
         // §11: bridge-side upstream trouble → board banner, replaced by the
         // next status line, cleared by the next keyframe

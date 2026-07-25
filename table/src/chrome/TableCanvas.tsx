@@ -13,7 +13,7 @@
 // overlay — not here — so it exists only where a game does.
 
 import { useEffect, useRef } from 'react';
-import { appScryfall, appStores } from '../app';
+import { appActions, appScryfall, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
 import { objectClick } from './interact';
@@ -38,6 +38,11 @@ export function TableCanvas(): React.JSX.Element {
       // Clicks route through the pending prompt's affordance, exactly as a DOM
       // card click does — the felt and a modal grid mean the same thing (§7).
       scene.onObjectClick = (id) => { objectClick(appStores.prompt.getState(), id); };
+
+      // A pointer-to-target release (§4.2/§4.3): an immediate target click when
+      // the matching chooseTargets is already pending, else the buffered intent
+      // the next prompt consumes or drops (core state/intent.ts).
+      scene.onPointTarget = (id) => appActions.pointTarget(id);
 
       // Hover previews any face-up card, anchored beside the live actor (§9/§10).
       // The scene decides *when* to dismiss (it tracks the pointer against the card

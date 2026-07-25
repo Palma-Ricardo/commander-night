@@ -38,7 +38,8 @@ import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX } from '../tuning';
 import { stackAnchor } from '../layout/screen';
 import { promptObjectIds, stackTargetIds } from './prompt-objects';
 import {
-  highlightForAffordance, HL_COMBAT, isClickable, rectContains, type Projector, type ScreenAnchor,
+  highlightForAffordance, HL_COMBAT, HL_TARGET, isClickable, rectContains,
+  type Projector, type ScreenAnchor,
 } from './interaction';
 
 const RAIL = 0x0e0b08;      // the floor the table sits on
@@ -115,6 +116,10 @@ export class TableScene implements DirectorSink {
   private readonly stackTethers = new Graphics();
   private stackLinks: StackLinks = new Map();
   private topStackKey: string | undefined;
+  // The live pointer-to-target chalk line (prompts-on-the-table §4.2): redrawn
+  // every frame while a point-mode drag is moved, from the subject's projected
+  // centre to the pointer. Same screen-space overlay slot as the stack tethers.
+  private readonly dragLine = new Graphics();
   // §9 transient effects (dust, damage, arrows, ribbons, ghosts, vignette, shake).
   private readonly effects = new Effects();
   // Delayed one-shots (landing squash/dust fire on arrival, not takeoff): advanced
@@ -141,10 +146,17 @@ export class TableScene implements DirectorSink {
   private previewGrace = 0;
   private pointer: Point | undefined;
   private detachPointer?: () => void;
-  /** Drag-to-cast (prompts-on-the-table §9): a press on a castable hand card
-   *  arms a drag; past DRAG_SLOP_PX it lifts and follows the pointer, and the
-   *  release side of the CAST_THRESHOLD line decides cast vs slide home. */
-  private drag?: { key: string; objectId: Id; startX: number; startY: number; moved: boolean };
+  /** The armed drag, two modes (prompts-on-the-table §9 / §4.2):
+   *   • 'cast' — a press on a castable hand card; past DRAG_SLOP_PX the card
+   *     lifts and follows the pointer, and the release side of CAST_THRESHOLD
+   *     decides cast vs slide home.
+   *   • 'point' — pointer-to-target: the subject stays put, a chalk line (in
+   *     `color`) follows the pointer, and the release resolves a drop target
+   *     for pointTarget / the §4.3 intent buffer. */
+  private drag?: {
+    mode: 'cast' | 'point'; color: number;
+    key: string; objectId: Id; startX: number; startY: number; moved: boolean;
+  };
   /** Pixi still fires `pointertap` after a moved drag (the card follows the
    *  pointer, so down and up land on the same object) — the release handler
    *  raises this so handleActorTap ignores exactly that one tap. */
@@ -160,6 +172,10 @@ export class TableScene implements DirectorSink {
    *  the shared @night/core click router and the hover store, so the scene stays
    *  free of any React-chrome import. */
   onObjectClick?: (objectId: Id) => void;
+  /** A point-mode drag released on `objectId` (§4.2/§4.3) — the chrome wires
+   *  this to actions.pointTarget: an immediate target click when the matching
+   *  chooseTargets is already pending, else the buffered intent. */
+  onPointTarget?: (objectId: Id) => void;
   onObjectHover?: (objectId: Id | undefined, anchor?: ScreenAnchor) => void;
   /** Reads the hover preview panel's current on-screen rect (chrome-owned), so the
    *  scene can hold the preview open while the pointer is over the panel itself. */
@@ -199,6 +215,7 @@ export class TableScene implements DirectorSink {
     this.furnitureShapes.eventMode = 'none';
     this.furnitureText.eventMode = 'none';
     this.stackTethers.eventMode = 'none';   // arrows never eat a click
+    this.dragLine.eventMode = 'none';
     // Effects: worldFx keystones among the actors (it self-projects), screenFx is a
     // fixed overlay on top of everything (vignette, phase ribbon).
     this.worldLayer.addChild(this.feltMesh, this.furnitureShapes, this.furnitureText,
@@ -206,7 +223,7 @@ export class TableScene implements DirectorSink {
     // Tethers sit above the felt/world actors (so an arrowhead lands visibly on a
     // target permanent) but below the screen cards (so the pile stays readable and
     // the arrow reads as emerging from beneath the top card).
-    this.app.stage.addChild(this.worldLayer, this.stackTethers, this.screenActors, this.effects.screenFx);
+    this.app.stage.addChild(this.worldLayer, this.stackTethers, this.dragLine, this.screenActors, this.effects.screenFx);
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
@@ -370,6 +387,7 @@ export class TableScene implements DirectorSink {
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
     this.drawStackTethers(preset);   // arrows read the actors' fresh projected bounds
+    this.drawDragLine();             // the §4.2 chalk line tracks the same fresh bounds
     this.effects.render(world);   // effects live in world space (they self-project)
   }
 
@@ -901,6 +919,10 @@ export class TableScene implements DirectorSink {
     this.currentPrompt = prompt;
     this.refreshAffordances();
     this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
+    // Nameplates carry prompt state now (§5.2 candidate ring), so the furniture
+    // model re-derives on prompt-store changes too — it is spec-cheap (a few
+    // dozen shapes/labels); the projection was per-frame all along.
+    if (this.director?.presented !== undefined) this.drawFurniture(this.director.presented);
     if (changed) {
       if (prompt?.pending !== undefined) this.director.flush();   // §6.4: input never waits on animation
       this.syncCameraFocus(this.director.presented);   // §14: pull back for off-screen refs, restore when clear
@@ -928,19 +950,47 @@ export class TableScene implements DirectorSink {
 
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
 
-  /** A press on a hand card with a real action affordance arms a drag. Arming is
-   *  not dragging: the press stays an ordinary click until the pointer travels
-   *  DRAG_SLOP_PX. manaOnly never lifts (§7 — never a click target either), and
-   *  target/source affordances on hand cards keep their click-select meaning. */
+  /** A press arms a drag when the subject supports one. Arming is not dragging:
+   *  the press stays an ordinary click until the pointer travels DRAG_SLOP_PX.
+   *
+   *  Three subjects, in precedence order:
+   *   • a combat candidate (§5.1) — the toggle-in `{object}` sends on the press
+   *     itself (the wire is one toggle per round trip); the same hold becomes
+   *     the attack/block pointer, and the release records the §4.3 intent for
+   *     the follow-up ask. Release-without-drag is just the toggle.
+   *   • the asking spell during chooseTargets (§5.2) — the stack-top card is
+   *     the press subject; the release lands on a candidate. No press click.
+   *   • a castable hand card (§9) — drag-to-cast. manaOnly never lifts (§7 —
+   *     never a click target either), and target/source affordances on hand
+   *     cards keep their click-select meaning. */
   private maybeBeginDrag(actor: CardActor): void {
     this.dragSwallowsTap = false;   // a fresh press always clears a stale swallow
     const prompt = this.currentPrompt;
     if (this.pointer === undefined || prompt === undefined || prompt.inflight) return;
-    if (actor.space !== 'screen' || actor.placement.zone !== 'hand' || actor.objectId === undefined) return;
-    if (affordanceFor(prompt, actor.objectId)?.kind !== 'action') return;
+    if (actor.objectId === undefined) return;
+    const aff = affordanceFor(prompt, actor.objectId);
+    if (aff?.kind === 'combatCandidate') {
+      this.dragSwallowsTap = true;   // the press already acted — the release tap must not re-toggle
+      this.onObjectClick?.(actor.objectId);
+      this.armDrag('point', HL_COMBAT, actor);
+      return;
+    }
+    // `aff === undefined` matters: when the ask targets stack items (a
+    // counterspell pick), the top card is a *candidate* and the press must stay
+    // the plain candidate click, not become a source drag.
+    if (prompt.pending?.kind === 'chooseTargets' && actor.key === this.topStackKey && aff === undefined) {
+      this.armDrag('point', HL_TARGET, actor);
+      return;
+    }
+    if (actor.space !== 'screen' || actor.placement.zone !== 'hand') return;
+    if (aff?.kind !== 'action') return;
+    this.armDrag('cast', 0, actor);   // cast mode draws no line — color unused
+  }
+
+  private armDrag(mode: 'cast' | 'point', color: number, actor: CardActor): void {
     this.drag = {
-      key: actor.key, objectId: actor.objectId,
-      startX: this.pointer.x, startY: this.pointer.y, moved: false,
+      mode, color, key: actor.key, objectId: actor.objectId!,
+      startX: this.pointer!.x, startY: this.pointer!.y, moved: false,
     };
   }
 
@@ -952,47 +1002,107 @@ export class TableScene implements DirectorSink {
     const d = this.drag;
     if (d === undefined) return;
     const actor = this.actors.get(d.key);
-    if (actor === undefined) { this.drag = undefined; return; }   // re-keyed away mid-drag
+    if (actor === undefined) { this.drag = undefined; this.dragLine.clear(); return; }   // re-keyed away mid-drag
     const p = this.pointer;
     if (p === undefined) return;                                  // off-canvas: hold the last pin
     if (!d.moved) {
       if (Math.hypot(p.x - d.startX, p.y - d.startY) < DRAG_SLOP_PX) return;
       d.moved = true;
-      this.lowerHand();
       this.hidePreview();
-      this.screenActors.addChild(actor.view);   // reads above the fan while dragged
+      if (d.mode === 'cast') {
+        this.lowerHand();
+        this.screenActors.addChild(actor.view);   // reads above the fan while dragged
+      }
     }
-    actor.seedCurrent({ x: p.x, y: p.y, rotation: 0, scale: actor.placement.scale });
+    // Only the cast lift pins the card to the pointer; a point drag leaves the
+    // subject where it stands and speaks through the chalk line (§4.2).
+    if (d.mode === 'cast') actor.seedCurrent({ x: p.x, y: p.y, rotation: 0, scale: actor.placement.scale });
   }
 
-  /** Release: above the cast line → the same {object} answer a click sends; at
-   *  or below it → nothing. Either way the card slides home: on a successful
-   *  cast the next transition retargets the tween mid-flight from wherever the
-   *  card is (§6.3), so the slide never fights the fly-to-stack, and on a
-   *  rejected answer the card is simply back in the fan. The felt never sees
-   *  this release (the press began on the card, so no felt tap can fire). */
+  /** The §4.2 chalk line, redrawn each frame of a moved point drag: subject's
+   *  projected centre → pointer, arrowhead at the pointer. Cleared otherwise. */
+  private drawDragLine(): void {
+    const g = this.dragLine.clear();
+    const d = this.drag;
+    if (d === undefined || !d.moved || d.mode !== 'point' || this.pointer === undefined) return;
+    const actor = this.actors.get(d.key);
+    if (actor === undefined) return;
+    this.tether(g, centreOf(actor.bounds()), this.pointer, d.color, true);
+  }
+
+  /** Release. Cast mode: above the cast line → the same {object} answer a click
+   *  sends; at or below it → nothing. Either way the card slides home: on a
+   *  successful cast the next transition retargets the tween mid-flight from
+   *  wherever the card is (§6.3), so the slide never fights the fly-to-stack,
+   *  and on a rejected answer the card is simply back in the fan.
+   *  Point mode: resolve what the release landed on and hand it to
+   *  onPointTarget; landing on nothing means the line just evaporates (§4.2).
+   *  The felt never sees this release (the press began on a card, so no felt
+   *  tap can fire). */
   private endDrag(e: PointerEvent): void {
     const d = this.drag;
     if (d === undefined) return;
     this.drag = undefined;
+    this.dragLine.clear();
     if (!d.moved) return;                        // plain click — pointertap handles it
     this.dragSwallowsTap = true;
+    const r = this.app.canvas.getBoundingClientRect();
+    const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+    if (d.mode === 'point') {
+      const target = this.dropTargetAt(p, d.objectId);
+      if (target !== undefined) this.onPointTarget?.(target);
+      return;
+    }
     const actor = this.actors.get(d.key);
     if (actor === undefined) return;
-    const r = this.app.canvas.getBoundingClientRect();
-    const y = e.clientY - r.top;
-    if (y < this.size.h * (1 - CAST_THRESHOLD)) this.onObjectClick?.(d.objectId);
+    if (p.y < this.size.h * (1 - CAST_THRESHOLD)) this.onObjectClick?.(d.objectId);
     actor.animateTo(actor.placement, DRAG_HOME_MS);
   }
 
-  /** pointercancel (tab switch, pen lift-off): never cast — just come home. */
+  /** pointercancel (tab switch, pen lift-off): never cast, never target — the
+   *  card just comes home / the line evaporates. */
   private cancelDrag(): void {
     const d = this.drag;
     if (d === undefined) return;
     this.drag = undefined;
+    this.dragLine.clear();
     if (!d.moved) return;
     this.dragSwallowsTap = true;
-    this.actors.get(d.key)?.animateTo(this.actors.get(d.key)!.placement, DRAG_HOME_MS);
+    if (d.mode === 'cast') {
+      this.actors.get(d.key)?.animateTo(this.actors.get(d.key)!.placement, DRAG_HOME_MS);
+    }
+  }
+
+  /** What a point-drag release landed on, as an id the shared affordance/intent
+   *  layer can judge (§5.1: "a nameplate, quadrant, or planeswalker/battle" —
+   *  §5.3 blockers: the attacking creature). Precedence: an actor that is a
+   *  live candidate of the pending chooseTargets → a nameplate's player → any
+   *  other actor hit → the quadrant's seat. The legality check stays with
+   *  pointTarget/the intent buffer — an off-target drop records an intent that
+   *  expires harmlessly. */
+  private dropTargetAt(p: Point, sourceId: Id): Id | undefined {
+    const pending = this.currentPrompt?.pending;
+    const candidates = pending?.kind === 'chooseTargets' ? new Set(pending.candidates) : undefined;
+    let anyHit: Id | undefined;
+    for (const a of this.actors.values()) {
+      if (a.objectId === undefined || a.objectId === sourceId) continue;
+      if (!anchorContains(a.bounds(), p)) continue;
+      if (candidates?.has(a.objectId) === true) return a.objectId;
+      anyHit ??= a.objectId;
+    }
+    const state = this.director.presented;
+    if (state !== undefined) {
+      const w = screenToWorld(this.director.cameraPreset(), p);
+      const seats = seatLayouts(state);
+      for (const seat of seats) {
+        const plate: Rect = { x: seat.nameplate.x, y: seat.nameplate.y, w: NAMEPLATE.w, h: NAMEPLATE.h };
+        if (rectContains(plate, w)) return seat.player.id;
+      }
+      if (anyHit !== undefined) return anyHit;
+      const seat = seats.find(s => rectContains(s.quadrant, w));
+      if (seat !== undefined) return seat.player.id;
+    }
+    return anyHit;
   }
 
   private handleActorOver(actor: CardActor): void {
@@ -1098,6 +1208,22 @@ export class TableScene implements DirectorSink {
     // worldLayer is identity now — the tap arrives in screen space; unproject it
     // through the live camera (perspective included) to hit-test the quadrants.
     const local = screenToWorld(this.director.cameraPreset(), { x: e.global.x, y: e.global.y });
+    // §5.2: a nameplate is a click target while its player is a chooseTargets
+    // candidate ("Select defender", targeted removal at a player). Plates are
+    // furniture (eventMode none), so the tap falls through to the felt — catch
+    // it here before the camera-focus read. Precise on purpose: only the plate
+    // answers on a plain tap; the forgiving whole-quadrant drop belongs to the
+    // drag release (dropTargetAt).
+    const pending = this.currentPrompt?.pending;
+    if (pending?.kind === 'chooseTargets' && this.currentPrompt?.inflight !== true) {
+      for (const seat of seatLayouts(state)) {
+        const plate: Rect = { x: seat.nameplate.x, y: seat.nameplate.y, w: NAMEPLATE.w, h: NAMEPLATE.h };
+        if (rectContains(plate, local) && pending.candidates.includes(seat.player.id)) {
+          this.onObjectClick?.(seat.player.id);
+          return;
+        }
+      }
+    }
     const seat = seatLayouts(state).findIndex(s => rectContains(s.quadrant, local));
     if (seat >= 0) (this.onFocusSeat ?? ((d: number) => this.director.focusSeat(d)))(seat);
   }
@@ -1316,12 +1442,18 @@ export class TableScene implements DirectorSink {
     // to danger with the incoming unblocked damage on it (the chalk arrow on the
     // felt can be occluded by cards).
     const incoming = incomingUnblockedDamage(state, p.id);
+    // §5.2 T8: while this player is a chooseTargets candidate the plate rings
+    // like any candidate card (selected = in the multi-pick scratch) — it is
+    // clickable (felt tap) and a drag-release target, so it must look like one.
+    const target = this.plateTarget(p.id);
     this.shapeSpecs.push({
       rect: { x: box.x, y: box.y, w: n.w, h: n.h },
       fill: { color: incoming > 0 ? DMG_FILL : BRASS_FILL, alpha: 1 },
-      stroke: incoming > 0
-        ? { width: 2, color: 0xc0392b, alpha: 1 }
-        : { width: 1.5, color: BRASS, alpha: 1 },
+      stroke: target !== undefined
+        ? { width: target.selected ? 4 : 2.5, color: HL_TARGET, alpha: 1 }
+        : incoming > 0
+          ? { width: 2, color: 0xc0392b, alpha: 1 }
+          : { width: 1.5, color: BRASS, alpha: 1 },
     });
     const dead = p.flags?.dead === true || p.flags?.left === true;
     this.addFurnitureText(
@@ -1397,6 +1529,15 @@ export class TableScene implements DirectorSink {
     };
   }
 
+  /** Whether a player's nameplate rings as a chooseTargets candidate (§5.2),
+   *  and whether the multi-pick scratch already holds them. */
+  private plateTarget(playerId: Id): { selected: boolean } | undefined {
+    const prompt = this.currentPrompt;
+    if (prompt?.pending?.kind !== 'chooseTargets') return undefined;
+    if (!prompt.pending.candidates.includes(playerId)) return undefined;
+    return { selected: prompt.selected.includes(playerId) };
+  }
+
   /** §12/§13 highlights accessor — the object ids the felt is currently ringing
    *  as clickable. The classic client proves its no-dead-end invariant with a
    *  `.hl-*` DOM count; on the canvas the ring is a Pixi graphic, so the harness
@@ -1409,6 +1550,16 @@ export class TableScene implements DirectorSink {
     for (const a of this.actors.values()) {
       if (a.objectId === undefined || ids.includes(a.objectId)) continue;
       if (isClickable(affordanceFor(prompt, a.objectId))) ids.push(a.objectId);
+    }
+    // Player candidates ring on their nameplates (§5.2), which are furniture,
+    // not actors — report them too or the no-dead-end poll reads a "Select
+    // defender" ask as offering nothing.
+    const pending = prompt.pending;
+    if (pending?.kind === 'chooseTargets') {
+      const state = this.director?.presented;
+      for (const id of pending.candidates) {
+        if (state?.players.some(pl => pl.id === id) === true && !ids.includes(id)) ids.push(id);
+      }
     }
     return ids;
   }
