@@ -235,6 +235,38 @@ render as labeled screen-space chips with the same click-to-increment, which is 
 click-not-type. Caveat honestly carried from §8: this kind has **never been observed live**;
 the surface ships behind fixtures until it fires at a real table.
 
+### 5.6 The engine says no: rescind and illegal-move toasts
+
+Motivating incident (live pass, 2026-07-25): Entrancing Melody at X=5 silently self-canceled
+four times. The tap autopsy showed the rules engine was *right* — the only MV-5 creature
+(Zurgo Helmsmasher) wore Lightning Greaves, and shroud left the adjusted target filter with
+zero candidates — but XMage 1.4.60 rescinds such a cast with **no feedback of any kind**: the
+announce log line is only emitted after the whole cast succeeds, so the player sees the ask
+accept their X and then... nothing. Four attempts, no clue. Two mechanisms fix this class,
+both T8:
+
+- **(a) Promote `kind:'personal'` log lines to toasts.** For illegal moves it can see coming,
+  XMage *does* explain itself — `game.informPlayer` fires on illegal block/attack declarations
+  and kin ("Zurgo Helmsmasher can't block this way.") — and the pipe already exists end to
+  end: `GAME_INFORM_PERSONAL` → `game.log kind:'personal'` (protocol §15) → a 🕵-marked line
+  in the LogPanel that nobody reads mid-combat. T8 additionally renders every personal line as
+  a toast; by construction these are rules feedback addressed to this seat alone, and the
+  engine's own text names the source better than anything we could synthesize. The log copy
+  stays.
+- **(b) Detect the silent cast rescind client-side.** No wire signal exists for the
+  Melody case, but its signature is clean and the client sees all of it: our own cast put the
+  card on the stack, a cast-flow prompt ran (`chooseAmount` announce / `chooseTargets` /
+  `payMana`), and the next state shows plain `priority` with the stack object gone and the
+  card back in hand — neither resolved nor countered. Toast: "the cast was rescinded — no
+  legal target." Only fires when the prompt chain began from this seat's own cast (the
+  prompt-store `actedOn` context knows), never for prompts that vanish because someone else
+  acted. **Name the source when confident:** the board state already carries each permanent's
+  attachments (T4 renders them riding under their host) and Scryfall oracle text is loaded for
+  rendering — when the scan finds untargetability grantors (shroud/hexproof/protection) on
+  otherwise-plausible candidates, append the culprit: "(Zurgo Helmsmasher has shroud from
+  Lightning Greaves)". Emit-only-when-confident, same rule as the M-series scrapes — a
+  generic toast is better than a wrong accusation.
+
 ## 6. Auto-mana that is actually auto-mana
 
 Today the toggle is XMage's server-side `MANA_AUTO_PAYMENT_ON/OFF`, which pays only when the
@@ -382,7 +414,7 @@ Bridge M7 is independent of T7–T9 and can land any time before T10.
 | # | Deliverable | Exit criterion |
 |---|---|---|
 | T7 | Corner cluster + InstructionLine + drag-to-cast. `confirm`, plain `priority`, `chooseAmount` off the dock; concede → pop-panel; fatal → screen; threshold tunable live | Full game vs 3 AIs playable with those kinds never rendering in the dock; auto-player spec green (it answers semantically, so this is a rendering-only assertion + a human pass). **Engineering done 2026-07-25:** `promptControls` extracted to `@night/core/state/prompt-controls` and `resolveShortcut` refactored onto it (behavior-neutral — the untouched shortcuts tests pin it; core 244); CornerCluster (Pass always visible + contextual primary/secondary/special) + InstructionLine + screen-center AmountSelector; **combat's Done/All-attack buttons also migrated** (button-for-button identical, the module already owned them — canvas toggles unchanged, gesture is T8); dock strangled to the 7 remaining kinds, message line removed; concede → outside-click pop-panel (no Escape handling, so it can never race the prompt shortcuts); fatal → full screen; drag-to-cast in TableScene (pointer pin after tweens, slop 6 px, swallow-the-Pixi-tap guard, window-level release, always slide home — a successful cast retargets the tween mid-flight per §6.3) with `table/src/tuning.ts` constants. e2e driver: prompt surface = dock *or* cluster, `.dock-busy` anywhere, cluster/amount buttons count toward no-dead-end. Verified: core 244 · classic 30 · table 126, both prod bundles grep-checked, two-browser smoke 12.9 s, **auto-player green — full game to `game.over`, 2.0 min, combat declared, 0 resyncs**. Remaining: Ricardo's live feel pass (drag threshold, cluster placement). |
-| T8 | Pointer-to-target + intent buffer: combat (attackers/blockers/all-attack) and felt/hand `chooseTargets` off the dock | A 4-player combat declared entirely by drag gestures incl. an attack whose attack-target prompt is consumed from intent, and a block declared by drag on the defending seat; e2e combat coverage stays green; no-dead-end poll extended |
+| T8 | Pointer-to-target + intent buffer: combat (attackers/blockers/all-attack) and felt/hand `chooseTargets` off the dock. **Engine-says-no toasts (§5.6):** `kind:'personal'` log lines promoted to toasts; silent cast-rescind detection with best-effort source naming | A 4-player combat declared entirely by drag gestures incl. an attack whose attack-target prompt is consumed from intent, and a block declared by drag on the defending seat; e2e combat coverage stays green; no-dead-end poll extended. An illegal block attempt toasts the engine's explanation; the 2026-07-25 Melody rescind (tap B2XF4W), replayed as a fixture, toasts the rescind and names Lightning Greaves |
 | T9 | Carousel browser (prompt + browse modes) + remaining screen-space surfaces: `cards[]` chooseTargets, `choosePile`, `chooseAbility`, `chooseOption`, `distribute` (chip fallback), `playerRequest`. **`PromptDock.tsx` and `Modal.tsx` deleted** | Every §8 kind renders dock-free (fixture-driven for the never-seen-live kinds); graveyard/exile browsable at last; both e2e specs green on the table client; classic client byte-unaffected |
 | M7 | Protocol §7 fields in v1.md + bridge derivation: `payMana.for` (spike → implement), `distribute.among[].objectId` (name-match, canary on drift); conformance samples + golden fixtures updated | Fields present and correct on live captures where derivable; absent (never wrong) elsewhere; classic client provably unaffected (corpus additive) |
 | T10 | Anchored payMana panel (`for` + fallbacks) + the auto-mana solver (§6) | A full game with auto-mana on where no `payMana` ask requires a human click except deliberate stand-downs; toggling off mid-payment re-renders manual on the current ask; solver never sends Cancel and never loops a no-progress source |
