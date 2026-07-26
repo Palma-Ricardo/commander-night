@@ -221,8 +221,9 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   border: 1px solid var(--border); border-radius: 3px;
 }
 
-/* payMana's corner panel (§5.3 no-anchor position; T10 anchors it) and the
-   playerRequest pop-panel — the same chrome family as the cluster below. */
+/* payMana's panel (§5.3: anchored under the paying card via M7 `for`, corner
+   column when no anchor resolves) and the playerRequest pop-panel — the same
+   chrome family as the cluster below. */
 .pay-panel, .request-panel {
   display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end;
   max-width: 100%;
@@ -231,6 +232,8 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   box-shadow: 0 8px 30px #000a, inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .pay-panel.dock-busy, .request-panel.dock-busy { opacity: 0.75; }
+.pay-panel.pay-anchored { position: fixed; z-index: 18; width: max-content; max-width: 20rem; }
+.pay-panel.pay-auto .dock-hint { color: var(--accent); font-style: normal; }
 .request-panel { flex-direction: column; align-items: stretch; }
 .request-panel h4 { margin: 0; font-size: 0.85rem; letter-spacing: 0.04em; color: var(--muted); }
 .request-panel p { margin: 0; }

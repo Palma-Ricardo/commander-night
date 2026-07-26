@@ -9,6 +9,7 @@ import { createScryfallResolver } from '@night/core/images/scryfall';
 import { createActions } from '@night/core/net/actions';
 import { createSocketManager } from '@night/core/net/socket';
 import { applyKeyframe } from '@night/core/state/apply';
+import { wireAutoManaSolver } from '@night/core/state/automana';
 import { wireIntentBuffer } from '@night/core/state/intent';
 import { wireNoLegalChoiceDetector, wireRescindDetector } from '@night/core/state/rescind';
 import { createStores } from '@night/core/stores';
@@ -51,6 +52,13 @@ export const appActions = createActions(appStores, appManager, appKV, { scryfall
 wireIntentBuffer(appStores.prompt, (pid, a) => void appActions.answerPrompt(pid, a));
 wireRescindDetector(appStores);
 wireNoLegalChoiceDetector(appStores);
+// T10 §6: the auto-mana solver answers residual payMana asks while the toggle
+// is on (the server's own auto-payment already ate the unambiguous ones).
+// Source clicks go through clickManaSource so the no-progress probe sees them.
+wireAutoManaSolver(appStores, {
+  answerPrompt: (pid, a) => void appActions.answerPrompt(pid, a),
+  clickManaSource: (pid, id) => void appActions.clickManaSource(pid, id),
+});
 
 /** T0: seed the demo keyframe so there is a table to render with no bridge
  *  running (design §13 exit). A live keyframe from the bridge overwrites it. */

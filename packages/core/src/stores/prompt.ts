@@ -20,6 +20,10 @@ export interface PromptStoreState {
   manaProbe?: { sourceId: Id; remaining: string };
   /** payMana: sources that provably can't pay the current remaining cost. */
   cantPay: Id[];
+  /** payMana: the T10 auto-mana solver's verdict on the pending ask
+   *  (state/automana.ts) — 'paying' while it drives, 'stood-down' when it
+   *  left the ask manual. Absent = solver not wired or toggle off. */
+  autoPay?: 'paying' | 'stood-down';
   /** The object an inflight {object} answer acted on — gets the spinner badge (§7). */
   actedOn?: Id;
   /** Pending-intent buffer (prompts-on-the-table §4.3): a pointer-to-target
@@ -35,6 +39,7 @@ export interface PromptStoreState {
 }
 
 export const emptyScratch = (): Omit<PromptStoreState, 'pending'> =>
-  ({ selected: [], inflight: false, manaProbe: undefined, cantPay: [], actedOn: undefined });
+  ({ selected: [], inflight: false, manaProbe: undefined, cantPay: [], actedOn: undefined,
+     autoPay: undefined });
 
 export const createPromptStore = () => createStore<PromptStoreState>(() => emptyScratch());
