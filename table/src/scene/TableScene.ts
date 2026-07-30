@@ -57,6 +57,13 @@ const DIM_ALPHA = 0.72;
 const DMG_INK = 0xf0a89a;
 const DMG_FILL = 0x2a100c;
 const DMG_EDGE = 0x5e1f16;
+
+// Player-counter chips (#26): the common counters get a glyph; anything else
+// shows its own name. Poison renders in the danger tone (10 = dead).
+const COUNTER_ICON: Record<string, string> = {
+  poison: '☠ poison', energy: '⚡ energy', experience: '✦ xp',
+};
+interface SeatChip { label: string; tone: 'danger' | 'note' }
 const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
 const HOVER_GRACE_MS = 140;     // let the pointer cross the gap from a card to its preview
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
@@ -1630,30 +1637,41 @@ export class TableScene implements DirectorSink {
       new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: incoming > 0 ? DMG_INK : INK, fontWeight: '700' }),
       1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
     );
-    const chips = commanderDamageRows(state, p).map(row => {
+    const chips: SeatChip[] = commanderDamageRows(state, p).map(row => {
       const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
-      return `⚔ ${short} ${row.amount}`;
+      return { label: `⚔ ${short} ${row.amount}`, tone: 'danger' as const };
     });
-    if (incoming > 0) chips.unshift(`⚔ ${incoming} incoming`);
+    if (incoming > 0) chips.unshift({ label: `⚔ ${incoming} incoming`, tone: 'danger' });
+    // Player counters (§6: poison, energy, experience, …) — visible where the
+    // player is, not buried in a panel (#26). Poison kills, so it reads as danger.
+    for (const c of p.counters ?? []) {
+      const icon = COUNTER_ICON[c.name.toLowerCase()] ?? c.name;
+      chips.push({ label: `${icon} ${c.count}`, tone: c.name.toLowerCase() === 'poison' ? 'danger' : 'note' });
+    }
     this.drawSeatChips(seat, chips);
   }
 
-  /** Red seat chips — commander damage per attacking commander (§6) and, during
-   *  combat, the incoming-unblocked-damage danger chip (§9) — so lethal creeps up
-   *  where the victim reads it, without tracing a combat arrow. Laid in a strip on
-   *  the *rail side* of the plate (below a near seat, above a far seat), centred
-   *  under it: the old strip ran off the right of the plate, straight under an
-   *  opponent's inboard hand fan, which hid it (reviewed 2026-07-23). Chip boxes
-   *  keystone; their text billboards. */
-  private drawSeatChips(seat: SeatLayout, labels: string[]): void {
-    if (labels.length === 0) return;
+  /** Seat chips — commander damage per attacking commander (§6), the
+   *  incoming-unblocked-damage danger chip during combat (§9), and player
+   *  counters (#26) — so lethal (and energy) creeps up where the victim reads
+   *  it, without tracing a combat arrow. Laid in a strip on the *rail side* of
+   *  the plate (below a near seat, above a far seat), centred under it: the old
+   *  strip ran off the right of the plate, straight under an opponent's inboard
+   *  hand fan, which hid it (reviewed 2026-07-23). Chip boxes keystone; their
+   *  text billboards. Danger chips are the cold red pills; note chips read in
+   *  the plate's own brass so they never cry wolf. */
+  private drawSeatChips(seat: SeatLayout, chips_: SeatChip[]): void {
+    if (chips_.length === 0) return;
     const h = 18;
     const gap = 5;
     const centerX = seat.nameplate.x + NAMEPLATE.w / 2;
-    const chips = labels.map(label => {
-      const style = new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 13, fill: DMG_INK, fontWeight: '700' });
+    const chips = chips_.map(({ label, tone }) => {
+      const style = new TextStyle({
+        fontFamily: 'ui-monospace, monospace', fontSize: 13,
+        fill: tone === 'danger' ? DMG_INK : INK, fontWeight: '700',
+      });
       const node = new Text({ text: label, style });
-      return { node, w: Math.round(node.width) + 12 };
+      return { node, tone, w: Math.round(node.width) + 12 };
     });
     const totalW = chips.reduce((s, c) => s + c.w, 0) + gap * (chips.length - 1);
     const cy = seat.bandY + seat.out * (NAMEPLATE.h / 2 + h / 2 + 2);
@@ -1661,8 +1679,8 @@ export class TableScene implements DirectorSink {
     for (const chip of chips) {
       this.shapeSpecs.push({
         rect: { x, y: cy - h / 2, w: chip.w, h },
-        fill: { color: DMG_FILL, alpha: 1 },
-        stroke: { width: 1, color: DMG_EDGE, alpha: 1 },
+        fill: { color: chip.tone === 'danger' ? DMG_FILL : BRASS_FILL, alpha: 1 },
+        stroke: { width: 1, color: chip.tone === 'danger' ? DMG_EDGE : BRASS, alpha: 1 },
       });
       chip.node.anchor.set(0, 0.5);
       this.furnitureText.addChild(chip.node);

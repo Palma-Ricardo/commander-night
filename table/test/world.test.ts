@@ -106,6 +106,23 @@ describe('layoutWorld', () => {
     expect(face[0]!.placement.y).toBeLessThan(minBackY);
   });
 
+  it('a curse sits in front of the cursed player, not its caster (#26)', () => {
+    const caster = mkPlayer('p1', 'Caster', { human: true });
+    const victim = mkPlayer('p2', 'Victim', {});
+    const curse: Permanent = {
+      ...mkPerm('p1', mkCard('Curse of Opulence', ['ENCHANTMENT'], { subtypes: ['Aura', 'Curse'] })),
+      attachedTo: 'p2',
+    };
+    caster.battlefield = [...caster.battlefield, curse];
+    const placed = layoutWorld(mkState([caster, victim], 'p1'));
+    const hit = placed.find(p => p.objectId === curse.id);
+    expect(hit).toBeDefined();
+    expect(hit!.placement.ownerId).toBe('p2');            // the cursed seat's grid
+    expect(hit!.placement.zone).toBe('battlefield');
+    // and only once — the caster's grid withheld it
+    expect(placed.filter(p => p.objectId === curse.id).length).toBe(1);
+  });
+
   it('a topCard on a one-card library is the whole pile', () => {
     const top = mkCard('Last One', ['INSTANT']);
     const state = mkState(

@@ -297,10 +297,13 @@ function groupCells(perms: readonly Permanent[]): Permanent[][] {
 // rather than per seat.
 
 /** Who is attached to whom, table-wide. `nested` is every permanent that has been
- *  adopted by a host (so the grid and the lanes withhold it). */
+ *  adopted by a host (so the grid and the lanes withhold it). `onPlayer` is the
+ *  permanents attached to a *player* (curses): they sit in front of the cursed
+ *  player, like paper — not in their caster's grid (Issues.txt #26). */
 interface AttachIndex {
   byHost: ReadonlyMap<Id, Permanent[]>;
   nested: ReadonlySet<Id>;
+  onPlayer: ReadonlyMap<Id, Permanent[]>;
 }
 
 /** Whether `p`'s host chain ends somewhere — corrupt state could hand us a cycle
@@ -322,21 +325,31 @@ function chainTerminates(p: Permanent, perms: ReadonlyMap<Id, Permanent>): boole
 function attachIndex(state: GameState): AttachIndex {
   const perms = new Map<Id, Permanent>();
   for (const pl of state.players) for (const p of pl.battlefield) perms.set(p.id, p);
+  const playerIds = new Set(state.players.map(p => p.id));
   const byHost = new Map<Id, Permanent[]>();
   const nested = new Set<Id>();
+  const onPlayer = new Map<Id, Permanent[]>();
   for (const pl of state.players) {
     for (const p of pl.battlefield) {
       const hostId = p.attachedTo;
-      // `attachedTo` is a permanent *or a player* (protocol §6), and can be stale:
-      // anything we can't resolve to a permanent on the felt keeps its own cell.
-      if (hostId === undefined || hostId === p.id || !perms.has(hostId)) continue;
+      if (hostId === undefined || hostId === p.id) continue;
+      // Attached to a player (a curse): it moves to the cursed seat's grid.
+      if (playerIds.has(hostId)) {
+        const cursed = onPlayer.get(hostId);
+        if (cursed === undefined) onPlayer.set(hostId, [p]); else cursed.push(p);
+        nested.add(p.id);
+        continue;
+      }
+      // `attachedTo` can otherwise be stale: anything we can't resolve to a
+      // permanent on the felt keeps its own cell.
+      if (!perms.has(hostId)) continue;
       if (!chainTerminates(p, perms)) continue;
       const kids = byHost.get(hostId);
       if (kids === undefined) byHost.set(hostId, [p]); else kids.push(p);
       nested.add(p.id);
     }
   }
-  return { byHost, nested };
+  return { byHost, nested, onPlayer };
 }
 
 /** Emit everything attached to `host` (recursively — an aura can enchant an aura),
@@ -445,7 +458,10 @@ function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachInd
   // fighting in the seam (layoutCombat) are withheld from the grid entirely, and so
   // are attachments: they ride under their host, wherever the host is placed.
   const bf = seat.player.battlefield.filter(p => !inCombat.has(p.id) && !att.nested.has(p.id));
-  const nonlands = groupCells(bf.filter(p => !inLandRow(p)));
+  // Curses enchanting this seat sit in front of the cursed player, like paper —
+  // their caster's grid withheld them via `nested` (#26).
+  const cursed = att.onPlayer.get(seat.player.id) ?? [];
+  const nonlands = groupCells([...bf.filter(p => !inLandRow(p)), ...cursed]);
   const lands = groupCells(bf.filter(inLandRow));
   placeCells(seat, nonlands, seat.boardTopY, seat.out, att, out);
   placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, att, out);
