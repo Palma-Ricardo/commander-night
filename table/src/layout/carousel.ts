@@ -35,7 +35,7 @@ export interface CarouselEntry {
 }
 
 export interface CarouselContent {
-  mode: 'prompt' | 'browse';
+  mode: 'prompt' | 'reveal' | 'browse';
   /** Identity for page-reset: a new key starts back at page 0. */
   key: string;
   title: string;
@@ -71,6 +71,30 @@ export function carouselContent(
       return {
         mode: 'prompt', key: `prompt:${p.promptId}`, title: 'Choose',
         entries: stranded.map(s => ({ id: s.id, card: s.card, label: s.label })),
+      };
+    }
+  }
+  // Reveal windows (§6 revealed/lookedAt): ambient state, not an ask — they
+  // open under any pending prompt (whose candidates, when they point into a
+  // window, ring these very cards via affordanceFor) and win over an open
+  // browse for exactly as long as the state carries them. They leave via
+  // patches, never by dismissal — the classic client's RevealPanels rule.
+  if (state !== undefined) {
+    const windows = [
+      ...(state.revealed ?? []).map(w => ({ ...w, private: false })),
+      ...(state.lookedAt ?? []).map(w => ({ ...w, private: true })),
+    ].filter(w => w.cards.length > 0);
+    if (windows.length > 0) {
+      const title = windows
+        .map(w => (w.private ? `${w.name} (only you)` : w.name))
+        .join(' · ');
+      return {
+        mode: 'reveal',
+        // Names identify the windows; a growing card count keeps the newest
+        // additions in view without resetting on unrelated patches.
+        key: `reveal:${windows.map(w => `${w.name}#${w.cards.length}`).join('|')}`,
+        title,
+        entries: windows.flatMap(w => w.cards.map(c => ({ id: c.id, card: c, label: c.name }))),
       };
     }
   }

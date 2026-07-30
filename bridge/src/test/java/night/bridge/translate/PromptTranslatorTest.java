@@ -127,7 +127,7 @@ class PromptTranslatorTest {
         }
         return new Player(id, id, true, 40, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
                 0, 0, battlefield, java.util.List.of(), java.util.List.of(),
-                java.util.List.of(), null, null, null);
+                java.util.List.of(), null, null, null, null);
     }
 
     @Test

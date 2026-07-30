@@ -23,7 +23,10 @@ public record Player(
         List<CommandObject> commandZone,
         List<CommanderDamage> commanderDamage,
         Flags flags,
-        Timer timer) {
+        Timer timer,
+        // Top of library while an effect keeps it revealed (Future Sight-class);
+        // PlayerView.topCard, non-null only while isTopCardRevealed (§6, 2026-07-29).
+        Card topCard) {
 
     public record ManaPool(
             @JsonProperty("W") int w,

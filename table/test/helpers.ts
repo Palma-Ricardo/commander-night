@@ -43,6 +43,7 @@ export function mkPlayer(id: string, name: string, o: Partial<Player> & {
     exile: o.exile ?? [],
     commandZone: o.commandZone ?? [mkCommander()],
     ...(o.flags !== undefined ? { flags: o.flags } : {}),
+    ...(o.topCard !== undefined ? { topCard: o.topCard } : {}),
   };
 }
 

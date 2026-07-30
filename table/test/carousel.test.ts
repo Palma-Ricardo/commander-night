@@ -85,6 +85,52 @@ describe('carouselContent', () => {
     const c = carouselContent(promptState(p), state, { playerId: 'p1', zone: 'graveyard' }, '');
     expect(c?.mode).toBe('prompt');
   });
+
+  it('reveal windows open the fan and leave only with the state (§6)', () => {
+    const state = fourSeats();
+    const shown = [mkCard('Fact', ['INSTANT']), mkCard('Fiction', ['SORCERY'])];
+    state.revealed = [{ name: 'Fact or Fiction', cards: shown }];
+    const c = carouselContent(promptState(undefined), state, undefined, '');
+    expect(c?.mode).toBe('reveal');
+    expect(c?.title).toBe('Fact or Fiction');
+    expect(c?.entries.map(e => e.label)).toEqual(['Fact', 'Fiction']);  // server order kept
+    // gone from state → fan closes; no dismissal path exists
+    state.revealed = [];
+    expect(carouselContent(promptState(undefined), state, undefined, '')).toBeUndefined();
+  });
+
+  it('lookedAt windows are marked private and merge after revealed ones', () => {
+    const state = fourSeats();
+    state.revealed = [{ name: 'Reveal', cards: [mkCard('Public', ['INSTANT'])] }];
+    state.lookedAt = [{ name: 'Scry', cards: [mkCard('Secret', ['SORCERY'])] }];
+    const c = carouselContent(promptState(undefined), state, undefined, '');
+    expect(c?.mode).toBe('reveal');
+    expect(c?.title).toBe('Reveal · Scry (only you)');
+    expect(c?.entries.map(e => e.label)).toEqual(['Public', 'Secret']);
+  });
+
+  it('reveal wins over browse; a fan-opening ask wins over reveal', () => {
+    const state = fourSeats();
+    state.revealed = [{ name: 'Reveal', cards: [mkCard('Shown', ['INSTANT'])] }];
+    const overBrowse = carouselContent(
+      promptState(undefined), state, { playerId: 'p1', zone: 'graveyard' }, '');
+    expect(overBrowse?.mode).toBe('reveal');
+    const cards = [mkCard('Pick Me', ['CREATURE'])];
+    const ask = targets({ candidates: [cards[0]!.id], cards });
+    expect(carouselContent(promptState(ask), state, undefined, '')?.mode).toBe('prompt');
+  });
+
+  it('an ask whose candidates sit in a reveal window keeps the reveal fan (they ring there)', () => {
+    const state = fourSeats();
+    const shown = [mkCard('Choose Me', ['INSTANT'])];
+    state.revealed = [{ name: 'Revealed', cards: shown }];
+    // candidates are board-reachable via the reveal window → prompt mode stays
+    // closed and the reveal fan is the surface that rings them
+    const ask = targets({ candidates: [shown[0]!.id] });
+    const c = carouselContent(promptState(ask), state, undefined, '');
+    expect(c?.mode).toBe('reveal');
+    expect(c?.entries[0]?.id).toBe(shown[0]!.id);
+  });
 });
 
 describe('layoutCarouselFan', () => {

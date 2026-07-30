@@ -464,7 +464,7 @@ class EventDeriverTest {
     private static Player player(String id, int librarySize, int handSize,
                                  List<Permanent> bf, List<Card> gy) {
         return new Player(id, id, true, 40, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
-                librarySize, handSize, bf, gy, List.of(), List.of(), null, null, null);
+                librarySize, handSize, bf, gy, List.of(), List.of(), null, null, null, null);
     }
 
     private static Card card(String id, String name) {
@@ -507,7 +507,7 @@ class EventDeriverTest {
 
     private static Player seatLife(String id, int life, Permanent... bf) {
         return new Player(id, id, true, life, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
-                90, 0, List.of(bf), List.of(), List.of(), List.of(), null, null, null);
+                90, 0, List.of(bf), List.of(), List.of(), List.of(), null, null, null, null);
     }
 
     private static GameState stateCombat(GameState.Turn turn, List<Player> players, List<CombatGroup> combat) {

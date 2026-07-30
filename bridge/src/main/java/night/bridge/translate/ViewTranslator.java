@@ -186,7 +186,8 @@ public final class ViewTranslator {
                 commandZone(p.getCommandObjectList()),
                 null,           // commanderDamage: attached after all players are scraped
                 flags(p),
-                null);          // timer: untimed v1
+                null,           // timer: untimed v1
+                p.getTopCard() == null ? null : cardScraped(p.getTopCard()));
     }
 
     /**
@@ -207,7 +208,7 @@ public final class ViewTranslator {
         }
         return new Player(p.id(), p.name(), p.human(), p.life(), p.counters(), p.manaPool(),
                 p.librarySize(), p.handSize(), p.battlefield(), p.graveyard(), p.exile(),
-                p.commandZone(), dmg, p.flags(), p.timer());
+                p.commandZone(), dmg, p.flags(), p.timer(), p.topCard());
     }
 
     private static Player renamed(Player p, UnaryOperator<String> playerName) {
@@ -217,7 +218,7 @@ public final class ViewTranslator {
         }
         return new Player(p.id(), display, p.human(), p.life(), p.counters(), p.manaPool(),
                 p.librarySize(), p.handSize(), p.battlefield(), p.graveyard(), p.exile(),
-                p.commandZone(), p.commanderDamage(), p.flags(), p.timer());
+                p.commandZone(), p.commanderDamage(), p.flags(), p.timer(), p.topCard());
     }
 
     private static Player.Flags flags(PlayerView p) {

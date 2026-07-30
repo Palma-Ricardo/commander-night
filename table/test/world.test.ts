@@ -91,6 +91,31 @@ describe('layoutWorld', () => {
     expect(lib.every(p => !p.placement.faceUp)).toBe(true);
   });
 
+  it('a revealed topCard rides the library pile face-up, under its real id (§6)', () => {
+    const top = mkCard('Future Sight Peek', ['SORCERY']);
+    const state = mkState(
+      [mkPlayer('p1', 'You', { human: true, librarySize: 70, topCard: top })], 'p1');
+    const lib = layoutWorld(state).filter(p => p.placement.zone === 'library');
+    expect(lib.length).toBe(8);                             // top replaces one back
+    const face = lib.filter(p => p.placement.faceUp);
+    expect(face.length).toBe(1);
+    expect(face[0]!.objectId).toBe(top.id);                 // hover/affordance address it
+    expect(face[0]!.card?.name).toBe('Future Sight Peek');
+    // it sits on top: further from the camera than every back (y shrinks with depth)
+    const minBackY = Math.min(...lib.filter(p => !p.placement.faceUp).map(p => p.placement.y));
+    expect(face[0]!.placement.y).toBeLessThan(minBackY);
+  });
+
+  it('a topCard on a one-card library is the whole pile', () => {
+    const top = mkCard('Last One', ['INSTANT']);
+    const state = mkState(
+      [mkPlayer('p1', 'You', { human: true, librarySize: 1, topCard: top })], 'p1');
+    const lib = layoutWorld(state).filter(p => p.placement.zone === 'library');
+    expect(lib.length).toBe(1);
+    expect(lib[0]!.placement.faceUp).toBe(true);
+    expect(lib[0]!.objectId).toBe(top.id);
+  });
+
   it('lays spells toward the seam and lands strictly behind them', () => {
     const you = mkPlayer('p1', 'You', {
       human: true,

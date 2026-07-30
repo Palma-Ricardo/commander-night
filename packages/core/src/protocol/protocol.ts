@@ -136,6 +136,9 @@ export interface Player {
   commanderDamage?: { fromCommanderId: Id; amount: number }[];
   flags?: { monarch?: boolean; initiative?: boolean; left?: boolean; dead?: boolean };
   timer?: { remainingSecs: number; active: boolean };   // absent when clocks disabled
+  // Top of library while an effect keeps it revealed (Future Sight-class);
+  // transient reveal windows ride GameState.revealed instead (§6, 2026-07-29).
+  topCard?: Card;
 }
 
 export interface CombatGroup {

@@ -32,6 +32,7 @@ export function findObject(state: GameState, id: Id): Card | undefined {
       const hit = (zone as readonly Card[]).find(c => c.id === id);
       if (hit) return hit;
     }
+    if (p.topCard?.id === id) return p.topCard;   // revealed library top (§6)
   }
   const inHand = state.me.hand.find(c => c.id === id);
   if (inHand) return inHand;
@@ -182,6 +183,7 @@ export function isBoardReachable(state: GameState, id: Id): boolean {
     if (p.battlefield.some(c => c.id === id)) return true;
     if (p.commandZone.some(c => c.id === id)) return true;
     // attachments render nested but are themselves entries in `battlefield`
+    if (p.topCard?.id === id) return true;   // revealed library top renders on the pile (§6)
   }
   if (state.me.hand.some(c => c.id === id)) return true;
   if (state.stack.some(s => s.id === id || s.card?.id === id)) return true;

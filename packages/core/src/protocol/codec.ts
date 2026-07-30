@@ -196,6 +196,7 @@ const playerC = obj({
     commanderDamage: arr(obj({ req: { fromCommanderId: idc, amount: num } })),
     flags: obj({ req: {}, opt: { monarch: bool, initiative: bool, left: bool, dead: bool } }),
     timer: obj({ req: { remainingSecs: num, active: bool } }),
+    topCard: cardC,   // library top while revealed (Future Sight-class, §6)
   },
 });
 

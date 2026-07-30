@@ -637,11 +637,22 @@ function layoutLibrary(seat: SeatLayout, out: PlacedActor[]): void {
   const anchor = seat.piles.library;
   const outward = seat.corner.left ? -1 : 1;   // toward this pile's own outer corner
   const n = Math.min(seat.player.librarySize, LIBRARY_MAX_VISIBLE);
-  for (let i = 0; i < n; i++) {
+  const top = seat.player.topCard;   // revealed while a Future Sight-class effect holds (§6)
+  const backs = top !== undefined ? n - 1 : n;
+  for (let i = 0; i < backs; i++) {
     place(out, `${seat.player.id}:library:${i}`, undefined, undefined, {
       x: anchor.x + outward * i * PILE_STEP_OUT,
       y: anchor.y - i * PILE_STEP_AWAY,
       rotation: 0, scale: PILE_SCALE, zone: 'library', ownerId: seat.player.id, faceUp: false,
+    });
+  }
+  if (top !== undefined && seat.player.librarySize > 0) {
+    // The real card, face-up, under its real id: hover previews it, a prompt can
+    // ring it, and drawing it tweens library → hand as an ordinary actor move.
+    place(out, top.id, top, top.id, {
+      x: anchor.x + outward * backs * PILE_STEP_OUT,
+      y: anchor.y - backs * PILE_STEP_AWAY,
+      rotation: 0, scale: PILE_SCALE, zone: 'library', ownerId: seat.player.id, faceUp: true,
     });
   }
 }

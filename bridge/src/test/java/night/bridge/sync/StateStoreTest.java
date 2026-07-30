@@ -26,7 +26,7 @@ class StateStoreTest {
                 new GameState.Turn(1, Phase.BEGINNING, Step.UPKEEP, "p1", "p1"),
                 List.of(new Player("p1", "A", true, life, null,
                         new Player.ManaPool(0, 0, 0, 0, 0, 0), 92, 7,
-                        List.of(), List.of(), List.of(), List.of(), null, null, null)),
+                        List.of(), List.of(), List.of(), List.of(), null, null, null, null)),
                 List.of(), null, null, null, null);
     }
 
