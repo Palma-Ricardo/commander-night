@@ -524,11 +524,19 @@ public final class ViewTranslator {
         return list.stream().map(c -> new Counter(c.getName(), c.getCount())).toList();
     }
 
-    private static List<String> rules(List<String> raw) {
+    static List<String> rules(List<String> raw) {
         if (raw == null) {
             return List.of();
         }
-        return raw.stream().map(Html::strip).filter(s -> !s.isBlank()).toList();
+        return raw.stream().map(Html::strip)
+                .filter(s -> !s.isBlank())
+                // StackAbilityView/CardsView append "<i>Related objects: …</i>" —
+                // a log-render of the ability's targets. The wire already carries
+                // them as StackItem.targets (the client draws arrows), so the name
+                // list is presentation noise, and a long one overflows every text
+                // box it lands in (Issues.txt #28).
+                .filter(s -> !s.startsWith("Related objects:"))
+                .toList();
     }
 
     private static List<String> ids(List<UUID> raw) {

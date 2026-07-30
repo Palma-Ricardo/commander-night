@@ -20,7 +20,7 @@
 // swaps it onto the actor once ready. The detail tier stays a text frame here —
 // the full-res hover preview is DOM (design §10), not drawn on the canvas.
 
-import { CanvasSource, Container, Graphics, type Renderer, Text, TextStyle, Texture } from 'pixi.js';
+import { CanvasSource, Container, Graphics, type Renderer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
 import backArtUrl from '../assets/cards/Back.png';
 
@@ -80,6 +80,52 @@ export function artCropUrl(url: string): string {
     /(cards\.scryfall\.io|img\.scryfall\.com)\/(small|normal|large|png|border_crop)\//,
     '$1/art_crop/',
   );
+}
+
+/** A Text that provably fits `maxH`: built at `style`, then trimmed from the end
+ *  with an ellipsis until its measured height fits. The loop is bounded (each pass
+ *  removes real characters) — long ability descriptions can shrink, never overflow
+ *  their plate (Issues.txt #28). */
+export function fittedText(raw: string, maxH: number, style: TextStyle, resolution?: number): Text {
+  const t = new Text({ text: raw, style, ...(resolution !== undefined ? { resolution } : {}) });
+  let s = raw;
+  while (t.height > maxH && s.length > 24) {
+    s = s.slice(0, Math.max(24, s.length - 48)).trimEnd() + ' …';
+    t.text = s;
+  }
+  return t;
+}
+
+/** The gilt ability plate over a trigger-order card's lower half (Issues.txt #27):
+ *  the art above says *which* permanent fired; this says what the ability does —
+ *  the canvas mirror of the DOM CardView's `.ability-plate`. */
+function abilityPlate(card: Card, w: number, h: number): Container {
+  const plate = new Container();
+  const top = h * 0.42;
+  const pad = w * 0.06;
+  const g = new Graphics()
+    .roundRect(4, top, w - 8, h - top - 4, 8).fill({ color: 0x14100c, alpha: 0.92 })
+    .roundRect(5.2, top + 1.2, w - 10.4, h - top - 6.4, 8).stroke({ width: 1.5, color: 0xc9a24a, alpha: 0.92 });
+  plate.addChild(g);
+  const header = new Text({
+    text: 'ABILITY', resolution: 2,
+    style: new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 12, fontWeight: '800', fill: 0xf1d792, letterSpacing: 2 }),
+  });
+  header.position.set(pad, top + 7);
+  plate.addChild(header);
+  const bodyTop = top + 7 + header.height + 4;
+  const body = fittedText(
+    card.text.join('\n'),
+    h - bodyTop - 10,
+    new TextStyle({
+      fontFamily: 'Georgia, serif', fontSize: 11, fill: 0xe8e2cf,
+      wordWrap: true, wordWrapWidth: w - pad * 2, lineHeight: 14.5,
+    }),
+    2,
+  );
+  body.position.set(pad, bodyTop);
+  plate.addChild(body);
+  return plate;
 }
 
 /** Build the text-frame face as a display object at `tier` pixel size. */
@@ -145,6 +191,7 @@ export class CardTextures {
   private readonly detailArt = new Map<string, Texture>(); // image url → full-res portrait art for the stack (LRU)
   private readonly artbox = new Map<string, Texture>();     // art_crop url → battlefield art box (LRU)
   private readonly artboxFrames = new Map<string, Texture>(); // key → art-box text fallback
+  private readonly abilityFaces = new Map<string, Texture>(); // ability id → art+plate face (LRU)
   private readonly loading = new Set<string>();             // image urls currently decoding
   private back?: Texture;                                    // procedural fallback back
   private cardBackTex?: Texture;                             // the real card back art (assets/cards/Back.png)
@@ -156,9 +203,11 @@ export class CardTextures {
   constructor(private readonly renderer: Renderer, private readonly resolver: ScryfallResolver) {}
 
   /** A stable cache key for the text frame: identical printings share a frame
-   *  (per-object counters do not change it). */
+   *  (per-object counters do not change it). An ability "card" carries its source's
+   *  printing but its *own* rules text, so it keys by its ability id — sharing the
+   *  source card's frame would show the wrong face on one of them (#27). */
   private key(card: Card): string {
-    return `${card.set}:${card.number}:${card.name}`;
+    return `${card.set}:${card.number}:${card.name}${card.ability === true ? `:ab:${card.id}` : ''}`;
   }
 
   /** The best table-tier texture for `card` *right now*: its resolved Scryfall art
@@ -196,12 +245,45 @@ export class CardTextures {
       return this.artboxFrame(card);
     }
 
+    // A trigger-order ability (§7 picker, the carousel): the source's face with
+    // the gilt plate carrying this one ability's rule (#27). Composed over the
+    // art when it's decoded, over the text frame until then.
+    if (card.ability === true) {
+      if (artUrl !== undefined) this.ensureArt(artUrl);
+      return this.abilityFace(card, artUrl);
+    }
+
     if (artUrl !== undefined) {
       const hit = touch(this.art, artUrl);
       if (hit !== undefined) return hit;
       this.ensureArt(artUrl);
     }
     return this.frameFace(card, 'table');
+  }
+
+  /** Art (or text frame) + ability plate, baked once per ability id. Keyed by
+   *  whether the art had decoded, so the face upgrades when it lands. */
+  private abilityFace(card: Card, artUrl: string | undefined): Texture {
+    const art = artUrl !== undefined ? touch(this.art, artUrl) : undefined;
+    const k = `${card.id}:${art !== undefined ? 'art' : 'frame'}`;
+    const hit = touch(this.abilityFaces, k);
+    if (hit !== undefined) return hit;
+    const { w, h } = TIER_SIZE.table;
+    const root = new Container();
+    if (art !== undefined) {
+      const sp = new Sprite(art);
+      sp.width = w;
+      sp.height = h;
+      root.addChild(sp);
+    } else {
+      root.addChild(frameContainer(card, 'table'));
+    }
+    root.addChild(abilityPlate(card, w, h));
+    const tex = this.renderer.generateTexture({ target: root, resolution: 2 });
+    root.destroy({ children: true });
+    this.abilityFaces.set(k, tex);
+    if (this.abilityFaces.size > 64) this.evictOldest(this.abilityFaces);
+    return tex;
   }
 
   /** The battlefield art-box fallback (embossed name plate + colour panel, no rules

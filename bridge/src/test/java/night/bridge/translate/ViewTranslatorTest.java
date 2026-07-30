@@ -36,4 +36,16 @@ class ViewTranslatorTest {
         assertEquals("myNextTurn", Skip.MY_NEXT_TURN.wire());
         assertEquals("endStepBeforeMyTurn", Skip.END_STEP_BEFORE_MY_TURN.wire());
     }
+
+    /** StackAbilityView/CardsView append "Related objects: …" — a log-render of the
+     *  ability's targets, which StackItem.targets already carries (the client draws
+     *  arrows). It is presentation noise and overflowed every text box (#28). */
+    @Test
+    void relatedObjectsLinesAreStrippedFromRulesText() {
+        assertEquals(
+                java.util.List.of("When this creature attacks, draw a card."),
+                ViewTranslator.rules(java.util.List.of(
+                        "When this creature attacks, draw a card.",
+                        "<i>Related objects: <font object_id='abc'>Sol Ring</font> [abc]</i>")));
+    }
 }

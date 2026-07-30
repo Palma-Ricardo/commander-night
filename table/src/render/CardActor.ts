@@ -18,7 +18,7 @@
 
 import { Container, Graphics, GraphicsPath, PerspectiveMesh, Rectangle, Text, TextStyle, type Texture } from 'pixi.js';
 import type { Card } from '@night/core';
-import { identityColor } from './textures';
+import { fittedText, identityColor } from './textures';
 import type { ActorPlacement, ActorSpace, Point, Transform } from '../layout/types';
 import type { HighlightSpec, Projector, ScreenAnchor } from '../scene/interaction';
 
@@ -586,16 +586,24 @@ function stackEffectPanel(w: number, h: number, label: string, lines: string[]):
   c.addChild(header);
 
   if (lines.length > 0) {
-    const body = new Text({
-      resolution: STACK_TEXT_RES,
-      text: lines.join('\n'),
-      style: new TextStyle({
-        fontFamily: 'Georgia, serif', fontSize: Math.round(h * 0.043), fill: 0xe8e2cf,
-        wordWrap: true, wordWrapWidth: panelW - pad * 2, align: 'center', lineHeight: Math.round(h * 0.057),
+    const bodyTop = top + pad * 0.6 + header.height;
+    // Shrink one step for a long text, then trim to provably fit the panel —
+    // a wall-of-text trigger used to run straight off the card (#28).
+    const raw = lines.join('\n');
+    const small = raw.length > 260;
+    const size = Math.round(h * (small ? 0.036 : 0.043));
+    const body = fittedText(
+      raw,
+      bottom - bodyTop - pad * 0.5,
+      new TextStyle({
+        fontFamily: 'Georgia, serif', fontSize: size, fill: 0xe8e2cf,
+        wordWrap: true, wordWrapWidth: panelW - pad * 2, align: 'center',
+        lineHeight: Math.round(size * 1.33),
       }),
-    });
+      STACK_TEXT_RES,
+    );
     body.anchor.set(0.5, 0);
-    body.position.set(0, top + pad * 0.6 + header.height);
+    body.position.set(0, bodyTop);
     c.addChild(body);
   }
   return c;
