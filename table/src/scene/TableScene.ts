@@ -117,6 +117,14 @@ export class TableScene implements DirectorSink {
   // (a library look's cards exist nowhere else), so the director's diff never
   // touches them. Synced from prompt/state/store changes by syncCarousel.
   private readonly carouselLayer = new Container();
+  // The newest authoritative state, ahead of the director's presented one. The
+  // carousel is a prompt surface, and prompt surfaces render against
+  // authoritative state (design §6.4) — deriving from `presented` opened a
+  // phantom placeholder fan whenever an ask's candidates were still animating
+  // in (Windfall: draw seven, "select a card to discard" beats the draws;
+  // live-caught at the 2026-07-26 night, Issues.txt #1). The DOM bar and the
+  // shortcuts already read the store's state; this keeps the scene agreeing.
+  private latestState: GameState | undefined;
   private readonly carouselActors = new Map<string, CardActor>();
   private carouselKey: string | undefined;          // last content identity, for open/turn juice
   private unsubCarousel?: () => void;
@@ -308,6 +316,7 @@ export class TableScene implements DirectorSink {
   /** Feed a fresh authoritative state + its advisory events to the director; it
    *  decides animate-vs-snap and drives the transition on the ticker (§6.3). */
   present(state: GameState, events: readonly GameEvent[] = []): void {
+    this.latestState = state;
     this.director.present(state, events);
   }
 
@@ -1011,7 +1020,10 @@ export class TableScene implements DirectorSink {
    *  state transition, UI-store change, resize — it is pure over those inputs. */
   private syncCarousel(): void {
     if (this.director === undefined) return;
-    const state = this.director.presented;
+    // Authoritative, not presented (§6.4): whether a candidate is reachable is
+    // a question about the true state — the flush snaps the board to it within
+    // its budget, and the DOM bar derives from the same source.
+    const state = this.latestState ?? this.director.presented;
     const ui = carouselStore.getState();
     const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
     const entries = content?.entries ?? [];
@@ -1066,7 +1078,7 @@ export class TableScene implements DirectorSink {
   /** Wheel over the canvas pages the open carousel (§4.4); closed, it is inert. */
   private handleWheel(e: WheelEvent): void {
     if (this.carouselKey === undefined) return;
-    const state = this.director?.presented;
+    const state = this.latestState ?? this.director?.presented;
     const ui = carouselStore.getState();
     const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
     if (content === undefined) return;
