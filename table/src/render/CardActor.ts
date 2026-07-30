@@ -289,8 +289,13 @@ export class CardActor {
 
   /** Raise/lower the hand hover-lift (§9). The scene drives this for a pointed-at
    *  hand card; the lift eases in `decayJuice` and is painted every frame. A no-op
-   *  read for non-hand cards (the scene never raises them). */
-  setHover(on: boolean): void { this.hoverTarget = on ? 1 : 0; }
+   *  read for non-hand cards (the scene never raises them).
+   *
+   *  `amount` is the wheel zoom (#13): 1 is the natural lift, and higher keeps
+   *  growing the card in place — the hand's equivalent of zooming the preview
+   *  panel, since a hand card reads by lift and never opens one. Safe past 1: the
+   *  bottom edge stays monotonically *lower* at every amount (handHoverLift). */
+  setHover(on: boolean, amount = 1): void { this.hoverTarget = on ? amount : 0; }
 
   /** Place the actor's *current* position without touching its target — used to
    *  seed a freshly-created actor at its entry origin before animating it in. */

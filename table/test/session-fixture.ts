@@ -105,9 +105,11 @@ export function demoSession(): { initial: GameState; steps: SessionStep[] } {
   s.me.hand.push({ ...bounce });
   steps.push({ label: 'bounce', state: s, events: [{ k: 'move', objectId: BOUNCE, from: 'battlefield', to: 'hand', verb: 'bounce' }] });
 
-  // turn passes to Ana → the camera should follow (§7.3)
-  s = clone(s); s.turn = { ...s.turn, n: 6, activePlayerId: 'p2', priorityPlayerId: 'p2' };
-  steps.push({ label: 'step', state: s, events: [{ k: 'step', phase: 'BEGINNING', step: 'UPKEEP', activePlayerId: 'p2' }] });
+  // Turn passes to Marta → the camera should follow (§7.3). Marta, not Ana: play
+  // moves *backwards* through `players` (see displaySeats), so p4 is who takes the
+  // turn after p1 — and is display seat 1, the quadrant to your left.
+  s = clone(s); s.turn = { ...s.turn, n: 6, activePlayerId: 'p4', priorityPlayerId: 'p4' };
+  steps.push({ label: 'step', state: s, events: [{ k: 'step', phase: 'BEGINNING', step: 'UPKEEP', activePlayerId: 'p4' }] });
 
   return { initial: clone(INITIAL), steps };
 }

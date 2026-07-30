@@ -66,6 +66,11 @@ const COUNTER_ICON: Record<string, string> = {
 interface SeatChip { label: string; tone: 'danger' | 'note' }
 const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
 const HOVER_GRACE_MS = 140;     // let the pointer cross the gap from a card to its preview
+// Wheel zoom on the raised hand card (#13). The ceiling is a hover *amount*, not a
+// scale: amount 1 already grows the card 1.6× (HOVER_GROW), so 2.5 reads ≈2.5× —
+// close to the preview panel's own 2.2× cap, which is the point.
+const HAND_ZOOM_MAX = 2.5;
+const HAND_ZOOM_STEP = 0.2;
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
 const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
 
@@ -170,6 +175,8 @@ export class TableScene implements DirectorSink {
    *     the preview panel's own rect (`getPreviewRect`), with a short grace to cross
    *     the gap between them; otherwise the grace runs out and it hides. */
   private hoveredKey: string | undefined;
+  /** Wheel zoom on the raised hand card (#13), 1 = the natural §9 lift. */
+  private handZoom = 1;
   private previewActorKey: string | undefined;
   private previewGrace = 0;
   private pointer: Point | undefined;
@@ -1114,12 +1121,20 @@ export class TableScene implements DirectorSink {
    *  zoom-wins would leave it unpageable). With the carousel closed — the felt —
    *  an open preview zooms. */
   private handleWheel(e: WheelEvent): void {
-    const rect = this.getPreviewRect?.();
-    const onPreview = rect !== undefined
-      && e.clientX >= rect.left && e.clientX <= rect.left + rect.width
-      && e.clientY >= rect.top && e.clientY <= rect.top + rect.height;
-    if ((onPreview || this.carouselKey === undefined)
-      && this.onZoomPreview?.(e.deltaY !== 0 ? e.deltaY : e.deltaX) === true) {
+    const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+    // A raised hand card zooms in place — the hand reads by lift, never by panel
+    // (§9), so the lift *is* its preview.
+    if (this.hoveredKey !== undefined) {
+      this.zoomHand(delta);
+      e.preventDefault();
+      return;
+    }
+    // Any open preview zooms: battlefield, piles, the stack, and the carousel fan
+    // alike. `previewActorKey` is set exactly while the pointer is on a previewed
+    // card (or on the panel, which the frame-loop grace holds open), so this reads
+    // as "wheel over a card zooms it; wheel over the background pages" (§4.4 keeps
+    // the arrows and edge buttons for paging).
+    if (this.previewActorKey !== undefined && this.onZoomPreview?.(delta) === true) {
       e.preventDefault();
       return;
     }
@@ -1129,8 +1144,7 @@ export class TableScene implements DirectorSink {
     const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
     if (content === undefined) return;
     e.preventDefault();
-    const delta = (e.deltaY !== 0 ? e.deltaY : e.deltaX) > 0 ? 1 : -1;
-    turnPage(content.key, delta, carouselPageCount(content.entries.length));
+    turnPage(content.key, delta > 0 ? 1 : -1, carouselPageCount(content.entries.length));
   }
 
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
@@ -1317,8 +1331,18 @@ export class TableScene implements DirectorSink {
     this.hidePreview();
     if (this.hoveredKey !== undefined) this.actors.get(this.hoveredKey)?.setHover(false);
     this.hoveredKey = actor.key;
+    this.handZoom = 1;                        // per card, like the panel's zoom (#13)
     actor.setHover(true);
     this.screenActors.addChild(actor.view);   // reads above the rest of the fan
+  }
+
+  /** Wheel-zoom the raised hand card (#13) — the hand's stand-in for zooming the
+   *  preview panel. Clamped to the same ceiling as the panel so the two read alike. */
+  private zoomHand(delta: number): void {
+    if (this.hoveredKey === undefined) return;
+    this.handZoom = Math.min(HAND_ZOOM_MAX,
+      Math.max(1, this.handZoom - Math.sign(delta) * HAND_ZOOM_STEP));
+    this.actors.get(this.hoveredKey)?.setHover(true, this.handZoom);
   }
 
   /** Lower the raised hand card and restore the fan's natural z-order. */
@@ -1326,6 +1350,7 @@ export class TableScene implements DirectorSink {
     if (this.hoveredKey === undefined) return;
     this.actors.get(this.hoveredKey)?.setHover(false);
     this.hoveredKey = undefined;
+    this.handZoom = 1;
     this.restackScreen();
   }
 

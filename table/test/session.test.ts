@@ -91,7 +91,7 @@ describe('recorded session — through core + director (§12 replay tier)', () =
     expect(transitions.filter(t => t.duration > 0)).toHaveLength(steps.length);
     // zero synthesized states: every applied `to` is one the server sent
     for (const t of transitions) expect(real).toContain(t.to);
-    // the turn change re-framed the camera onto Ana (display seat 1)
+    // the turn change re-framed the camera onto Marta — the next to play (display seat 1)
     expect(dir.cameraView()).toEqual(seatView(1));
   });
 

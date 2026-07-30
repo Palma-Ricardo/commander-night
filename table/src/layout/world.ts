@@ -141,8 +141,17 @@ export interface SeatLayout {
   handFan: Point;                  // centre of the opponent hand fan
 }
 
-/** Rotate the seat array so `me` is display seat 0 (bottom-left); the rest keep
- *  their relative turn order clockwise around the table (§7.2). */
+/** Rotate the seat array so `me` is display seat 0 (bottom-left), and order the
+ *  rest by turn order so display 1 is whoever plays next, laid out clockwise
+ *  around the table (§7.2).
+ *
+ *  The walk runs **backwards** through `state.players` because 1.4.60 hands us
+ *  that list in the opposite direction to play: turns advance by *decreasing*
+ *  index, wrapping (measured on three live captures 2026-07-30 — tap 5KM63T with
+ *  me at index 2 goes 2 → 1 → 0 → 3 → 2 …, and 77W9PG / 4BT27D agree). Walking it
+ *  forward — which we did until then — seated the previous player where the next
+ *  one belongs, so the camera's turn-follow crawled anticlockwise around a table
+ *  whose seat keys and compass ran clockwise (Issues.txt #17, second half). */
 export function displaySeats(state: GameState): Player[] {
   const players = state.players;
   const n = players.length;
@@ -151,7 +160,7 @@ export function displaySeats(state: GameState): Player[] {
   if (meIndex < 0) meIndex = 0;
   const out: Player[] = [];
   for (let d = 0; d < n; d++) {
-    const p = players[(meIndex + d) % n];
+    const p = players[(((meIndex - d) % n) + n) % n];
     if (p !== undefined) out.push(p);
   }
   return out;

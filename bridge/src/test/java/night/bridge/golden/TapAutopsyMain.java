@@ -40,6 +40,9 @@ public final class TapAutopsyMain {
         // the server's fire-then-clear behavior (GameImpl clearLookedAt/clearRevealed
         // after every firePriorityEvent and fireUpdatePlayersEvent).
         java.util.Map<String, int[]> windowTally = new java.util.TreeMap<>();
+        String[] seatOrder = {null};
+        int[] lastActive = {-1};
+        StringBuilder turnSeq = new StringBuilder();
 
         GoldenFixtures.readTap(tap, cb -> {
             int n = ordinal[0]++;
@@ -128,6 +131,30 @@ public final class TapAutopsyMain {
                         case GameClientMessage m -> m.getGameView();
                         default -> null;
                     };
+                    // Seat-order probe: the players list is the seat order the client
+                    // lays out clockwise from you, so it must be the order turns
+                    // actually pass in. Prints the list once, then every change of
+                    // active player as an index into it (Issues.txt #17).
+                    if (view != null && view.getPlayers() != null && !view.getPlayers().isEmpty()) {
+                        if (seatOrder[0] == null) {
+                            StringBuilder sb = new StringBuilder();
+                            for (var p : view.getPlayers()) sb.append(sb.isEmpty() ? "" : ", ").append(p.getName());
+                            seatOrder[0] = sb.toString();
+                            System.out.printf("players[] order: [%s]%n", seatOrder[0]);
+                        }
+                        var act = view.getActivePlayerId();
+                        if (act != null) {
+                            int idx = -1;
+                            var ps = view.getPlayers();
+                            for (int i = 0; i < ps.size(); i++) {
+                                if (act.equals(ps.get(i).getPlayerId())) { idx = i; break; }
+                            }
+                            if (idx >= 0 && idx != lastActive[0]) {
+                                lastActive[0] = idx;
+                                turnSeq.append(turnSeq.isEmpty() ? "" : " → ").append(idx);
+                            }
+                        }
+                    }
                     if (view != null) {
                         lastUpdateHand.clear();
                         lastUpdateHand.addAll(view.getMyHand().keySet());
@@ -148,6 +175,7 @@ public final class TapAutopsyMain {
         });
         System.out.printf("%ntotal callbacks: %d, updates carrying revealed/lookedAt: %d%n",
                 ordinal[0], revealedSeen[0]);
+        System.out.printf("active-player sequence (indices into players[]): %s%n", turnSeq);
         System.out.println("views carrying revealed/lookedAt, per method (with/without):");
         windowTally.forEach((m, t) -> System.out.printf("  %-24s %d/%d%n", m, t[0], t[0] + t[1]));
     }

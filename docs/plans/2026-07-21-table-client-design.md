@@ -328,10 +328,19 @@ Everything in §7 that reads as a design decision is a consequence of this table
 - **Seats are quadrants; you are bottom-left**, and turn order runs clockwise from there — up the
   left side, across the top, down the right: displays 0 bottom-left, 1 top-left, 2 top-right, 3
   bottom-right. Your seat is fixed regardless of actual seating order in the lobby. *Shipped
-  counter-clockwise until 2026-07-30 (Issues.txt #17)*: two corner tables encode this (`world.ts`
-  `CORNER_BY_DISPLAY` places the cards, `camera.ts` `seatCorner` frames them) and both ran the
-  other way, so play appeared to move right-then-up while the compass and `1`–`4` keys ran against
-  it. They must agree; `camera.test.ts` now asserts the direction by signed area.
+  counter-clockwise until 2026-07-30 (Issues.txt #17)*, and it took **two** fixes, because the
+  seating is the composition of two independent mappings:
+  1. **Which corner a display seat occupies** — two tables encode it (`world.ts`
+     `CORNER_BY_DISPLAY` places the cards, `camera.ts` `seatCorner` frames them); both ran
+     anticlockwise. `camera.test.ts` now asserts the direction by signed polygon area.
+  2. **Which player is display seat 1** — `displaySeats` walks `GameState.players` from you.
+     **1.4.60 orders that list opposite to play**: the active player advances by *decreasing*
+     index, wrapping. Measured on three live captures (tap `5KM63T`, me at index 2, runs
+     2 → 1 → 0 → 3 → 2 …; `77W9PG` and `4BT27D` agree), via `TapAutopsyMain`'s seat-order probe.
+     Walking it forward seated the *previous* player where the next one belongs.
+
+  Fixing only the first was visible as: the `1`–`4` keys panned clockwise while turn-follow
+  crawled the other way. Both must hold for play to move clockwise on screen.
 - **The world is always four seats**, so its extent is a constant and never a function of the player
   count. Short lobbies are filled with server AI at start (`lobby.start { fillAI }`, protocol §4) and
   those seats arrive in `LobbyState.seats` and `GameState.players` indistinguishable from humans —

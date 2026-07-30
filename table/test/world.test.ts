@@ -13,10 +13,13 @@ const inRect = (p: PlacedActor, r: { x: number; y: number; w: number; h: number 
   p.placement.y >= r.y - pad && p.placement.y <= r.y + r.h + pad;
 
 describe('displaySeats', () => {
-  it('puts me at display seat 0 and keeps relative turn order clockwise', () => {
+  // 1.4.60 hands us `players` in the OPPOSITE direction to play — turns advance by
+  // decreasing index (verified on three live taps, see displaySeats) — so display
+  // order walks it backwards to put whoever plays next at display 1.
+  it('puts me at display seat 0, then the rest in turn order (players[] reversed)', () => {
     const state = fourSeats();
     const seats = displaySeats(state);
-    expect(seats.map(p => p.id)).toEqual(['p1', 'p2', 'p3', 'p4']);
+    expect(seats.map(p => p.id)).toEqual(['p1', 'p4', 'p3', 'p2']);
     expect(seats[0]!.id).toBe(state.me.playerId);
   });
 
@@ -25,10 +28,23 @@ describe('displaySeats', () => {
       [mkPlayer('p1', 'A'), mkPlayer('p2', 'B'), mkPlayer('p3', 'C'), mkPlayer('p4', 'D')],
       'p3',
     );
-    expect(displaySeats(state).map(p => p.id)).toEqual(['p3', 'p4', 'p1', 'p2']);
+    expect(displaySeats(state).map(p => p.id)).toEqual(['p3', 'p2', 'p1', 'p4']);
     expect(seatOfPlayer(state, 'p3')).toBe(0);
     expect(seatOfPlayer(state, 'p1')).toBe(2);
     expect(seatOfPlayer(state, 'nobody')).toBe(-1);
+  });
+
+  it('display 1 is the player who takes the next turn', () => {
+    // players[] descending = turn order, so from me at index 0 the next turn is
+    // players[n-1]; the seat after that is players[n-2], and so on.
+    const state = fourSeats();
+    const seats = displaySeats(state);
+    const order = state.players.map(p => p.id);
+    const meIdx = order.indexOf(state.me.playerId);
+    for (let d = 1; d < order.length; d++) {
+      const expected = order[(((meIdx - d) % order.length) + order.length) % order.length];
+      expect(seats[d]!.id).toBe(expected);
+    }
   });
 });
 
@@ -61,8 +77,10 @@ describe('layoutWorld', () => {
   it('assigns each seat to its mockup quadrant (you bottom-left, clockwise)', () => {
     const state = fourSeats();
     const placed = layoutWorld(state);
-    state.players.forEach((pl, i) => {
-      const quad = seatQuadrantRect(i);
+    // Quadrant is keyed on DISPLAY seat, which is not the players[] index — that
+    // list runs opposite to turn order (see displaySeats).
+    state.players.forEach(pl => {
+      const quad = seatQuadrantRect(seatOfPlayer(state, pl.id));
       const board = placed.filter(p => p.placement.ownerId === pl.id && p.placement.zone === 'battlefield');
       expect(board.length).toBeGreaterThan(0);
       // battlefield rows sit inside the owner's quadrant (half a card of overflow ok)
@@ -413,12 +431,12 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
   const SEAM_X = WORLD.w / 2;
   const SEAM_Y = WORLD.h / 2;
 
-  // p4 (display 3, bottom-right) attacks p1 (bottom-left): the vertical-seam lane.
-  // Turn order runs clockwise (§7.2), so the seat sharing your vertical seam is the
-  // one *before* you in turn order, not the one after.
+  // p2 (display 3, bottom-right) attacks p1 (bottom-left): the vertical-seam lane.
+  // Turn order runs clockwise (§7.2) and players[] is its reverse, so the seat
+  // sharing your vertical seam is players[1] — the LAST to play before you.
   const combatState = (blocked: boolean): { state: ReturnType<typeof fourSeats>; atkId: string; blkId: string } => {
     const state = fourSeats();
-    const atk = state.players[3]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    const atk = state.players[1]!.battlefield.find(p => p.types.includes('CREATURE'))!;
     const blk = state.players[0]!.battlefield.find(p => p.types.includes('CREATURE'))!;
     state.combat = [{
       attackerIds: [atk.id], defenderId: 'p1',
@@ -432,7 +450,7 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     const grid = byKey(layoutWorld({ ...state, combat: undefined }));
     const placed = byKey(layoutWorld(state));
     const attacker = placed.get(atkId)!;
-    // p4 sits bottom-right: its column is x > SEAM_X. The attacker crosses the line…
+    // p2 sits bottom-right: its column is x > SEAM_X. The attacker crosses the line…
     expect(attacker.placement.x).toBeLessThan(SEAM_X);
     // …centred on its own (bottom) stretch of the border, clear of the corner zone…
     expect(attacker.placement.y).toBeGreaterThan(SEAM_Y + 150);
@@ -441,7 +459,7 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     expect(attacker.placement.rotation).toBe(0);
     expect(attacker.placement.x).not.toBeCloseTo(grid.get(atkId)!.placement.x, 0);
     expect(attacker.placement.zone).toBe('battlefield');
-    expect(attacker.placement.ownerId).toBe('p4');
+    expect(attacker.placement.ownerId).toBe('p2');
   });
 
   it('a blocked attacker backs onto its own side of the border', () => {
@@ -474,16 +492,16 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     const state = fourSeats();
     const both = state.players[0]!.battlefield.filter(p => p.types.includes('CREATURE'));
     const atk = both[0]!;
-    state.combat = [{ attackerIds: [atk.id], defenderId: 'p2', blockerIds: [], blocked: false }];
+    state.combat = [{ attackerIds: [atk.id], defenderId: 'p4', blockerIds: [], blocked: false }];
     const attacker = byKey(layoutWorld(state)).get(atk.id)!;
-    // p1 (bottom-left) → p2 (display 1, top-left): crosses the horizontal seam, on
+    // p1 (bottom-left) → p4 (display 1, top-left): crosses the horizontal seam, on
     // its own column, clear of the centre corner (that belongs to the diagonal lane).
     expect(attacker.placement.y).toBeLessThan(SEAM_Y);
     expect(attacker.placement.y).toBeGreaterThan(SEAM_Y - 60);
     expect(attacker.placement.x).toBeLessThan(SEAM_X - 150);
     expect(attacker.placement.rotation).toBe(0);
     // The line-up is centred: two attackers straddle the single attacker's spot.
-    state.combat = [{ attackerIds: both.map(p => p.id), defenderId: 'p2', blockerIds: [], blocked: false }];
+    state.combat = [{ attackerIds: both.map(p => p.id), defenderId: 'p4', blockerIds: [], blocked: false }];
     const pair = byKey(layoutWorld(state));
     const xs = both.map(p => pair.get(p.id)!.placement.x);
     expect((xs[0]! + xs[1]!) / 2).toBeCloseTo(attacker.placement.x, 5);

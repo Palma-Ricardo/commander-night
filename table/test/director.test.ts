@@ -163,7 +163,7 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     const { dir } = spy();
     dir.present(game('a', 'p1'), []);      // first sighting → frame that seat (#6)
     expect(dir.cameraView()).toEqual(seatView(0));
-    dir.present(game('a', 'p2'), STEP);    // turn moves to Ana (display seat 1)
+    dir.present(game('a', 'p4'), STEP);    // turn moves to Marta — the next to play, so display seat 1
     expect(dir.cameraView()).toEqual(seatView(1));
     drain(dir);
     // The camera rides its own clock now (CAMERA_FOLLOW_MS), which outlasts the step,
@@ -202,7 +202,7 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     dir.present(game('a', 'p1'), []);      // baseline
     // An eventless advisory update settles instantly (a state cut), but a turn change
     // rides its own camera clock, so the lens still glides rather than snapping.
-    dir.present(game('a', 'p2'), []);
+    dir.present(game('a', 'p4'), []);
     expect(dir.settled).toBe(true);        // the *state* cut through with no animation…
     const first = dir.cameraPreset().scale;
     dir.tick(16);                          // …but the *camera* is mid-glide
@@ -214,7 +214,7 @@ describe('Director — camera is the director\'s (§7.3)', () => {
   it('reduced motion cuts the follow camera outright', () => {
     const { dir } = spy({ reducedMotion: true });
     dir.present(game('a', 'p1'), []);
-    dir.present(game('a', 'p2'), STEP);
+    dir.present(game('a', 'p4'), STEP);
     // no glide: the camera is already exactly at the seat framing on the same frame
     expect(dir.cameraPreset().scale).toBeCloseTo(camera(seatView(1), VP).scale, 6);
   });
@@ -226,18 +226,18 @@ describe('Director — camera is the director\'s (§7.3)', () => {
       combat: [{ attackerIds: ['atk'], defenderId: 'p3', blockerIds: [], blocked: false }],
     });
     dir.present(game('a', 'p1'), []);
-    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.present(game('a', 'p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(seatView(1));   // following the active player
-    dir.present(attacking('a', 'p2'), STEP); drain(dir);
+    dir.present(attacking('a', 'p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(TABLE_VIEW);     // attacks on the board → whole table
-    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.present(game('a', 'p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(seatView(1));    // combat cleared → back to the seat
   });
 
   it('a pending combat declaration frames the whole table before anything is declared (#7)', () => {
     const { dir } = spy();
     dir.present(game('a', 'p1'), []);
-    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.present(game('a', 'p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(seatView(1));
     // Your own declare-attackers ask: state.combat is still empty, so only the ask
     // itself can say combat is happening.
@@ -254,14 +254,14 @@ describe('Director — camera is the director\'s (§7.3)', () => {
       combat: [{ attackerIds: ['atk'], defenderId: 'p3', blockerIds: [], blocked: false }],
     });
     dir.present(game('a', 'p1'), []);
-    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.present(game('a', 'p4'), STEP); drain(dir);
     dir.setDeclaringCombat(true);
-    dir.present(attacking('p2'), STEP); drain(dir);
+    dir.present(attacking('p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(TABLE_VIEW);
     // The ask closes (you declared) but attackers now stand on the board: still table.
     dir.setDeclaringCombat(false); drain(dir);
     expect(dir.cameraView()).toEqual(TABLE_VIEW);
-    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.present(game('a', 'p4'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(seatView(1));
   });
 
