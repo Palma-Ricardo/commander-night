@@ -14,7 +14,11 @@ import java.util.UUID;
  * ask with its payload shape (message, cardsViews, targets, options, choice),
  * cross-checks GAME_TARGET target ids against the asked player's own hand and
  * against the hand of the last state-update view (the staleness probe that
- * diagnosed Issues.txt #1), and flags views carrying revealed/lookedAt.
+ * diagnosed Issues.txt #1), flags every view carrying revealed/lookedAt, prints
+ * GAME_SELECT asks whose views carry windows, and tallies window presence per
+ * callback method (the probe that sized RevealLatch: the server clears both
+ * maps after every fire, so only ~1/3 of plain updates carry an active window
+ * and ask views never do).
  *
  * <pre>
  * mvn -q test-compile org.codehaus.mojo:exec-maven-plugin:java \
@@ -32,12 +36,39 @@ public final class TapAutopsyMain {
         // Hand of the most recent *state update* callback — what the client's
         // GameState would hold when a following ask is presented.
         java.util.Set<UUID> lastUpdateHand = new java.util.HashSet<>();
+        // Per-method tally of views with/without revealed|lookedAt — the probe for
+        // the server's fire-then-clear behavior (GameImpl clearLookedAt/clearRevealed
+        // after every firePriorityEvent and fireUpdatePlayersEvent).
+        java.util.Map<String, int[]> windowTally = new java.util.TreeMap<>();
 
         GoldenFixtures.readTap(tap, cb -> {
             int n = ordinal[0]++;
             cb.decompressData();
             Object data = cb.getData();
+            GameView anyView = switch (data) {
+                case GameView v -> v;
+                case GameClientMessage m -> m.getGameView();
+                default -> null;
+            };
+            if (anyView != null) {
+                boolean has = !anyView.getRevealed().isEmpty() || !anyView.getLookedAt().isEmpty();
+                windowTally.computeIfAbsent(cb.getMethod().name(), k -> new int[2])[has ? 0 : 1]++;
+            }
             switch (cb.getMethod()) {
+                case GAME_SELECT -> {
+                    if (data instanceof GameClientMessage msg) {
+                        StringBuilder w = new StringBuilder();
+                        if (msg.getGameView() != null) {
+                            msg.getGameView().getRevealed().forEach(r -> w.append(" revealed[").append(r.getName())
+                                    .append("]=").append(r.getCards().size()));
+                            msg.getGameView().getLookedAt().forEach(l -> w.append(" lookedAt[").append(l.getName())
+                                    .append("]=").append(l.getCards().size()));
+                        }
+                        if (w.length() > 0) {
+                            System.out.printf("#%d GAME_SELECT windows:%s · msg: %s%n", n, w, clip(msg.getMessage(), 100));
+                        }
+                    }
+                }
                 case GAME_TARGET, GAME_ASK, GAME_CHOOSE_ABILITY, GAME_CHOOSE_CHOICE,
                      GAME_GET_AMOUNT, GAME_GET_MULTI_AMOUNT, GAME_CHOOSE_PILE,
                      GAME_PLAY_MANA, GAME_PLAY_XMANA -> {
@@ -103,14 +134,12 @@ public final class TapAutopsyMain {
                     }
                     if (view != null && (!view.getRevealed().isEmpty() || !view.getLookedAt().isEmpty())) {
                         revealedSeen[0]++;
-                        if (revealedSeen[0] <= 5) {
-                            StringBuilder sb = new StringBuilder();
-                            view.getRevealed().forEach(r -> sb.append(" revealed[").append(r.getName())
-                                    .append("]=").append(r.getCards().size()));
-                            view.getLookedAt().forEach(l -> sb.append(" lookedAt[").append(l.getName())
-                                    .append("]=").append(l.getCards().size()));
-                            System.out.printf("#%d %s HAS-REVEALED:%s%n", n, cb.getMethod(), sb);
-                        }
+                        StringBuilder sb = new StringBuilder();
+                        view.getRevealed().forEach(r -> sb.append(" revealed[").append(r.getName())
+                                .append("]=").append(r.getCards().size()));
+                        view.getLookedAt().forEach(l -> sb.append(" lookedAt[").append(l.getName())
+                                .append("]=").append(l.getCards().size()));
+                        System.out.printf("#%d %s HAS-REVEALED:%s%n", n, cb.getMethod(), sb);
                     }
                 }
                 default -> {
@@ -119,6 +148,8 @@ public final class TapAutopsyMain {
         });
         System.out.printf("%ntotal callbacks: %d, updates carrying revealed/lookedAt: %d%n",
                 ordinal[0], revealedSeen[0]);
+        System.out.println("views carrying revealed/lookedAt, per method (with/without):");
+        windowTally.forEach((m, t) -> System.out.printf("  %-24s %d/%d%n", m, t[0], t[0] + t[1]));
     }
 
     private static String firstName(CardView[] cards) {

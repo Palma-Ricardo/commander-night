@@ -30,6 +30,7 @@ import night.bridge.translate.EventDeriver;
 import night.bridge.translate.LogTranslator;
 import night.bridge.translate.PromptNames;
 import night.bridge.translate.PromptTranslator;
+import night.bridge.translate.RevealLatch;
 import night.bridge.translate.ViewTranslator;
 import night.bridge.xmage.SeatSession;
 import night.bridge.xmage.XmageAnswers;
@@ -106,6 +107,7 @@ public final class SeatPump implements AutoCloseable {
     private XmageAnswers answers;
     private PromptFsm fsm;
     private GameState lastState;
+    private final RevealLatch revealLatch = new RevealLatch();
     private final List<PendingLogLine> preGameLog = new ArrayList<>();
     /**
      * Log lines seen since the last state emit, buffered for the M6 event join
@@ -594,7 +596,10 @@ public final class SeatPump implements AutoCloseable {
             return;
         }
         GameState prev = lastState;
-        lastState = ViewTranslator.translate(view, gameIdStr, playerId, this::displayName);
+        // The raw view's reveal windows flicker (server clears them after every
+        // fire) — the latch stabilizes them before anything downstream looks.
+        lastState = revealLatch.apply(
+                ViewTranslator.translate(view, gameIdStr, playerId, this::displayName));
         List<GameEvent> events = EventDeriver.derive(prev, lastState, pendingLog);
         List<ServerMsg> msgs = store.update(gameIdStr, lastState, keyframesOnly.getAsBoolean(), events);
         if (!msgs.isEmpty()) {
