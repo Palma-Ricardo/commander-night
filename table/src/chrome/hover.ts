@@ -36,15 +36,39 @@ export interface HoverState {
   /** The preview panel's measured viewport rect, published by HoverPreview after
    *  layout so the scene can hold the preview open while the pointer is over it. */
   previewRect?: HoverAnchor;
+  /** Wheel zoom on the preview (Issues.txt #13), 1 = the CSS base width. Per-card:
+   *  reset by `hoverCard`, so scrolling one card big never leaves the next one
+   *  blown up. Absent = 1. */
+  zoom?: number;
 }
 
 export const hoverStore = createStore<HoverState>(() => ({}));
 
+/** Zoom bounds. The floor is the base size (the preview is already sized to be
+ *  readable); the ceiling keeps a 63×88 card inside a 1080p window. */
+export const PREVIEW_ZOOM_MIN = 1;
+export const PREVIEW_ZOOM_MAX = 2.2;
+const ZOOM_STEP = 0.12;
+
 /** Show (or replace) the hovered card. Clears any stale preview rect — the panel
- *  re-publishes it once it lays out at the new anchor. */
+ *  re-publishes it once it lays out at the new anchor — and resets the zoom. */
 export const hoverCard = (card: Card | undefined, anchor?: HoverAnchor, owner: HoverOwner = 'dom'): void => {
-  hoverStore.setState({ card, anchor, owner, previewRect: undefined });
+  hoverStore.setState({ card, anchor, owner, previewRect: undefined, zoom: PREVIEW_ZOOM_MIN });
 };
+
+/** Wheel the preview bigger (`dir` < 0, scroll up) or smaller. No-op with no
+ *  preview open. Returns true if it consumed the gesture, so the caller knows
+ *  whether to fall through to its own wheel handling. */
+export const zoomPreview = (dir: number): boolean => {
+  const s = hoverStore.getState();
+  if (s.card === undefined) return false;
+  const next = clampZoom((s.zoom ?? PREVIEW_ZOOM_MIN) - Math.sign(dir) * ZOOM_STEP);
+  if (next !== s.zoom) hoverStore.setState({ ...s, zoom: next });
+  return true;
+};
+
+const clampZoom = (z: number): number =>
+  Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, Math.round(z * 1000) / 1000));
 
 /** Hide the preview, but only if `owner` is the one showing it — so a stale grace
  *  from one source can't dismiss another source's preview. Replaces the state (not

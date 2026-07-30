@@ -17,11 +17,18 @@
 import type { Point, Size } from '../layout/types';
 import { camera, rectVisible, seatView, TABLE_VIEW, type CameraView } from './camera';
 
+/** Where the lens sits before any turn structure exists — the pre-game mulligan
+ *  window, where XMage sends no activePlayerId at all (protocol §6). Your own
+ *  seat, because a mulligan decision is about your hand: the whole table shows
+ *  four empty quadrants and tells you nothing (Issues.txt #5). Display seat 0 is
+ *  always you (`displaySeats`). */
+const PREGAME_VIEW: CameraView = seatView(0);
+
 export class CameraController {
   // The view the follow/pin policy *wants* — moved by syncActive (follow) and focus
   // (manual pin). What we render can differ from it only while a §14 pull-back holds
   // the whole table; `view()` folds the two together.
-  private intent: CameraView = TABLE_VIEW;
+  private intent: CameraView = PREGAME_VIEW;
   private following = true;
   private lastActiveSeat = -1;
   // §14: a prompt references something the intended view can't show, so we hold the
@@ -51,18 +58,19 @@ export class CameraController {
     return this.following;
   }
 
-  /** A new active player (turn change). Re-frames only while following and only on
-   *  an actual *change* from a previously-known active seat, so the initial load
-   *  stays on the whole table until play moves — the whole quadrant world reads
-   *  first, then the camera starts following (design §7.3: "re-frames on turn
-   *  change"). Seat < 0 means unknown (e.g. the pre-game mulligan window). Moves the
-   *  *intended* view even while a pull-back holds the table, so releasing the
-   *  pull-back lands on whoever is active now, not a stale seat. */
+  /** A new active player (turn change). Re-frames while following, including on the
+   *  **first** active seat we ever learn: the game opens in the mulligan window with
+   *  no turn structure at all, so that first sighting *is* the move from pre-game to
+   *  "player X is taking their turn" and the camera must follow it (Issues.txt #6 —
+   *  it used to require a previous known seat, so the opening turn was never framed
+   *  and the lens sat on the pre-game view until turn 2). Seat < 0 means unknown
+   *  (the mulligan window itself). Moves the *intended* view even while a pull-back
+   *  holds the table, so releasing the pull-back lands on whoever is active now. */
   syncActive(activeSeat: number): void {
     if (activeSeat < 0) return;
     const prev = this.lastActiveSeat;
     this.lastActiveSeat = activeSeat;
-    if (prev >= 0 && prev !== activeSeat && this.following) this.intent = seatView(activeSeat);
+    if (prev !== activeSeat && this.following) this.intent = seatView(activeSeat);
   }
 
   /** Combat entered/left the board. While following, live combat frames the whole
@@ -80,10 +88,10 @@ export class CameraController {
     this.pulledBack = false;
   }
 
-  /** Esc — resume following; snap to whoever is active, else the whole table. */
+  /** Esc — resume following; snap to whoever is active, else back to the pre-game view. */
   release(): void {
     this.following = true;
-    this.intent = this.lastActiveSeat >= 0 ? seatView(this.lastActiveSeat) : TABLE_VIEW;
+    this.intent = this.lastActiveSeat >= 0 ? seatView(this.lastActiveSeat) : PREGAME_VIEW;
     this.pulledBack = false;
   }
 

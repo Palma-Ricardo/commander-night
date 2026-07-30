@@ -109,11 +109,17 @@ export function opponentHandHalfWidth(n: number): number {
 interface Corner { left: boolean; bottom: boolean }
 
 // Display index (0 = you) → quadrant corner, per the §7.2 mockup.
+// Design §7.2: "you are bottom-left, and turn order runs clockwise from there."
+// On screen (y grows downward) clockwise from bottom-left is up the left side,
+// across the top, then down the right — NOT along the bottom first. Shipped
+// counter-clockwise until 2026-07-30 (Issues.txt #17): the seat after you sat to
+// your right on screen while the log said they followed you, so the compass and
+// the 1–4 keys ran against the direction play actually moved.
 const CORNER_BY_DISPLAY: Corner[] = [
   { left: true, bottom: true },    // 0 you        — bottom-left
-  { left: false, bottom: true },   // 1 next       — bottom-right
+  { left: true, bottom: false },   // 1 next       — top-left
   { left: false, bottom: false },  // 2 across     — top-right
-  { left: true, bottom: false },   // 3 last       — top-left
+  { left: false, bottom: true },   // 3 last       — bottom-right
 ];
 
 /** All the fixed geometry of one seat's place setting, shared by `layoutWorld`

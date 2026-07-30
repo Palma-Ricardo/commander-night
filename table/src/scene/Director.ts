@@ -67,6 +67,11 @@ const ease = (t: number): number => 1 - (1 - t) ** 3;
 
 export class Director {
   private readonly controller = new CameraController();
+  // The two independent reasons to frame the whole table for combat (§7.3): attacks
+  // standing on the board, and a declaration this seat is being asked to make. Kept
+  // apart so neither can clear the other's hold.
+  private boardCombat = false;
+  private declaringCombat = false;
   private readonly links: StackLinks = new Map();
   private viewport: Size;
   private reducedMotion: boolean;
@@ -169,7 +174,8 @@ export class Director {
   private reframe(state: GameState): void {
     const before = this.controller.view();
     this.controller.syncActive(seatOfPlayer(state, state.turn.activePlayerId));
-    this.controller.setCombat((state.combat?.length ?? 0) > 0);   // attacks on the board → whole table
+    this.boardCombat = (state.combat?.length ?? 0) > 0;   // attacks on the board
+    this.controller.setCombat(this.boardCombat || this.declaringCombat);
     const after = this.controller.view();
     if (sameView(before, after)) return;
     // The camera glides on its own clock (§7.3, CAMERA_FOLLOW_MS), decoupled from the
@@ -205,6 +211,21 @@ export class Director {
 
   cameraView(): CameraView { return this.controller.view(); }
   isFollowing(): boolean { return this.controller.isFollowing(); }
+
+  /** A combat declaration is pending for this seat (attackers or blockers). Frames
+   *  the whole table while following, exactly like declared attackers do — the
+   *  board flag alone can't cover this, because at the moment you are *choosing*
+   *  attackers nothing is declared yet and `state.combat` is still empty. Your own
+   *  combat therefore opened with the lens on your own quadrant, hiding the very
+   *  players you were picking between (Issues.txt #7). */
+  setDeclaringCombat(active: boolean): void {
+    if (active === this.declaringCombat) return;
+    this.declaringCombat = active;
+    const before = this.controller.view();
+    this.controller.setCombat(this.boardCombat || active);
+    const after = this.controller.view();
+    if (!sameView(before, after)) this.moveCameraTo(after, CAMERA_FOLLOW_MS);
+  }
 
   focusSeat(seat: number): void { this.controller.focus(seatView(seat)); this.moveCameraTo(this.controller.view(), CAMERA_MANUAL_MS); }
   showTable(): void { this.controller.focus(TABLE_VIEW); this.moveCameraTo(TABLE_VIEW, CAMERA_MANUAL_MS); }

@@ -133,13 +133,13 @@ export function safeArea(viewport: Size, rightInset = 0): Rect {
 }
 
 // Seat corner in world coords (mirrors CORNER_BY_DISPLAY in world.ts). Display 0
-// is bottom-left; 1 bottom-right; 2 top-right; 3 top-left.
+// is bottom-left; then clockwise on screen — 1 top-left, 2 top-right, 3 bottom-right.
 function seatCorner(seat: number): { left: boolean; bottom: boolean } {
   switch (((seat % 4) + 4) % 4) {
     case 0: return { left: true, bottom: true };
-    case 1: return { left: false, bottom: true };
+    case 1: return { left: true, bottom: false };
     case 2: return { left: false, bottom: false };
-    default: return { left: true, bottom: false };
+    default: return { left: false, bottom: true };
   }
 }
 

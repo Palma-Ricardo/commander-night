@@ -5,7 +5,10 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Card } from '@night/core/protocol/protocol';
-import { hoverStore, hoverCard, hideHover, setPreviewRect } from '../src/chrome/hover';
+import {
+  hoverStore, hoverCard, hideHover, setPreviewRect, zoomPreview,
+  PREVIEW_ZOOM_MIN, PREVIEW_ZOOM_MAX,
+} from '../src/chrome/hover';
 
 const card = (name: string): Card => ({
   id: name, name, set: 's', number: '1', colors: [], types: ['CREATURE'],
@@ -53,6 +56,51 @@ describe('hover store ownership', () => {
     setPreviewRect(RECT);
     const s = hoverStore.getState();
     expect(s.card?.name).toBe('Bear');
+    expect(s.previewRect).toEqual(RECT);
+  });
+});
+
+describe('preview wheel zoom (#13)', () => {
+  beforeEach(() => hoverStore.setState({}, true));
+
+  it('does not consume the wheel when no preview is open', () => {
+    expect(zoomPreview(-100)).toBe(false);
+    expect(hoverStore.getState().zoom).toBeUndefined();
+  });
+
+  it('scrolling up grows the preview, down shrinks it back', () => {
+    hoverCard(card('Bolt'), RECT, 'scene');
+    expect(hoverStore.getState().zoom).toBe(PREVIEW_ZOOM_MIN);
+    expect(zoomPreview(-100)).toBe(true);                        // wheel up
+    const grown = hoverStore.getState().zoom!;
+    expect(grown).toBeGreaterThan(PREVIEW_ZOOM_MIN);
+    expect(zoomPreview(100)).toBe(true);                         // wheel down
+    expect(hoverStore.getState().zoom).toBeCloseTo(PREVIEW_ZOOM_MIN, 6);
+  });
+
+  it('clamps at both ends rather than running away', () => {
+    hoverCard(card('Bolt'), RECT, 'scene');
+    for (let i = 0; i < 200; i++) zoomPreview(-100);
+    expect(hoverStore.getState().zoom).toBe(PREVIEW_ZOOM_MAX);
+    for (let i = 0; i < 200; i++) zoomPreview(100);
+    expect(hoverStore.getState().zoom).toBe(PREVIEW_ZOOM_MIN);
+  });
+
+  it('resets per card — the next hover is never left blown up', () => {
+    hoverCard(card('Bolt'), RECT, 'scene');
+    zoomPreview(-100); zoomPreview(-100);
+    expect(hoverStore.getState().zoom).toBeGreaterThan(PREVIEW_ZOOM_MIN);
+    hoverCard(card('Bear'), RECT, 'scene');
+    expect(hoverStore.getState().zoom).toBe(PREVIEW_ZOOM_MIN);
+  });
+
+  it('keeps the card and rect it is zooming', () => {
+    hoverCard(card('Bolt'), RECT, 'scene');
+    setPreviewRect(RECT);
+    zoomPreview(-100);
+    const s = hoverStore.getState();
+    expect(s.card?.name).toBe('Bolt');
+    expect(s.owner).toBe('scene');
     expect(s.previewRect).toEqual(RECT);
   });
 });

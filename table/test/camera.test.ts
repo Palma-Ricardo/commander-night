@@ -64,11 +64,12 @@ describe('camera framing', () => {
     const xs = [[0, 0], [WORLD.w, 0], [WORLD.w, WORLD.h], [0, WORLD.h]]
       .map(([x, y]) => worldToScreen(pt, { x: x!, y: y! }).x);
     expect(Math.min(...xs) - a.x).toBeCloseTo(a.x + a.w - Math.max(...xs), 1);
-    // A right-column seat (display 1, bottom-right) frames a compass-overhang short
-    // of the full width, so its pile column clears the HUD.
-    const p1 = camera(seatView(1), vp);
-    const outer1 = worldToScreen(p1, { x: WORLD.w, y: WORLD.h }).x;
-    expect(outer1).toBeLessThan(a.x + a.w - HUD_RIGHT_OVERHANG + 1);
+    // A right-column seat (display 3, bottom-right under the clockwise §7.2 order)
+    // frames a compass-overhang short of the full width, so its pile column clears
+    // the HUD.
+    const p3 = camera(seatView(3), vp);
+    const outer3 = worldToScreen(p3, { x: WORLD.w, y: WORLD.h }).x;
+    expect(outer3).toBeLessThan(a.x + a.w - HUD_RIGHT_OVERHANG + 1);
   });
 
   it('leaves neighbours bleeding in — a seat never fills the window', () => {
@@ -116,21 +117,64 @@ describe('projection round-trip', () => {
   });
 });
 
+describe('seat order (§7.2: you bottom-left, turn order clockwise)', () => {
+  // Two corner tables exist — CORNER_BY_DISPLAY (world.ts) places the cards, and
+  // seatCorner (camera.ts) frames them. They must agree, and both must run
+  // clockwise; they disagreed with the spec until 2026-07-30 (Issues.txt #17).
+  it('walks the quadrants clockwise on screen from bottom-left', () => {
+    const centres = [0, 1, 2, 3].map(seat => {
+      const q = seatQuadrantRect(seat);
+      return { x: q.x + q.w / 2, y: q.y + q.h / 2 };
+    });
+    const [you, next, across, last] = centres as [typeof centres[0], typeof centres[0], typeof centres[0], typeof centres[0]];
+    expect(you.x).toBeLessThan(WORLD.w / 2);        // bottom-left
+    expect(you.y).toBeGreaterThan(WORLD.h / 2);
+    expect(next.x).toBeLessThan(WORLD.w / 2);       // top-left — up the left side
+    expect(next.y).toBeLessThan(WORLD.h / 2);
+    expect(across.x).toBeGreaterThan(WORLD.w / 2);  // top-right — across the top
+    expect(across.y).toBeLessThan(WORLD.h / 2);
+    expect(last.x).toBeGreaterThan(WORLD.w / 2);    // bottom-right — down the right
+    expect(last.y).toBeGreaterThan(WORLD.h / 2);
+    // Signed (shoelace) area of the seat polygon. The y-axis points down on screen,
+    // which flips the usual convention: positive = clockwise as seen by the player.
+    const area = centres.reduce((sum, p, i) => {
+      const q = centres[(i + 1) % centres.length]!;
+      return sum + (p.x * q.y - q.x * p.y);
+    }, 0);
+    expect(area).toBeGreaterThan(0);
+  });
+
+  it('the camera frames each seat over its own quadrant', () => {
+    for (const seat of [0, 1, 2, 3]) {
+      const q = seatQuadrantRect(seat);
+      const f = seatFocusRect(seat);
+      // The focus rect starts at the seat's own outer corner and reaches past the
+      // felt centre, so the quadrant's outer corner is inside it.
+      const cx = q.x + q.w / 2;
+      const cy = q.y + q.h / 2;
+      expect(cx).toBeGreaterThanOrEqual(f.x);
+      expect(cx).toBeLessThanOrEqual(f.x + f.w);
+      expect(cy).toBeGreaterThanOrEqual(f.y);
+      expect(cy).toBeLessThanOrEqual(f.y + f.h);
+    }
+  });
+});
+
 describe('CameraController follow / override policy', () => {
-  it('starts on the whole table, following', () => {
+  it('starts on your own seat (the mulligan window has no turn structure), following', () => {
     const c = new CameraController();
-    expect(c.view()).toEqual(TABLE_VIEW);
+    expect(c.view()).toEqual(seatView(0));
     expect(c.isFollowing()).toBe(true);
   });
 
-  it('stays on the table on first sight of an active player, then follows turn changes', () => {
+  it('follows the FIRST active player it ever sees — the opening turn (#6)', () => {
     const c = new CameraController();
-    c.syncActive(0);                       // baseline — no move on initial load
-    expect(c.view()).toEqual(TABLE_VIEW);
-    c.syncActive(2);                       // a real turn change → follow
+    c.syncActive(2);                       // first sighting: mulligans done, turn 1 begins
     expect(c.view()).toEqual(seatView(2));
     c.syncActive(2);                       // same seat → no-op
     expect(c.view()).toEqual(seatView(2));
+    c.syncActive(3);                       // a later turn change → follow
+    expect(c.view()).toEqual(seatView(3));
   });
 
   it('ignores an unknown active seat (mulligan window)', () => {
@@ -212,8 +256,8 @@ describe('CameraController follow / override policy', () => {
     const vp = { w: 1920, h: 1080 };
     const c = new CameraController();
     c.syncActive(0);
-    c.syncActive(1);                       // following seat 1 (bottom-right)
-    c.keepVisible([{ x: 200, y: 200 }], vp);            // far top-left → off-screen → table
+    c.syncActive(1);                       // following seat 1 (top-left)
+    c.keepVisible([{ x: WORLD.w - 200, y: WORLD.h - 200 }], vp);   // far bottom-right → off-screen → table
     expect(c.view()).toEqual(TABLE_VIEW);
     c.syncActive(2);                       // turn advances under the pull-back
     c.keepVisible([], vp);                 // released → follows the *new* active seat

@@ -325,8 +325,13 @@ Everything in §7 that reads as a design decision is a consequence of this table
        └───────────────────────┴───────────────────────┘
 ```
 
-- **Seats are quadrants; you are bottom-left**, and turn order runs clockwise from there. Your seat
-  is fixed regardless of actual seating order in the lobby.
+- **Seats are quadrants; you are bottom-left**, and turn order runs clockwise from there — up the
+  left side, across the top, down the right: displays 0 bottom-left, 1 top-left, 2 top-right, 3
+  bottom-right. Your seat is fixed regardless of actual seating order in the lobby. *Shipped
+  counter-clockwise until 2026-07-30 (Issues.txt #17)*: two corner tables encode this (`world.ts`
+  `CORNER_BY_DISPLAY` places the cards, `camera.ts` `seatCorner` frames them) and both ran the
+  other way, so play appeared to move right-then-up while the compass and `1`–`4` keys ran against
+  it. They must agree; `camera.test.ts` now asserts the direction by signed area.
 - **The world is always four seats**, so its extent is a constant and never a function of the player
   count. Short lobbies are filled with server AI at start (`lobby.start { fillAI }`, protocol §4) and
   those seats arrive in `LobbyState.seats` and `GameState.players` indistinguishable from humans —
@@ -363,7 +368,19 @@ interface CameraPreset { x: number; y: number; scale: number; tilt: number }
 One transform on the world container. Discrete presets only — the whole table, plus one per seat.
 There is no free pan or zoom: the user's problem is "show me that player", not navigation.
 
-- **It follows the active player by default**, and re-frames on turn change.
+- **It follows the active player by default**, and re-frames on turn change — including the
+  **first** active player it ever sees. *Amended 2026-07-30 (Issues.txt #5/#6):* before the first
+  turn there is no active player at all (XMage sends no turn structure during the mulligan window,
+  protocol §6), and the original policy also skipped the first sighting so the whole quadrant world
+  would read on load. Together those left the lens on the whole table through mulligans **and** the
+  entire opening turn. The pre-game view is now **your own seat** — a mulligan is a decision about
+  your hand, and four empty quadrants tell you nothing — and the first active player is followed
+  like any other turn change.
+- **A combat declaration frames the whole table**, not just declared attackers. *Added 2026-07-30
+  (Issues.txt #7):* declared attackers standing on the board already pulled back, but at the moment
+  you are *choosing* attackers nothing is declared and `state.combat` is empty, so your own combat
+  opened with the lens on your own quadrant — hiding the players you were picking between. The ask
+  itself now holds the table, and the two holds (board, declaration) are independent.
 - **Manual override**: click a quadrant, use the compass, or press `1`–`4`. The badge switches from
   *Following* to *Viewing* and auto-follow stops until released with `Esc`. An override is sticky —
   the camera never yanks itself away from something you chose to look at. **One exception, and only

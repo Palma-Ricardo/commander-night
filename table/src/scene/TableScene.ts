@@ -213,6 +213,10 @@ export class TableScene implements DirectorSink {
   /** Reads the hover preview panel's current on-screen rect (chrome-owned), so the
    *  scene can hold the preview open while the pointer is over the panel itself. */
   getPreviewRect?: () => ScreenAnchor | undefined;
+  /** Wheel-zoom the open hover preview (#13); returns whether it consumed the
+   *  gesture (false = no preview open, so the wheel falls through to the carousel
+   *  pager). Chrome-owned like the rest of the preview. */
+  onZoomPreview?: (delta: number) => boolean;
   /** Raised when the felt (an empty quadrant / a nameplate) is clicked — a manual
    *  camera focus (§7.3). */
   onFocusSeat?: (display: number) => void;
@@ -981,6 +985,11 @@ export class TableScene implements DirectorSink {
     // model re-derives on prompt-store changes too — it is spec-cheap (a few
     // dozen shapes/labels); the projection was per-frame all along.
     if (this.director?.presented !== undefined) this.drawFurniture(this.director.presented);
+    // A combat declaration frames the whole table while it is open (#7) — the board
+    // has nothing declared yet, so only the ask itself can say combat is happening.
+    const pendingAsk = prompt?.pending;
+    this.director.setDeclaringCombat(
+      pendingAsk?.kind === 'priority' && pendingAsk.combat !== undefined);
     if (changed) {
       if (prompt?.pending !== undefined) this.director.flush();   // §6.4: input never waits on animation
       this.syncCameraFocus(this.director.presented);   // §14: pull back for off-screen refs, restore when clear
@@ -1096,8 +1105,24 @@ export class TableScene implements DirectorSink {
     return actor;
   }
 
-  /** Wheel over the canvas pages the open carousel (§4.4); closed, it is inert. */
+  /** Wheel over the canvas pages the open carousel (§4.4), or zooms the hover
+   *  preview (#13).
+   *
+   *  Precedence, in order: the pointer sitting *on* the preview always zooms it —
+   *  you are pointing at the thing you want bigger. Otherwise an open carousel
+   *  keeps the wheel as its pager (hovering its cards pops previews constantly, so
+   *  zoom-wins would leave it unpageable). With the carousel closed — the felt —
+   *  an open preview zooms. */
   private handleWheel(e: WheelEvent): void {
+    const rect = this.getPreviewRect?.();
+    const onPreview = rect !== undefined
+      && e.clientX >= rect.left && e.clientX <= rect.left + rect.width
+      && e.clientY >= rect.top && e.clientY <= rect.top + rect.height;
+    if ((onPreview || this.carouselKey === undefined)
+      && this.onZoomPreview?.(e.deltaY !== 0 ? e.deltaY : e.deltaX) === true) {
+      e.preventDefault();
+      return;
+    }
     if (this.carouselKey === undefined) return;
     const state = this.latestState ?? this.director?.presented;
     const ui = carouselStore.getState();

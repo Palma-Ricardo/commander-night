@@ -413,10 +413,12 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
   const SEAM_X = WORLD.w / 2;
   const SEAM_Y = WORLD.h / 2;
 
-  // p2 (bottom-right) attacks p1 (bottom-left): the vertical-seam lane.
+  // p4 (display 3, bottom-right) attacks p1 (bottom-left): the vertical-seam lane.
+  // Turn order runs clockwise (§7.2), so the seat sharing your vertical seam is the
+  // one *before* you in turn order, not the one after.
   const combatState = (blocked: boolean): { state: ReturnType<typeof fourSeats>; atkId: string; blkId: string } => {
     const state = fourSeats();
-    const atk = state.players[1]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    const atk = state.players[3]!.battlefield.find(p => p.types.includes('CREATURE'))!;
     const blk = state.players[0]!.battlefield.find(p => p.types.includes('CREATURE'))!;
     state.combat = [{
       attackerIds: [atk.id], defenderId: 'p1',
@@ -430,7 +432,7 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     const grid = byKey(layoutWorld({ ...state, combat: undefined }));
     const placed = byKey(layoutWorld(state));
     const attacker = placed.get(atkId)!;
-    // p2 sits bottom-right: its column is x > SEAM_X. The attacker crosses the line…
+    // p4 sits bottom-right: its column is x > SEAM_X. The attacker crosses the line…
     expect(attacker.placement.x).toBeLessThan(SEAM_X);
     // …centred on its own (bottom) stretch of the border, clear of the corner zone…
     expect(attacker.placement.y).toBeGreaterThan(SEAM_Y + 150);
@@ -439,7 +441,7 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     expect(attacker.placement.rotation).toBe(0);
     expect(attacker.placement.x).not.toBeCloseTo(grid.get(atkId)!.placement.x, 0);
     expect(attacker.placement.zone).toBe('battlefield');
-    expect(attacker.placement.ownerId).toBe('p2');
+    expect(attacker.placement.ownerId).toBe('p4');
   });
 
   it('a blocked attacker backs onto its own side of the border', () => {
@@ -472,16 +474,16 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     const state = fourSeats();
     const both = state.players[0]!.battlefield.filter(p => p.types.includes('CREATURE'));
     const atk = both[0]!;
-    state.combat = [{ attackerIds: [atk.id], defenderId: 'p4', blockerIds: [], blocked: false }];
+    state.combat = [{ attackerIds: [atk.id], defenderId: 'p2', blockerIds: [], blocked: false }];
     const attacker = byKey(layoutWorld(state)).get(atk.id)!;
-    // p1 (bottom-left) → p4 (top-left): crosses the horizontal seam, on its own
-    // column, clear of the centre corner (that zone belongs to the diagonal lane).
+    // p1 (bottom-left) → p2 (display 1, top-left): crosses the horizontal seam, on
+    // its own column, clear of the centre corner (that belongs to the diagonal lane).
     expect(attacker.placement.y).toBeLessThan(SEAM_Y);
     expect(attacker.placement.y).toBeGreaterThan(SEAM_Y - 60);
     expect(attacker.placement.x).toBeLessThan(SEAM_X - 150);
     expect(attacker.placement.rotation).toBe(0);
     // The line-up is centred: two attackers straddle the single attacker's spot.
-    state.combat = [{ attackerIds: both.map(p => p.id), defenderId: 'p4', blockerIds: [], blocked: false }];
+    state.combat = [{ attackerIds: both.map(p => p.id), defenderId: 'p2', blockerIds: [], blocked: false }];
     const pair = byKey(layoutWorld(state));
     const xs = both.map(p => pair.get(p.id)!.placement.x);
     expect((xs[0]! + xs[1]!) / 2).toBeCloseTo(attacker.placement.x, 5);

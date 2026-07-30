@@ -22,6 +22,7 @@ import { TextFrame } from './CardView';
 export function HoverPreview() {
   const card = useStore(hoverStore, s => s.card);
   const anchor = useStore(hoverStore, s => s.anchor);
+  const zoom = useStore(hoverStore, s => s.zoom ?? 1);
   const image = useStore(appScryfall.store, s => (card !== undefined ? s.images[appScryfall.keyOf(card)] : undefined));
   const ref = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<CSSProperties>({});
@@ -39,6 +40,9 @@ export function HoverPreview() {
       { width: window.innerWidth, height: window.innerHeight },
     );
     setStyle({ left: `${left}px`, top: `${top}px`, bottom: 'auto' });
+    // NB: the zoom rides a CSS custom property on the element (below), not this
+    // style object — re-running layout is what re-anchors the grown box, and it is
+    // in this effect's deps so a wheel step repositions as well as resizes.
     // Publish the laid-out rect so the scene can hold the preview open while the
     // pointer is over it (its own dismissal authority, hover.ts). getBoundingClientRect
     // still reads the pre-position box, so report the placement we just computed.
@@ -50,7 +54,7 @@ export function HoverPreview() {
     const dismiss = () => hoverCard(undefined);
     window.addEventListener('resize', dismiss);
     return () => window.removeEventListener('resize', dismiss);
-  }, [anchor, card, image?.status]);
+  }, [anchor, card, image?.status, zoom]);
 
   // Clear the published rect when the preview goes away, so a stale rect can never
   // keep the scene thinking the pointer is "over the preview".
@@ -62,7 +66,12 @@ export function HoverPreview() {
     // Fully click-through (pointer-events: none, styles.css): the canvas keeps
     // receiving pointermove under it so the scene's hover authority stays accurate,
     // and a board click is never swallowed by the panel.
-    <div className="hover-preview" ref={ref} style={style}>
+    <div
+      className="hover-preview"
+      ref={ref}
+      style={{ ...style, '--preview-zoom': zoom } as CSSProperties}
+      data-zoomed={zoom > 1 ? '1' : undefined}
+    >
       {image?.status === 'ok'
         ? <img src={image.url} alt={card.name} />
         : <TextFrame card={card} size="preview" />}

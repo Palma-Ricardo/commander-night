@@ -579,7 +579,10 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 
 .hover-preview {
   position: fixed; left: 0.8rem; bottom: 0.8rem; z-index: 200;
-  width: clamp(16rem, calc(var(--card-unit) * 2.6), 26rem);
+  /* --preview-zoom (default 1) is the wheel zoom (#13), set inline by HoverPreview.
+     Scaling the *width* rather than transform:scale keeps the box a real laid-out
+     rect, so the anchoring geometry and the published rect stay honest. */
+  width: calc(clamp(16rem, calc(var(--card-unit) * 2.6), 26rem) * var(--preview-zoom, 1));
   display: flex; flex-direction: column; gap: 0.4rem;
 }
 .hover-preview img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 10px; box-shadow: 0 8px 30px #000d; }

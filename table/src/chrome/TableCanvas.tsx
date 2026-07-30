@@ -18,7 +18,7 @@ import { findObject } from '@night/core/state/selectors';
 import { TableScene } from '../scene/TableScene';
 import { toggleBrowse } from '../scene/carousel-store';
 import { objectClick } from './interact';
-import { hoverCard, hideHover, hoverStore } from './hover';
+import { hoverCard, hideHover, hoverStore, zoomPreview } from './hover';
 import { setCameraHud } from './camera-store';
 
 export function TableCanvas(): React.JSX.Element {
@@ -60,6 +60,7 @@ export function TableCanvas(): React.JSX.Element {
       // The scene reads the preview's laid-out rect to hold it open while the
       // pointer is over the panel itself (published by HoverPreview).
       scene.getPreviewRect = () => hoverStore.getState().previewRect;
+      scene.onZoomPreview = delta => zoomPreview(delta);   // wheel zooms the preview (#13)
 
       // The camera lives in the scene/director; mirror its view + follow-state
       // into a store so the compass minimap + override badge track it (§7.3).

@@ -159,10 +159,10 @@ describe('Director — catch-up under a burst (§6.3)', () => {
 });
 
 describe('Director — camera is the director\'s (§7.3)', () => {
-  it('stays on the whole table on first sight, then follows the active player', () => {
+  it('frames the opening active player, then follows turn changes', () => {
     const { dir } = spy();
-    dir.present(game('a', 'p1'), []);      // baseline — no move on load
-    expect(dir.cameraView()).toEqual(TABLE_VIEW);
+    dir.present(game('a', 'p1'), []);      // first sighting → frame that seat (#6)
+    expect(dir.cameraView()).toEqual(seatView(0));
     dir.present(game('a', 'p2'), STEP);    // turn moves to Ana (display seat 1)
     expect(dir.cameraView()).toEqual(seatView(1));
     drain(dir);
@@ -232,6 +232,37 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     expect(dir.cameraView()).toEqual(TABLE_VIEW);     // attacks on the board → whole table
     dir.present(game('a', 'p2'), STEP); drain(dir);
     expect(dir.cameraView()).toEqual(seatView(1));    // combat cleared → back to the seat
+  });
+
+  it('a pending combat declaration frames the whole table before anything is declared (#7)', () => {
+    const { dir } = spy();
+    dir.present(game('a', 'p1'), []);
+    dir.present(game('a', 'p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(seatView(1));
+    // Your own declare-attackers ask: state.combat is still empty, so only the ask
+    // itself can say combat is happening.
+    dir.setDeclaringCombat(true); drain(dir);
+    expect(dir.cameraView()).toEqual(TABLE_VIEW);
+    dir.setDeclaringCombat(false); drain(dir);
+    expect(dir.cameraView()).toEqual(seatView(1));
+  });
+
+  it('the board and the declaration hold the table independently (#7)', () => {
+    const { dir } = spy();
+    const attacking = (active: string): GameState => ({
+      ...game('a', active),
+      combat: [{ attackerIds: ['atk'], defenderId: 'p3', blockerIds: [], blocked: false }],
+    });
+    dir.present(game('a', 'p1'), []);
+    dir.present(game('a', 'p2'), STEP); drain(dir);
+    dir.setDeclaringCombat(true);
+    dir.present(attacking('p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(TABLE_VIEW);
+    // The ask closes (you declared) but attackers now stand on the board: still table.
+    dir.setDeclaringCombat(false); drain(dir);
+    expect(dir.cameraView()).toEqual(TABLE_VIEW);
+    dir.present(game('a', 'p2'), STEP); drain(dir);
+    expect(dir.cameraView()).toEqual(seatView(1));
   });
 
   it('a manual camera move interpolates rather than cutting', () => {

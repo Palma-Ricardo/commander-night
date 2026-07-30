@@ -152,9 +152,9 @@ function ManaPool() {
 }
 
 // The compass 2×2 mirrors the table's quadrants (world.ts CORNER_BY_DISPLAY):
-// display 0 = you bottom-left, 1 bottom-right, 2 top-right, 3 top-left. Read in
-// grid order [TL, TR, BL, BR] that is displays [3, 2, 0, 1].
-const COMPASS_CELLS = [3, 2, 0, 1] as const;
+// display 0 = you bottom-left, 1 top-left, 2 top-right, 3 bottom-right — turn
+// order clockwise (§7.2). Read in grid order [TL, TR, BL, BR] that is [1, 2, 0, 3].
+const COMPASS_CELLS = [1, 2, 0, 3] as const;
 
 /** Camera compass (§7.3): a live 2×2 minimap of the table. Each cell is a seat
  *  with its life; the active player lights brass (`data-turn`), the seat the lens
