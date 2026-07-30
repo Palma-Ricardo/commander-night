@@ -18,6 +18,8 @@ import { layoutWorld } from '../layout/world';
 import { layoutScreen } from '../layout/screen';
 import type { Size } from '../layout/types';
 
+const EMPTY_SPREAD: ReadonlySet<string> = new Set();
+
 /** ephemeral stack id → stable card/source id (§3). */
 export type StackLinks = Map<string, string>;
 
@@ -58,13 +60,16 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
  *  source stays put — the scene flies an ephemeral ghost toward the stack instead. */
 export function layoutKeyed(
   state: GameState, viewport: Size, links: StackLinks, rightInset = 0, spreadStack = false,
-  handPage = 0,
+  handPage = 0, spreadBoard: ReadonlySet<string> = EMPTY_SPREAD,
 ): Map<string, PlacedActor> {
   // World felt + the screen-space layer (hand + stack). The stack now lives in the
   // screen layer, so adoption must span both: a cast lifts a hand actor (screen)
   // onto the stack (screen), and unifying it onto the stable card id keeps it one
   // continuous actor across the fan → pile → resolve chain.
-  const all = [...layoutWorld(state), ...layoutScreen(state, viewport, rightInset, spreadStack, handPage)];
+  const all = [
+    ...layoutWorld(state, spreadBoard),
+    ...layoutScreen(state, viewport, rightInset, spreadStack, handPage),
+  ];
   const offStack = new Set<string>();
   for (const p of all) {
     if (p.placement.zone !== 'stack' && p.objectId !== undefined) offStack.add(p.objectId);

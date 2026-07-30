@@ -273,13 +273,19 @@ function stackKey(p: Permanent): string | undefined {
   ].join('|');
 }
 
+const EMPTY_SPREAD: ReadonlySet<Id> = new Set();
+
 /** Fold a row of permanents into cells, preserving first-seen order: each key's
- *  cell takes the slot where it first appears, later duplicates pile onto it. */
-function groupCells(perms: readonly Permanent[]): Permanent[][] {
+ *  cell takes the slot where it first appears, later duplicates pile onto it.
+ *  Ids in `spread` refuse to fold: during a multi-target ask the members of a
+ *  pile must be individually clickable — folded, only the top card can ever be
+ *  picked, so "destroy up to three artifacts" dead-ends past one treasure
+ *  (Issues.txt #24). The cells tween apart and back as ordinary layout moves. */
+function groupCells(perms: readonly Permanent[], spread: ReadonlySet<Id>): Permanent[][] {
   const cells: Permanent[][] = [];
   const byKey = new Map<string, Permanent[]>();
   for (const p of perms) {
-    const key = stackKey(p);
+    const key = spread.has(p.id) ? undefined : stackKey(p);
     if (key === undefined) { cells.push([p]); continue; }
     const cell = byKey.get(key);
     if (cell === undefined) { const fresh = [p]; byKey.set(key, fresh); cells.push(fresh); }
@@ -449,7 +455,10 @@ function inLandRow(p: Permanent): boolean {
   return p.types.includes('LAND') && !p.types.includes('CREATURE');
 }
 
-function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachIndex, out: PlacedActor[]): void {
+function layoutBoard(
+  seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachIndex,
+  spread: ReadonlySet<Id>, out: PlacedActor[],
+): void {
   // The place setting (§7.2): non-land permanents (plus animated lands, see
   // `inLandRow`) are rows pinned to the seam and grow toward the rail; lands are
   // their own row pinned to the rail and grow back toward the seam. Both fold
@@ -461,8 +470,8 @@ function layoutBoard(seat: SeatLayout, inCombat: ReadonlySet<Id>, att: AttachInd
   // Curses enchanting this seat sit in front of the cursed player, like paper —
   // their caster's grid withheld them via `nested` (#26).
   const cursed = att.onPlayer.get(seat.player.id) ?? [];
-  const nonlands = groupCells([...bf.filter(p => !inLandRow(p)), ...cursed]);
-  const lands = groupCells(bf.filter(inLandRow));
+  const nonlands = groupCells([...bf.filter(p => !inLandRow(p)), ...cursed], spread);
+  const lands = groupCells(bf.filter(inLandRow), spread);
   placeCells(seat, nonlands, seat.boardTopY, seat.out, att, out);
   placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, att, out);
 }
@@ -694,7 +703,7 @@ function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
  *  The stack is *not* here: it moved to the screen-space layer (`layoutScreen`, a
  *  right-edge pile) so it never hides behind the felt's perspective and shares a
  *  layer with the hand for the cast animation (T4). */
-export function layoutWorld(state: GameState): PlacedActor[] {
+export function layoutWorld(state: GameState, spread: ReadonlySet<Id> = EMPTY_SPREAD): PlacedActor[] {
   const out: PlacedActor[] = [];
   const me = state.me.playerId;
   const seats = seatLayouts(state);
@@ -706,7 +715,7 @@ export function layoutWorld(state: GameState): PlacedActor[] {
   const inCombat = layoutCombat(state, seats, att, combatants);
 
   for (const seat of seats) {
-    layoutBoard(seat, inCombat, att, out);
+    layoutBoard(seat, inCombat, att, spread, out);
     layoutLibrary(seat, out);
     layoutPile(seat, 'graveyard', seat.player.graveyard, out);
     layoutPile(seat, 'exile', seat.player.exile, out);

@@ -192,6 +192,8 @@ export class TableScene implements DirectorSink {
   /** True while the pending prompt targets a stack item (counter/copy/redirect):
    *  the pile un-fans into a clickable row so buried candidates are reachable (§7 T4). */
   private spreadStack = false;
+  // Candidate ids un-folded from board piles while a multi-target ask runs (#24).
+  private spreadBoard: ReadonlySet<Id> = new Set();
   /** px the open log sidebar steals from the right (§8): the world is framed clear
    *  of it by the camera's own inset, and the hand fan re-centres in the felt that
    *  is left. Kept here so every layout (transition + recentre) uses one value. */
@@ -337,7 +339,8 @@ export class TableScene implements DirectorSink {
     links: StackLinks,
   ): void {
     const size = this.size;
-    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack, this.handPageNow(to));
+    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack, this.handPageNow(to),
+      this.spreadBoard);
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
@@ -973,6 +976,7 @@ export class TableScene implements DirectorSink {
     this.refreshAffordances();
     this.syncCarousel();              // §4.4 prompt mode opens/closes with its ask
     this.updateStackSpread();         // un-fan the pile when a prompt targets a stack item
+    this.updateBoardSpread();         // un-fold candidate piles during a multi-target ask (#24)
     // Nameplates carry prompt state now (§5.2 candidate ring), so the furniture
     // model re-derives on prompt-store changes too — it is spec-cheap (a few
     // dozen shapes/labels); the projection was per-frame all along.
@@ -1321,7 +1325,7 @@ export class TableScene implements DirectorSink {
     const state = this.director.presented;
     if (state === undefined) return;
     const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
-      this.handPageNow(state));
+      this.handPageNow(state), this.spreadBoard);
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
@@ -1475,7 +1479,7 @@ export class TableScene implements DirectorSink {
     const state = this.director?.presented;
     if (state === undefined) return;
     const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
-      this.handPageNow(state));
+      this.handPageNow(state), this.spreadBoard);
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
@@ -1501,6 +1505,23 @@ export class TableScene implements DirectorSink {
       }
     }
     return false;
+  }
+
+  /** During a multi-target ask, candidate ids refuse to fold into board piles —
+   *  folded, only the top of a treasure stack could ever be picked (#24). The
+   *  members tween apart into their own grid cells and fold back when the ask
+   *  clears; a single-target pick keeps its piles (fold members are fungible by
+   *  construction — `stackKey` only merges identical state). */
+  private updateBoardSpread(): void {
+    const p = this.currentPrompt?.pending;
+    const want: ReadonlySet<Id> = p?.kind === 'chooseTargets' && p.max > 1
+      ? new Set(p.candidates) : new Set<Id>();
+    if (want.size === this.spreadBoard.size && [...want].every(id => this.spreadBoard.has(id))) return;
+    this.spreadBoard = want;
+    const presented = this.director?.presented;
+    if (presented !== undefined) {
+      this.applyTransition(presented, presented, [], HAND_RECENTRE_MS, this.stackLinks);
+    }
   }
 
   /** Re-lay at the live viewport (window resize): world layout is viewport-free,

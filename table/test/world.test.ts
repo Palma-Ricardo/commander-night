@@ -106,6 +106,27 @@ describe('layoutWorld', () => {
     expect(face[0]!.placement.y).toBeLessThan(minBackY);
   });
 
+  it('spread ids refuse to fold, so pile members become individually clickable (#24)', () => {
+    const treasures = Array.from({ length: 4 }, () =>
+      mkPerm('p1', mkCard('Treasure', ['ARTIFACT'], { token: true })));
+    const you = mkPlayer('p1', 'You', { human: true, battlefield: treasures });
+    const state = mkState([you], 'p1');
+
+    // folded by default: all four share one cell (co-located, ~2px steps)
+    const folded = layoutWorld(state).filter(p => treasures.some(t => t.id === p.objectId));
+    expect(folded.length).toBe(4);
+    const xs = new Set(folded.map(p => Math.round(p.placement.x / 10)));
+    expect(xs.size).toBe(1);
+
+    // spread: each takes its own grid cell
+    const spread = layoutWorld(state, new Set(treasures.map(t => t.id)))
+      .filter(p => treasures.some(t => t.id === p.objectId));
+    expect(spread.length).toBe(4);
+    const spreadXs = new Set(spread.map(p => Math.round(p.placement.x / 10)));
+    expect(spreadXs.size).toBeGreaterThan(1);
+    expect(spread.every(p => p.placement.count === undefined)).toBe(true);   // no ×N tally
+  });
+
   it('a curse sits in front of the cursed player, not its caster (#26)', () => {
     const caster = mkPlayer('p1', 'Caster', { human: true });
     const victim = mkPlayer('p2', 'Victim', {});
