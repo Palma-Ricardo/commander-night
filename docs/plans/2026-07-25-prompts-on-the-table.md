@@ -416,7 +416,11 @@ the gap); release above the **cast threshold** → the same `{object}` answer as
 release below → the card slides home, no-op. Threshold: fraction of viewport height measured
 from the bottom, default **0.33**, a named constant in one constants module (Ricardo expects to
 tune toward 0.25 by feel; a rebuild per adjustment is fine — no settings exposure yet,
-decided 2026-07-25). Click-without-drag keeps working unchanged. Multi-action cards still get the
+decided 2026-07-25). ~~Click-without-drag keeps working unchanged.~~ **Amended 2026-07-29
+(Issues.txt #10, the T6 night):** a bare tap on a hand card no longer casts — with the T10
+auto-mana solver paying the instant the ask lands, a stray click was a *finished* cast with no
+cancel window; the drag past the threshold is the one cast trigger. Taps keep every other hand
+meaning (a discard pick's target, a payMana source). Multi-action cards still get the
 server's follow-up `chooseAbility`, which now renders anchored to the card (§5.4) — the drag
 flows directly into the choice. Mana-only cards (`manaOnly` affordance) neither lift nor cast,
 as today.

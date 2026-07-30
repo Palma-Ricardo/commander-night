@@ -1010,6 +1010,16 @@ export class TableScene implements DirectorSink {
       this.onPileOpen?.(actor.placement.ownerId, zone);
       return;
     }
+    // A bare tap on a hand card never casts (Issues.txt #10, amends the T7
+    // "click-without-drag keeps working" decision): with auto-mana paying the
+    // instant the ask lands, a stray click was a finished cast — no cancel
+    // window ever existed. Casting is the deliberate gesture (drag past
+    // CAST_THRESHOLD, §9); a tap still answers everything else a hand card can
+    // be — a discard pick's target, a payMana source.
+    if (zone === 'hand' && actor.space === 'screen' && this.currentPrompt !== undefined
+      && affordanceFor(this.currentPrompt, actor.objectId)?.kind === 'action') {
+      return;
+    }
     this.onObjectClick?.(actor.objectId);
   }
 
