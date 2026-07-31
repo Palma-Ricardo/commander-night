@@ -8,23 +8,36 @@
 import { useStore } from 'zustand';
 import { appStores } from '../app';
 import {
-  carouselBarBottom, carouselContent, carouselPageCount, type CarouselContent,
+  CAROUSEL_FILTER_MIN, carouselBarBottom, carouselContent, type CarouselContent,
 } from '../layout/carousel';
-import { carouselStore, closeBrowse, pageFor, setFilter, turnPage } from '../scene/carousel-store';
+import { carouselStore, closeBrowse, filterFor, setFilter, setOffset } from '../scene/carousel-store';
 
 export function CarouselBar() {
   const prompt = useStore(appStores.prompt);
   const state = useStore(appStores.game, s => s.state);
   const ui = useStore(carouselStore);
-  const content = carouselContent(prompt, state, ui.browse, ui.filter);
+  const content = carouselContent(prompt, state, ui.browse, ui.filter, ui.viewKey);
   if (content === undefined) return null;
-  return <Bar content={content} filter={ui.filter} />;
+  return <Bar content={content} filter={filterFor(content.key)}
+    offset={ui.viewKey === content.key ? ui.offset : 0} maxOffset={ui.maxOffset} />;
 }
 
-function Bar({ content, filter }: { content: CarouselContent; filter: string }) {
-  const pageCount = carouselPageCount(content.entries.length);
-  const page = Math.min(pageFor(content.key), pageCount - 1);
+interface BarProps {
+  content: CarouselContent;
+  filter: string;
+  offset: number;
+  /** Measured by the scene's last layout — 0 while the strip fits, which is
+   *  exactly when there is nothing to seek and the slider stays away. */
+  maxOffset: number;
+}
+
+function Bar({ content, filter, offset, maxOffset }: BarProps) {
   const browse = content.mode === 'browse';
+  // Browse has always had a filter; the other modes earn one once the set is too
+  // long to read at a glance — which is the whole of Issues.txt #14, a library
+  // search handing you 99 cards with no way to find one (see CAROUSEL_FILTER_MIN).
+  const filterable = browse || content.total > CAROUSEL_FILTER_MIN;
+  const filtered = filter.trim() !== '';
   const bottom = typeof window !== 'undefined'
     ? carouselBarBottom({ w: window.innerWidth, h: window.innerHeight })
     : 320;
@@ -32,24 +45,33 @@ function Bar({ content, filter }: { content: CarouselContent; filter: string }) 
   return (
     <div className="carousel-bar" data-carousel={content.mode} style={{ bottom }}>
       <span className="carousel-title">{content.title}</span>
-      {browse && (
+      {filterable && (
         <input
           className="pile-filter"
           type="search"
           placeholder="filter…"
           value={filter}
-          onChange={e => setFilter(e.target.value)}
+          onChange={e => setFilter(content.key, e.target.value)}
         />
       )}
-      {content.entries.length === 0 && <span className="muted">{browse && filter !== '' ? 'no match' : 'empty'}</span>}
-      {pageCount > 1 && (
-        <span className="carousel-pager">
-          <button data-car="prev" disabled={page <= 0}
-            onClick={() => turnPage(content.key, -1, pageCount)}>◀</button>
-          <span>{page + 1}/{pageCount}</span>
-          <button data-car="next" disabled={page >= pageCount - 1}
-            onClick={() => turnPage(content.key, 1, pageCount)}>▶</button>
-        </span>
+      {content.entries.length === 0 && <span className="muted">{filtered ? 'no match' : 'empty'}</span>}
+      {filtered && content.entries.length > 0 && (
+        <span className="carousel-count">{content.entries.length} of {content.total}</span>
+      )}
+      {/* One continuous seek, not page buttons (#8) — the wheel and ←/→ push the
+          same offset, so the thumb is always where the strip is. */}
+      {maxOffset > 0 && (
+        <input
+          className="carousel-seek"
+          data-car="seek"
+          type="range"
+          min={0}
+          max={maxOffset}
+          step={1}
+          value={Math.min(offset, maxOffset)}
+          aria-label="scroll"
+          onChange={e => setOffset(content.key, Number(e.target.value), maxOffset)}
+        />
       )}
       {browse && <button className="carousel-close" data-car="close" onClick={closeBrowse}>✕</button>}
     </div>

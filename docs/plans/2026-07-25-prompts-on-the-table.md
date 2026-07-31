@@ -45,7 +45,7 @@ The classic client is untouched — it keeps its dock and stays at `/classic`.
 | Confirmation home | **Corner cluster**, bottom-right: one contextual primary (Yes / Done / OK) + secondary (No / Decline / Cancel) + an always-visible Pass | `{confirm,true}` is the same wire shape for confirm-Yes, combat-Done and incremental-Done — one button can be all of them, labeled by prompt kind |
 | Targeting | **Pointer-to-target**: press on the subject, drag, release on the target | Merges two clicks into one gesture; reads like pointing at the table |
 | Round-trip-spanning gestures | **Pending-intent buffer** (§4.3): the gesture records what the player meant; wire prompts consume the intent as they arrive | The protocol is one toggle per round trip (§8: combat rejects `{objects}`); the gesture must not know or care how many prompts implement it |
-| Off-board cards | **Carousel browser** (§4.4): a hand-like fan, paged, no vertical scroll | Replaces every modal card grid *and* finally gives the table client pile browsing (the `browsable` CardGrid has been dead code since T3) |
+| Off-board cards | **Carousel browser** (§4.4): a flat strip, scrolled continuously, no vertical scroll (*was* "a hand-like fan, paged" — amended 2026-07-30, #8) | Replaces every modal card grid *and* finally gives the table client pile browsing (the `browsable` CardGrid has been dead code since T3) |
 | Auto-mana | **A client-side solver answers residual `payMana` asks** (§6); toggle off = today's manual source clicking | XMage's server auto-payment already eats the unambiguous cases; what surfaces is the residue, and most of the residue is still solvable |
 | Prompt message | **One `InstructionLine`, top-center under the ribbon**, always showing `p.message` | The dock is currently the only place the message renders, and for several kinds the message *is* the meaning ("Select a nonland card from Miguel's graveyard") |
 | Modals generally | **Zero backdrop-modals remain.** Concede becomes a corner pop-panel (same type-to-confirm); fatal becomes a full screen like the takeover screen | "No modals" includes the two non-prompt ones |
@@ -113,15 +113,50 @@ promptId capture, applied one prompt into the future.
 
 ### 4.4 The carousel browser
 
-A hand-like fan of card fronts in screen space, center-bottom, above the hand: pages of ~8-10
-with left/right paging (wheel, arrow keys, edge buttons), never vertical scroll. Selection
-state renders on the cards; **confirm/decline live in the corner cluster** — front and center,
-not buried under a grid. Two clients:
+A row of card fronts in screen space, center-bottom, above the hand, scrolled horizontally and
+never vertically. Selection state renders on the cards; **confirm/decline live in the corner
+cluster** — front and center, not buried under a grid.
+
+*Amended 2026-07-30 (Issues.txt #8/#14).* It was specified here as a hand-like **fan**, in
+**pages** of 8–10 turned by edge buttons. Both were wrong at the table, and both are now gone:
+
+- **A flat strip, not a fan.** The arc and per-card rotation are the *hand's* vocabulary — they
+  say "these are held, and they're yours". Worn by a graveyard scan or a library search they said
+  it falsely, and they cost legibility at exactly the moment the player is reading names. The hand
+  keeps its curve; every other zone is a filmstrip. Cards still overlap slightly (~82% of each
+  shows — the name bar, cost and most of the art), because laying them edge to edge looked tidier
+  and cost a third of the cards on screen.
+- **One continuous seek, not pages.** Paging cut a scan into arbitrary blocks and made "is the one
+  I want in here?" a question answered a page at a time. The strip scrolls by a px offset that the
+  wheel, the ←/→ keys and a slider in the bar all push; the layout owns the clamp, and the scene
+  writes the clamped value back, so an over-scroll (a filter that shortened the strip, a resize)
+  corrects itself rather than stranding the thumb.
+- **Alt is the magnifier; the bare wheel belongs to the strip.** #13 had put preview magnification
+  on the bare wheel. Once the strip scrolls continuously the two gestures collide — and the strip
+  loses, since hovering its cards pops previews constantly. Zoom moved to a held modifier, applied
+  everywhere so the rule needs no thought about what is under the pointer. Alt then took the
+  **preview panel itself**: the panel is a big opaque rectangle that lands beside the pointer, and
+  popping it on bare hover fired it constantly while the player was only crossing the board on the
+  way to a click. Pressing Alt opens the panel for whatever the pointer already rests on (no mouse
+  movement needed) and releasing it closes the panel outright — the release *is* the dismissal, so
+  it skips the cross-the-gap grace. The **hand is exempt** and still lifts on plain hover: that read
+  is small, local, and never covers what you are looking at. Alt+wheel zooms whichever is showing,
+  with the hand's own ceiling (~4× at the card, vs the panel's 2.2×) — the panel renders a fresh
+  high-res face beside the card, while the hand has only the card itself to grow.
+- **A name filter in every mode** (#14). Only browse had one; a library search would hand you 99
+  cards with no way to find one among them. In prompt mode the filter *hides* and never reorders —
+  the server's candidate order is part of the choice — and it is fenced to the content it was typed
+  against, so a needle left over from the last ask can't silently hide the next ask's candidates.
+  Below a small threshold the input stays away; a three-card look does not need one.
+
+Three clients:
 
 - **Prompt mode** — `chooseTargets`+`cards[]`, and any candidate set the felt can't offer
   (§8.2 below). Server candidate order is preserved (reordering a choice list would be lying —
   Modal.tsx's rule, kept).
-- **Browse mode** — clicking own graveyard/exile (and revealed piles) opens the same fan
+- **Reveal mode** — §6 `revealed`/`lookedAt` windows, ambient rather than an ask: they open under
+  any pending prompt and leave by patch, never by dismissal.
+- **Browse mode** — clicking own graveyard/exile (and revealed piles) opens the same strip
   read-only, with the scan ordering + name filter from `pile.ts`. This retires the dead
   `browsable` CardGrid path *and* closes the "table client has no pile browser" gap.
 - **Hand mode** (decided 2026-07-25) — an oversized hand renders through the same paged fan

@@ -2,8 +2,9 @@
 // suspended while a text input (chat, the carousel filter, concede) has focus
 // — since T9 deleted the modals, focus is the *only* suspension (§8).
 //
-//  • Carousel/hand paging — ArrowLeft/Right turn the open fan's page, else the
-//    paged hand's; Esc closes an open *browse* fan (a prompt-mode fan is the
+//  • Carousel seek / hand paging — ArrowLeft/Right push the open carousel strip
+//    by one card (#8: it scrolls continuously, it does not page), else they turn
+//    the paged hand; Esc closes an open *browse* fan (a prompt-mode fan is the
 //    prompt UI and lives exactly as long as its ask).
 //  • Game shortcuts — the shared pure resolver (state/shortcuts.ts): Space pass,
 //    Enter primary, F4/F6 skips, A all-attack, Esc decline a declinable prompt.
@@ -19,8 +20,8 @@ import { useEffect } from 'react';
 import { appActions, appStores } from '../app';
 import { resolveShortcut } from '@night/core/state/shortcuts';
 import { getActiveScene } from '../scene/TableScene';
-import { carouselContent, carouselPageCount } from '../layout/carousel';
-import { carouselStore, closeBrowse, pageFor, setHandPage, turnPage } from '../scene/carousel-store';
+import { carouselContent } from '../layout/carousel';
+import { carouselStore, closeBrowse, setHandPage } from '../scene/carousel-store';
 import { handPageCount } from '../layout/screen';
 
 export function isTextInput(target: EventTarget | null): boolean {
@@ -45,14 +46,18 @@ export function useShortcuts(): void {
       if (e.key >= '1' && e.key <= '4') { e.preventDefault(); scene?.focusSeat(Number(e.key) - 1); return; }
       if (e.key === '`' || e.key === '0') { e.preventDefault(); scene?.showTable(); return; }
 
-      // Paging (§4.4): arrows turn the open carousel's page, else the paged hand's.
+      // Seeking (§4.4): arrows push the open carousel's strip by one card (#8 —
+      // the scene owns the clamp, since only it knows the viewport), else they
+      // turn the paged hand. The hand still pages: its fan is a held hand, not a
+      // strip, and that distinction is the point of #8's second half.
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const delta = e.key === 'ArrowRight' ? 1 : -1;
         const ui = carouselStore.getState();
-        const content = carouselContent(appStores.prompt.getState(), game.state, ui.browse, ui.filter);
+        const content = carouselContent(
+          appStores.prompt.getState(), game.state, ui.browse, ui.filter, ui.viewKey);
         if (content !== undefined) {
           e.preventDefault();
-          turnPage(content.key, delta, carouselPageCount(content.entries.length));
+          scene?.scrollCarouselBy(delta);
           return;
         }
         const pages = handPageCount(game.state.me.hand.length);

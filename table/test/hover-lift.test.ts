@@ -35,16 +35,18 @@ describe('handHoverLift', () => {
   });
 
   it('NO FLICKER holds past full hover, where the #13 wheel zoom lives', () => {
-    // The wheel drives the hover amount past 1 to zoom a hand card in place (the
+    // Alt+wheel drives the hover amount past 1 to zoom a hand card in place (the
     // hand reads by lift, never by preview panel). The invariant is the same one,
     // and it survives because bottom = texH·scale·(0.5 + (GROW/2 − LIFT)·amt) is
     // monotonically increasing while LIFT ≤ GROW/2 — so it can't flicker at ANY
-    // zoom, not merely up to the resting cap.
+    // zoom, not merely up to the resting cap. Swept past HAND_ZOOM_MAX (4, raised
+    // from 2.5 on 2026-07-30) so the ceiling stays a taste call and never a safety
+    // one: raising it again needs no thought about flicker.
     const rest = bottomEdge(0);
-    for (let amt = 0; amt <= 3.0001; amt += 0.1) {
+    for (let amt = 0; amt <= 5.0001; amt += 0.1) {
       expect(bottomEdge(amt)).toBeGreaterThanOrEqual(rest - 1e-9);
     }
-    expect(handHoverLift(TEX_H, SCALE, 2.5).scale).toBeGreaterThan(handHoverLift(TEX_H, SCALE, 1).scale);
+    expect(handHoverLift(TEX_H, SCALE, 4).scale).toBeGreaterThan(handHoverLift(TEX_H, SCALE, 1).scale);
   });
 
   it('the lift is monotonic in the hover amount (a smooth rise, never a dip)', () => {

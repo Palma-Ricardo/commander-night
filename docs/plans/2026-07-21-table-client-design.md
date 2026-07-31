@@ -459,6 +459,13 @@ All of these live in world space, at their owner's outer elbow (§7.2).
 - **Hand** is the one zone in screen space (§7.1): a fan with hover-lift, pinned to the bottom edge,
   visible no matter where the camera points. Cast animates from the actual card position in the fan,
   projected into world space on the first frame (§6.2).
+- **Two ways to read a card, and they are not interchangeable.** The hand reads by **lift** — the
+  card grows and rises in place, on plain hover, no modifier. Everywhere else reads by the **preview
+  panel**, which since 2026-07-30 is held behind **Alt**. The asymmetry is the point: the lift is
+  small, local, and covers nothing, so it is free to fire whenever the pointer lands; the panel is a
+  big opaque rectangle beside the pointer, and on bare hover it fired constantly while the player was
+  merely crossing the board to click something. Alt+wheel magnifies whichever is up, each with its
+  own ceiling (hand ~4× at the card, panel 2.2×).
 
 ## 9. Animation catalogue
 

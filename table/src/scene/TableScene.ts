@@ -37,9 +37,10 @@ import { layoutKeyed, type StackLinks } from './keys';
 import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX, PAGE_TURN_MS } from '../tuning';
 import { handPageCount, stackAnchor } from '../layout/screen';
 import {
-  carouselContent, carouselPageCount, layoutCarouselFan, type BrowseZone, type CarouselEntry,
+  carouselContent, layoutCarouselStrip,
+  type BrowseZone, type CarouselContent, type CarouselEntry,
 } from '../layout/carousel';
-import { carouselStore, pageFor, turnPage } from './carousel-store';
+import { carouselStore, offsetFor, scrollCarousel, setOffset } from './carousel-store';
 import { promptObjectIds, spreadBoardIds, stackTargetIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, HL_TARGET, isClickable, rectContains,
@@ -66,10 +67,16 @@ const COUNTER_ICON: Record<string, string> = {
 interface SeatChip { label: string; tone: 'danger' | 'note' }
 const HAND_RECENTRE_MS = 200;   // the fan slides (not snaps) when the log opens/closes
 const HOVER_GRACE_MS = 140;     // let the pointer cross the gap from a card to its preview
-// Wheel zoom on the raised hand card (#13). The ceiling is a hover *amount*, not a
-// scale: amount 1 already grows the card 1.6× (HOVER_GROW), so 2.5 reads ≈2.5× —
-// close to the preview panel's own 2.2× cap, which is the point.
-const HAND_ZOOM_MAX = 2.5;
+// Wheel zoom on the raised hand card (Alt+wheel, #13). The ceiling is a hover
+// *amount*, not a scale: amount 1 already grows the card 1.6× (HOVER_GROW), so the
+// card ends up ~1.6× this number. 2.5 was set to sit near the preview panel's 2.2×
+// cap; the two deliberately part company now (asked for 2026-07-30) because they
+// are not the same thing — the panel is a fresh high-res face rendered beside the
+// card, while the hand has only the card itself to grow, and reading it wants more
+// travel. 4 lands a hand card at roughly the panel's on-screen size.
+// The no-flicker invariant holds at any amount (see test/hover-lift.test.ts), so
+// this ceiling is a taste call, not a safety one.
+const HAND_ZOOM_MAX = 4;
 const HAND_ZOOM_STEP = 0.2;
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
 const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
@@ -129,6 +136,11 @@ export class TableScene implements DirectorSink {
   // (a library look's cards exist nowhere else), so the director's diff never
   // touches them. Synced from prompt/state/store changes by syncCarousel.
   private readonly carouselLayer = new Container();
+  // …clipped to the run the strip actually owns (#8). A scrolling strip keeps
+  // actors just past both ends so they slide in and out instead of popping, and
+  // without a mask that slack drew *into the log gutter*, under the panel. The
+  // mask is the strip's viewport; the slack lives outside it.
+  private readonly carouselMask = new Graphics();
   // The newest authoritative state, ahead of the director's presented one. The
   // carousel is a prompt surface, and prompt surfaces render against
   // authoritative state (design §6.4) — deriving from `presented` opened a
@@ -179,6 +191,11 @@ export class TableScene implements DirectorSink {
   private handZoom = 1;
   private previewActorKey: string | undefined;
   private previewGrace = 0;
+  /** The non-hand card the pointer is over, whether or not the preview is up.
+   *  The preview is Alt-gated, so this is what Alt has to open when it goes down
+   *  while the pointer is already resting on a card. */
+  private pointerOverKey: string | undefined;
+  private altHeld = false;
   private pointer: Point | undefined;
   private detachPointer?: () => void;
   /** The armed drag, two modes (prompts-on-the-table §9 / §4.2):
@@ -270,7 +287,10 @@ export class TableScene implements DirectorSink {
     // The carousel fan reads above the hand/stack (it is the active surface when
     // open) but below the fixed screen effects (vignette, ribbon).
     this.app.stage.addChild(this.worldLayer, this.stackTethers, this.dragLine, this.screenActors,
-      this.carouselLayer, this.effects.screenFx);
+      this.carouselLayer, this.carouselMask, this.effects.screenFx);
+    this.carouselMask.eventMode = 'none';
+    this.carouselLayer.mask = this.carouselMask;
+    this.updateCarouselMask();
 
     // Empty felt is clickable → manual camera focus on that quadrant (§7.3). The
     // felt sits under the actors in z-order, so a card tap is picked first; only a
@@ -300,20 +320,35 @@ export class TableScene implements DirectorSink {
     // the viewport edge must still cast or come home, never strand mid-air.
     const onUp = (e: PointerEvent): void => this.endDrag(e);
     const onCancel = (): void => this.cancelDrag();
-    // Wheel pages the open carousel (§4.4: wheel/arrows/edge buttons, never
-    // vertical scroll). Closed ⇒ the wheel does nothing, as before.
+    // Wheel scrolls the open carousel (§4.4); Alt+wheel zooms. Carousel closed and
+    // no Alt ⇒ the wheel does nothing, as before.
     const onWheel = (e: WheelEvent): void => this.handleWheel(e);
+    // Alt is the magnifier (#13, amended): it gates the preview panel and owns the
+    // zoom wheel. Tracked on window rather than read off each event, because
+    // pressing or releasing Alt must open/close the preview for the card already
+    // under the pointer — no mouse movement required. `blur` matters: alt-tabbing
+    // away never delivers the keyup, which would otherwise leave the scene
+    // believing Alt is still down for as long as the tab stays open.
+    const onKeyDown = (e: KeyboardEvent): void => { if (e.altKey) this.setAltHeld(true); };
+    const onKeyUp = (e: KeyboardEvent): void => { if (!e.altKey) this.setAltHeld(false); };
+    const onBlur = (): void => this.setAltHeld(false);
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     this.detachPointer = () => {
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
 
     // The fan re-syncs on any UI-store change (browse open/close, filter, page);
@@ -1062,13 +1097,23 @@ export class TableScene implements DirectorSink {
     // its budget, and the DOM bar derives from the same source.
     const state = this.latestState ?? this.director.presented;
     const ui = carouselStore.getState();
-    const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
+    const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter, ui.viewKey);
     const entries = content?.entries ?? [];
-    const fan = layoutCarouselFan(entries.length, pageFor(content?.key), this.size, this.rightInset);
+    const strip = layoutCarouselStrip(
+      entries.length, offsetFor(content?.key), this.size, this.rightInset);
+    // Opening (or swapping to different content) is a different motion from
+    // scrolling the same strip: the first rises through the table edge, the
+    // second slides in from whichever end it entered by.
+    const opening = content?.key !== this.carouselKey;
     this.carouselKey = content?.key;
+    // Publish the clamped offset + measured track length: the DOM slider sizes
+    // itself from these, and an over-scroll (a filter that shortened the strip,
+    // a resize) corrects itself here rather than stranding the thumb past its end.
+    if (content !== undefined) setOffset(content.key, strip.offset, strip.maxOffset);
+    const runW = Math.max(200, this.size.w - Math.max(0, this.rightInset));
 
     const live = new Set<string>();
-    for (const [index, placement] of fan.placements) {
+    for (const [index, placement] of strip.placements) {
       const e = entries[index]!;
       const key = `car:${e.id}`;
       live.add(key);
@@ -1079,10 +1124,17 @@ export class TableScene implements DirectorSink {
         this.carouselLayer.addChild(actor.view);
         if (this.reducedMotion) {
           actor.snapTo(placement);
-        } else {
-          // rise in from just below the bottom edge — open and page turns read
-          // as the fan sliding up through the table's edge
+        } else if (opening) {
+          // rise in from just below the bottom edge — an open reads as the strip
+          // sliding up through the table's edge
           actor.seedCurrent({ x: placement.x, y: this.size.h + 180, rotation: 0, scale: placement.scale });
+          actor.animateTo(placement, PAGE_TURN_MS);
+        } else {
+          // a scroll: enter from the end it came in by, at strip height, and let
+          // the mask do the clipping (#8). Rising here read as cards popping up
+          // out of the table one at a time while you pushed the row sideways.
+          const from = placement.x > runW / 2 ? runW + strip.step : -strip.step;
+          actor.seedCurrent({ x: from, y: placement.y, rotation: 0, scale: placement.scale });
           actor.animateTo(placement, PAGE_TURN_MS);
         }
       } else {
@@ -1112,39 +1164,53 @@ export class TableScene implements DirectorSink {
     return actor;
   }
 
-  /** Wheel over the canvas pages the open carousel (§4.4), or zooms the hover
-   *  preview (#13).
+  /** Scroll the open carousel by one card, in `dir`'s direction. The keyboard
+   *  arrows come through here so they and the wheel share the clamp (§4.4). */
+  scrollCarouselBy(dir: number): boolean {
+    const content = this.carouselContentNow();
+    if (content === undefined) return false;
+    const strip = layoutCarouselStrip(
+      content.entries.length, offsetFor(content.key), this.size, this.rightInset);
+    if (strip.maxOffset === 0) return false;      // the whole strip is already in view
+    scrollCarousel(content.key, Math.sign(dir) * strip.step, strip.maxOffset);
+    return true;
+  }
+
+  private carouselContentNow(): CarouselContent | undefined {
+    const state = this.latestState ?? this.director?.presented;
+    const ui = carouselStore.getState();
+    return carouselContent(this.currentPrompt, state, ui.browse, ui.filter, ui.viewKey);
+  }
+
+  /** Wheel over the canvas scrolls the open carousel (§4.4); **Alt**+wheel zooms
+   *  whatever the pointer is on (#13).
    *
-   *  Precedence, in order: the pointer sitting *on* the preview always zooms it —
-   *  you are pointing at the thing you want bigger. Otherwise an open carousel
-   *  keeps the wheel as its pager (hovering its cards pops previews constantly, so
-   *  zoom-wins would leave it unpageable). With the carousel closed — the felt —
-   *  an open preview zooms. */
+   *  The bare wheel used to zoom and only paged the carousel as a fallback, which
+   *  worked while the carousel turned in discrete pages. A continuous strip (#8)
+   *  wants the wheel outright — scrolling a strip *is* the wheel gesture, and its
+   *  cards pop previews constantly, so a zoom-first rule left the strip barely
+   *  scrollable. Magnification moved to a held modifier rather than keep fighting
+   *  the scroll for one gesture. Alt applies everywhere, carousel open or not, so
+   *  the rule needs no thought about what happens to be under the pointer:
+   *  **wheel scrolls, Alt+wheel zooms.** */
   private handleWheel(e: WheelEvent): void {
     const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-    // A raised hand card zooms in place — the hand reads by lift, never by panel
-    // (§9), so the lift *is* its preview.
-    if (this.hoveredKey !== undefined) {
-      this.zoomHand(delta);
-      e.preventDefault();
-      return;
-    }
-    // Any open preview zooms: battlefield, piles, the stack, and the carousel fan
-    // alike. `previewActorKey` is set exactly while the pointer is on a previewed
-    // card (or on the panel, which the frame-loop grace holds open), so this reads
-    // as "wheel over a card zooms it; wheel over the background pages" (§4.4 keeps
-    // the arrows and edge buttons for paging).
-    if (this.previewActorKey !== undefined && this.onZoomPreview?.(delta) === true) {
-      e.preventDefault();
+    if (e.altKey) {
+      // A raised hand card zooms in place — the hand reads by lift, never by
+      // panel (§9), so the lift *is* its preview. Otherwise any open preview
+      // zooms: battlefield, piles, the stack and the carousel strip alike.
+      if (this.hoveredKey !== undefined) {
+        this.zoomHand(delta);
+        e.preventDefault();
+        return;
+      }
+      if (this.previewActorKey !== undefined && this.onZoomPreview?.(delta) === true) {
+        e.preventDefault();
+      }
       return;
     }
     if (this.carouselKey === undefined) return;
-    const state = this.latestState ?? this.director?.presented;
-    const ui = carouselStore.getState();
-    const content = carouselContent(this.currentPrompt, state, ui.browse, ui.filter);
-    if (content === undefined) return;
-    e.preventDefault();
-    turnPage(content.key, delta > 0 ? 1 : -1, carouselPageCount(content.entries.length));
+    if (this.scrollCarouselBy(delta)) e.preventDefault();
   }
 
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
@@ -1311,16 +1377,38 @@ export class TableScene implements DirectorSink {
   private handleActorOver(actor: CardActor): void {
     if (this.drag?.moved === true) return;   // a dragged card crossing others pops nothing
     if (actor.objectId === undefined || !actor.placement.faceUp) return;
-    // Hand cards read via the in-place raise (§9) — no corner preview. Every other
-    // face-up card gets the preview panel instead.
-    if (actor.space === 'screen' && actor.placement.zone === 'hand') this.raiseHand(actor);
-    else this.showPreview(actor);
+    // Hand cards read via the in-place raise (§9) — no corner preview, and no Alt:
+    // the lift is small, local, and never covers what you are looking at, so it
+    // costs nothing to have it on hover.
+    if (actor.space === 'screen' && actor.placement.zone === 'hand') { this.raiseHand(actor); return; }
+    // Every other face-up card is a *preview panel* card, and the panel is a big
+    // opaque rectangle that lands next to the pointer. Popping it on bare hover
+    // meant it fired constantly while you were only crossing the board to click
+    // something, so it is gated on Alt (#13, amended). The card under the pointer
+    // is still tracked, so Alt going down opens this one without moving the mouse.
+    this.pointerOverKey = actor.key;
+    if (this.altHeld) this.showPreview(actor);
   }
 
   private handleActorOut(actor: CardActor): void {
     // Only the lift reacts to a raw pointerout; the preview is dismissed by the
     // frame-loop authority (verifyHover), so crossing onto the panel keeps it open.
     if (this.hoveredKey === actor.key) this.lowerHand();
+    if (this.pointerOverKey === actor.key) this.pointerOverKey = undefined;
+  }
+
+  /** Alt went down or up. Down opens the preview for whatever the pointer is
+   *  already resting on; up closes it outright — no grace, because releasing the
+   *  key *is* the dismissal, and a grace would leave the panel hanging over the
+   *  board after you had plainly asked for it to go. */
+  private setAltHeld(held: boolean): void {
+    if (held === this.altHeld) return;
+    this.altHeld = held;
+    if (!held) { this.hidePreview(); return; }
+    const key = this.pointerOverKey;
+    if (key === undefined) return;
+    const actor = this.actors.get(key) ?? this.carouselActors.get(key);
+    if (actor !== undefined) this.showPreview(actor);
   }
 
   /** Raise a hand card to the front and enlarge it in place (§9). Lowers any
@@ -1336,8 +1424,9 @@ export class TableScene implements DirectorSink {
     this.screenActors.addChild(actor.view);   // reads above the rest of the fan
   }
 
-  /** Wheel-zoom the raised hand card (#13) — the hand's stand-in for zooming the
-   *  preview panel. Clamped to the same ceiling as the panel so the two read alike. */
+  /** Alt+wheel-zoom the raised hand card (#13) — the hand's stand-in for zooming
+   *  the preview panel, since a hand card reads by lift and never pops a panel.
+   *  Its ceiling is its own (HAND_ZOOM_MAX), not the panel's. */
   private zoomHand(delta: number): void {
     if (this.hoveredKey === undefined) return;
     this.handZoom = Math.min(HAND_ZOOM_MAX,
@@ -1398,6 +1487,17 @@ export class TableScene implements DirectorSink {
         this.lowerHand();
       }
     }
+    // The tracked card under the pointer is what Alt opens, so it has to be as
+    // trustworthy as the preview itself — Pixi's pointerout is movement-only, and a
+    // card that tweened out from under a still pointer would otherwise leave a
+    // stale key for Alt to resurrect.
+    if (this.pointerOverKey !== undefined) {
+      const actor = this.actors.get(this.pointerOverKey) ?? this.carouselActors.get(this.pointerOverKey);
+      if (actor === undefined || this.pointer === undefined
+          || !anchorContains(actor.bounds(), this.pointer)) {
+        this.pointerOverKey = undefined;
+      }
+    }
     if (this.previewActorKey !== undefined) {
       const actor = this.actors.get(this.previewActorKey) ?? this.carouselActors.get(this.previewActorKey);
       const p = this.pointer;
@@ -1405,6 +1505,7 @@ export class TableScene implements DirectorSink {
       const rect = this.getPreviewRect?.();
       const onPanel = rect !== undefined && p !== undefined && anchorContains(rect, p);
       if (actor === undefined) this.hidePreview();                 // card gone → drop now
+      else if (!this.altHeld) this.hidePreview();                  // Alt is the gate (#13)
       else if (onCard || onPanel) this.previewGrace = HOVER_GRACE_MS;
       else if ((this.previewGrace -= dtMs) <= 0) this.hidePreview();
     }
@@ -1511,7 +1612,16 @@ export class TableScene implements DirectorSink {
     const inset = Math.max(0, Math.round(px));
     if (inset === this.rightInset) return;
     this.rightInset = inset;
+    this.updateCarouselMask();
     this.recentreHand();
+  }
+
+  /** The strip's clip rect: the felt left of the log gutter, full height (the
+   *  fan still rises from below the bottom edge when it opens). */
+  private updateCarouselMask(): void {
+    const w = Math.max(200, this.size.w - Math.max(0, this.rightInset));
+    this.carouselMask.clear();
+    this.carouselMask.rect(0, 0, w, this.size.h).fill(0xffffff);
   }
 
   /** Slide the hand to stay centred in the felt left of the log gutter (§8). The
@@ -1579,10 +1689,12 @@ export class TableScene implements DirectorSink {
   resize(): void {
     if (this.director === undefined) return;
     this.director.setViewport(this.size);
+    this.updateCarouselMask();
     const presented = this.director.presented;
     if (presented !== undefined) {
       this.applyTransition(presented, presented, [], 0, new Map());
     }
+    this.syncCarousel();   // the strip re-measures: card size, run width, maxOffset
   }
 
   // ── felt + furniture ─────────────────────────────────────────────────────────

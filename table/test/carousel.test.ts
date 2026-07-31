@@ -7,11 +7,12 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import type { Prompt } from '@night/core';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import {
-  carouselBarBottom, carouselContent, carouselPageCount, layoutCarouselFan,
+  CAROUSEL_FILTER_MIN, carouselBarBottom, carouselContent, layoutCarouselStrip,
 } from '../src/layout/carousel';
-import { carouselStore, pageFor, setHandPage, toggleBrowse, turnPage } from '../src/scene/carousel-store';
+import {
+  carouselStore, filterFor, offsetFor, scrollCarousel, setFilter, setHandPage, setOffset, toggleBrowse,
+} from '../src/scene/carousel-store';
 import { handBandHeight, handPageCount } from '../src/layout/screen';
-import { CAROUSEL_PAGE_SIZE } from '../src/tuning';
 import { fourSeats, mkCard } from './helpers';
 
 const VIEW = { w: 1600, h: 900 };
@@ -133,65 +134,207 @@ describe('carouselContent', () => {
   });
 });
 
-describe('layoutCarouselFan', () => {
-  it('pages at CAROUSEL_PAGE_SIZE and clamps the requested page', () => {
-    const n = CAROUSEL_PAGE_SIZE * 2 + 3;
-    expect(carouselPageCount(n)).toBe(3);
-    const fan = layoutCarouselFan(n, 99, VIEW);
-    expect(fan.page).toBe(2);
-    expect(fan.pageCount).toBe(3);
-    expect([...fan.placements.keys()]).toEqual([CAROUSEL_PAGE_SIZE * 2, CAROUSEL_PAGE_SIZE * 2 + 1, CAROUSEL_PAGE_SIZE * 2 + 2]);
+describe('carouselContent name filter (#14)', () => {
+  const library = (n: number) => Array.from({ length: n },
+    (_, i) => mkCard(i === 3 ? 'Sol Ring' : `Card ${i}`, ['ARTIFACT']));
+
+  it('a library search filters by name, and says how many of how many', () => {
+    // The whole of #14: the graveyard scan beside it had a filter all along.
+    const cards = library(40);
+    const c = carouselContent(promptState(targets({ candidates: cards.map(x => x.id), cards })),
+      fourSeats(), undefined, 'sol ring');
+    expect(c?.mode).toBe('prompt');
+    expect(c?.entries.map(e => e.label)).toEqual(['Sol Ring']);
+    expect(c?.total).toBe(40);            // "1 of 40" in the bar
   });
 
-  it('lays the page inside the viewport, above the hand band', () => {
-    for (const view of [VIEW, { w: 1280, h: 720 }, { w: 2560, h: 1440 }]) {
-      const fan = layoutCarouselFan(CAROUSEL_PAGE_SIZE, 0, view);
-      const band = handBandHeight(view);
-      for (const p of fan.placements.values()) {
-        expect(p.x).toBeGreaterThan(0);
-        expect(p.x).toBeLessThan(view.w);
-        expect(p.y).toBeLessThan(view.h - band);   // above the hand
-        expect(p.y).toBeGreaterThan(0);
-      }
-    }
+  it('filtering hides but never reorders — the server\'s candidate order is the choice', () => {
+    const cards = [mkCard('Zebra', ['CREATURE']), mkCard('Aardvark', ['CREATURE']),
+      mkCard('Zealot', ['CREATURE'])];
+    const c = carouselContent(promptState(targets({ candidates: cards.map(x => x.id), cards })),
+      fourSeats(), undefined, 'z');
+    expect(c?.entries.map(e => e.label)).toEqual(['Zebra', 'Zealot']);   // NOT sorted
   });
 
-  it('respects the log inset like the hand does', () => {
-    const inset = 360;
-    const fan = layoutCarouselFan(CAROUSEL_PAGE_SIZE, 0, VIEW, inset);
-    for (const p of fan.placements.values()) {
-      expect(p.x).toBeLessThan(VIEW.w - inset);
-    }
+  it('a reveal window filters too', () => {
+    const state = fourSeats();
+    state.revealed = [{ name: 'Fact or Fiction', cards: [mkCard('Fact', ['INSTANT']), mkCard('Fiction', ['SORCERY'])] }];
+    const c = carouselContent(promptState(undefined), state, undefined, 'fic');
+    expect(c?.entries.map(e => e.label)).toEqual(['Fiction']);
+    expect(c?.total).toBe(2);
   });
 
-  it('zero entries → an empty page, never a crash', () => {
-    const fan = layoutCarouselFan(0, 0, VIEW);
-    expect(fan.pageCount).toBe(1);
-    expect(fan.placements.size).toBe(0);
+  it('a needle typed against other content is ignored, never applied blind', () => {
+    // Fencing: a leftover 'wrath' from the last ask must not silently hide this
+    // ask's candidates — which would look exactly like a dead-ended prompt.
+    const cards = library(12);
+    const p = targets({ candidates: cards.map(x => x.id), cards });
+    const stale = carouselContent(promptState(p), fourSeats(), undefined, 'sol ring', 'browse:p1:graveyard');
+    expect(stale?.entries.length).toBe(12);
+    const mine = carouselContent(promptState(p), fourSeats(), undefined, 'sol ring', stale!.key);
+    expect(mine?.entries.length).toBe(1);
   });
 
-  it('the bar sits above the fan cards', () => {
-    const fan = layoutCarouselFan(3, 0, VIEW);
-    const topOfFan = Math.min(...[...fan.placements.values()].map(p => p.y - (280 * p.scale) / 2));
-    expect(VIEW.h - carouselBarBottom(VIEW)).toBeLessThanOrEqual(topOfFan + 4);
+  it('an empty needle is a no-op in every mode', () => {
+    const cards = library(12);
+    const c = carouselContent(promptState(targets({ candidates: cards.map(x => x.id), cards })),
+      fourSeats(), undefined, '   ');
+    expect(c?.entries.length).toBe(12);
+  });
+
+  it('CAROUSEL_FILTER_MIN keeps the input off a set you can read at a glance', () => {
+    expect(CAROUSEL_FILTER_MIN).toBeGreaterThan(0);
+    const small = library(3);
+    const c = carouselContent(promptState(targets({ candidates: small.map(x => x.id), cards: small })),
+      fourSeats(), undefined, '');
+    expect(c!.total).toBeLessThanOrEqual(CAROUSEL_FILTER_MIN);   // the bar offers no filter here
   });
 });
 
-describe('carousel-store paging', () => {
-  beforeEach(() => carouselStore.setState({ browse: undefined, filter: '', page: 0, pageKey: '', handPage: 0 }));
-
-  it('pageFor is 0 for any other content identity', () => {
-    turnPage('prompt:7', 1, 3);
-    expect(pageFor('prompt:7')).toBe(1);
-    expect(pageFor('prompt:8')).toBe(0);
-    expect(pageFor(undefined)).toBe(0);
+describe('layoutCarouselStrip (#8: one continuous flat strip)', () => {
+  it('is flat — no fan curve, no arc: that vocabulary is the hand\'s alone', () => {
+    const strip = layoutCarouselStrip(9, 0, VIEW);
+    const ys = [...strip.placements.values()].map(p => p.y);
+    for (const p of strip.placements.values()) expect(p.rotation).toBe(0);
+    expect(Math.max(...ys) - Math.min(...ys)).toBe(0);   // one line, not an arc
   });
 
-  it('turnPage clamps to [0, pageCount)', () => {
-    turnPage('k', -1, 3);
-    expect(pageFor('k')).toBe(0);
-    turnPage('k', 5, 3);
-    expect(pageFor('k')).toBe(2);
+  it('a strip that fits is centred and never scrolls', () => {
+    const strip = layoutCarouselStrip(3, 0, VIEW);
+    expect(strip.maxOffset).toBe(0);
+    const xs = [...strip.placements.values()].map(p => p.x);
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(VIEW.w / 2, 5);
+  });
+
+  it('scrolls continuously — any offset is a position, not a page boundary', () => {
+    const n = 40;
+    const base = layoutCarouselStrip(n, 0, VIEW);
+    expect(base.maxOffset).toBeGreaterThan(0);
+    const nudged = layoutCarouselStrip(n, 17, VIEW);       // a third of a card
+    const k = [...base.placements.keys()][0]!;
+    expect(nudged.placements.get(k)!.x).toBeCloseTo(base.placements.get(k)!.x - 17, 5);
+  });
+
+  it('clamps the offset to the run and reports what it used', () => {
+    const n = 40;
+    expect(layoutCarouselStrip(n, -500, VIEW).offset).toBe(0);
+    const end = layoutCarouselStrip(n, 1e6, VIEW);
+    expect(end.offset).toBe(end.maxOffset);
+    // scrolled to the end, the LAST entry is on screen and the first is gone
+    expect(end.placements.has(n - 1)).toBe(true);
+    expect(end.placements.has(0)).toBe(false);
+  });
+
+  it('culls far-off entries so a 99-card library search is not 99 actors', () => {
+    const strip = layoutCarouselStrip(99, 0, VIEW);
+    expect(strip.placements.size).toBeLessThan(20);
+    expect(strip.placements.has(0)).toBe(true);           // ...but the near ones are all there
+    expect([...strip.placements.keys()]).toEqual(
+      [...strip.placements.keys()].slice().sort((a, b) => a - b));   // a contiguous window
+  });
+
+  it('sits above the hand band at every viewport, starting inside the left margin', () => {
+    for (const view of [VIEW, { w: 1280, h: 720 }, { w: 2560, h: 1440 }]) {
+      const strip = layoutCarouselStrip(40, 0, view);
+      const band = handBandHeight(view);
+      for (const p of strip.placements.values()) {
+        expect(p.y).toBeLessThan(view.h - band);   // above the hand
+        expect(p.y).toBeGreaterThan(0);
+      }
+      // At offset 0 the first card is fully on screen; the tail runs off the
+      // right, which is what there is to scroll to.
+      const first = strip.placements.get(0)!;
+      const cardW = 200 * first.scale;
+      expect(first.x - cardW / 2).toBeGreaterThanOrEqual(0);
+      expect(first.x + cardW / 2).toBeLessThan(view.w);
+    }
+  });
+
+  it('respects the log inset like the hand does — the run ends before the gutter', () => {
+    const inset = 360;
+    const short = layoutCarouselStrip(3, 0, VIEW, inset);   // fits ⇒ centred in the run
+    const xs = [...short.placements.values()].map(p => p.x);
+    const cardW = 200 * [...short.placements.values()][0]!.scale;
+    expect(Math.max(...xs) + cardW / 2).toBeLessThan(VIEW.w - inset);
+    // A long strip's scrollable run is the inset width, not the window width.
+    expect(layoutCarouselStrip(40, 0, VIEW, inset).maxOffset)
+      .toBeGreaterThan(layoutCarouselStrip(40, 0, VIEW).maxOffset);
+  });
+
+  it('keeps each card\'s name bar clear of its neighbour', () => {
+    // Cards overlap a little (density — see STRIP_STEP_RATIO), but never so far
+    // that the card behind loses the strip you actually read it by.
+    const strip = layoutCarouselStrip(9, 0, VIEW);
+    const pl = [...strip.placements.values()].sort((a, b) => a.x - b.x);
+    const cardW = 200 * pl[0]!.scale;
+    for (let i = 1; i < pl.length; i++) {
+      expect(pl[i]!.x - pl[i - 1]!.x).toBeGreaterThanOrEqual(cardW * 0.6);
+    }
+  });
+
+  it('shows appreciably more of a set than the old nine-card page did', () => {
+    // The regression guard for the density note on STRIP_STEP_RATIO: an
+    // edge-to-edge strip fitted six, and a graveyard scan is worth more than that.
+    expect(layoutCarouselStrip(40, 0, VIEW).placements.size).toBeGreaterThanOrEqual(9);
+  });
+
+  it('zero entries → an empty strip, never a crash', () => {
+    const strip = layoutCarouselStrip(0, 0, VIEW);
+    expect(strip.maxOffset).toBe(0);
+    expect(strip.placements.size).toBe(0);
+  });
+
+  it('the bar sits above the strip cards', () => {
+    const strip = layoutCarouselStrip(3, 0, VIEW);
+    const top = Math.min(...[...strip.placements.values()].map(p => p.y - (280 * p.scale) / 2));
+    expect(VIEW.h - carouselBarBottom(VIEW)).toBeLessThanOrEqual(top + 4);
+  });
+});
+
+describe('carousel-store scrolling', () => {
+  beforeEach(() => carouselStore.setState(
+    { browse: undefined, filter: '', offset: 0, viewKey: '', maxOffset: 0, handPage: 0 }));
+
+  it('offset and needle are 0/empty for any other content identity', () => {
+    setFilter('prompt:7', 'bolt');
+    setOffset('prompt:7', 120, 500);
+    expect(offsetFor('prompt:7')).toBe(120);
+    expect(filterFor('prompt:7')).toBe('bolt');
+    // A different ask must not inherit either — a leftover needle would silently
+    // hide the next ask's candidates.
+    expect(offsetFor('prompt:8')).toBe(0);
+    expect(filterFor('prompt:8')).toBe('');
+    expect(offsetFor(undefined)).toBe(0);
+  });
+
+  it('scrollCarousel accumulates and clamps to [0, maxOffset]', () => {
+    scrollCarousel('k', -50, 300);
+    expect(offsetFor('k')).toBe(0);
+    scrollCarousel('k', 120, 300);
+    scrollCarousel('k', 120, 300);
+    expect(offsetFor('k')).toBe(240);
+    scrollCarousel('k', 999, 300);
+    expect(offsetFor('k')).toBe(300);
+  });
+
+  it('re-clamps when the strip shortens under it (a filter, a resize)', () => {
+    setOffset('k', 900, 1000);
+    setOffset('k', offsetFor('k'), 200);     // the scene re-measures a shorter strip
+    expect(offsetFor('k')).toBe(200);
+    expect(carouselStore.getState().maxOffset).toBe(200);
+  });
+
+  it('switching content drops the previous needle with the offset', () => {
+    setFilter('browse:p1:graveyard', 'bolt');
+    setOffset('prompt:9', 0, 400);
+    expect(filterFor('prompt:9')).toBe('');
+    expect(carouselStore.getState().filter).toBe('');
+  });
+
+  it('typing a needle seeks back to the start — the match is not where you were', () => {
+    setOffset('k', 600, 1000);
+    setFilter('k', 'sol');
+    expect(offsetFor('k')).toBe(0);
   });
 
   it('toggleBrowse toggles the same pile and resets the filter', () => {

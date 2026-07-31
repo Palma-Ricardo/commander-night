@@ -1,16 +1,25 @@
-// The carousel browser (prompts-on-the-table §4.4), pure and headless: what the
-// fan shows (`carouselContent`) and where each card of the current page sits
-// (`layoutCarouselFan`). The scene renders the result as screen-space CardActors
-// — the same fan vocabulary as the hand, one band above it — and the DOM bar
-// (chrome/CarouselBar) renders the title/filter/paging chrome from the same
-// content, so canvas and chrome can never disagree about what is open.
+// The carousel browser (prompts-on-the-table §4.4), pure and headless: what it
+// shows (`carouselContent`) and where each card sits (`layoutCarouselStrip`).
+// The scene renders the result as screen-space CardActors one band above the
+// hand, and the DOM bar (chrome/CarouselBar) renders the title/filter/seek
+// chrome from the same content, so canvas and chrome can never disagree about
+// what is open or where along it you are.
 //
-// Two clients of one surface:
+// Amended 2026-07-30 by Issues.txt #8/#14: it is a **flat strip you scroll**,
+// not a paged fan. The fan curve and the ◀ ▶ page buttons both went — the curve
+// because that vocabulary means "held cards, yours" and wearing it here made a
+// graveyard read like a second hand, the pages because they cut a scan into
+// arbitrary blocks of nine when the natural gesture for a long row is to push
+// it. Every mode now also takes a name filter, which only browse had.
+//
+// Three clients of one surface:
 //  • Prompt mode — a chooseTargets whose candidates the felt can't offer: a
 //    `cards[]` grid (library looks, an opponent's graveyard pick) or candidate
 //    ids outside this seat's view (§5.2 / §13 no-dead-end). Auto-opens; server
 //    candidate order is preserved (reordering a choice list would be lying —
-//    Modal.tsx's rule, kept). Closes only with its prompt.
+//    Modal.tsx's rule, kept, which is why the filter here only hides). Closes
+//    only with its prompt.
+//  • Reveal mode — §6 revealed/lookedAt windows, ambient, leaving by patch.
 //  • Browse mode — a clicked graveyard/exile pile, read-only, with the scan
 //    ordering + name filter from pile.ts. A pending prompt-mode ask *wins* over
 //    an open browse; the browse reappears when the ask clears.
@@ -18,7 +27,6 @@
 import type { Card, GameState, Id } from '@night/core';
 import { unreachableCandidates } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
-import { CAROUSEL_PAGE_SIZE } from '../tuning';
 import { handBandHeight } from './screen';
 import { filterSortPile } from './pile';
 import type { ActorPlacement, Size } from './types';
@@ -36,31 +44,63 @@ export interface CarouselEntry {
 
 export interface CarouselContent {
   mode: 'prompt' | 'reveal' | 'browse';
-  /** Identity for page-reset: a new key starts back at page 0. */
+  /** Identity for scroll/filter reset: a new key starts back at offset 0 with a
+   *  clean needle. */
   key: string;
   title: string;
+  /** What is shown — after the name filter. */
   entries: CarouselEntry[];
+  /** How many there were before filtering. Drives "n of m" and whether the bar
+   *  offers a filter at all (a three-card look does not need one). */
+  total: number;
+}
+
+/** Below this, a set is small enough to read at a glance and the filter is
+ *  clutter. Browse mode shows it regardless — a pile scan has always had one. */
+export const CAROUSEL_FILTER_MIN = 8;
+
+/** Name-contains, order preserved. Distinct from `filterSortPile`, which also
+ *  *sorts*: a prompt's candidate list arrives in the server's order and
+ *  reordering it would be lying about the choice (Modal.tsx's rule, kept). A
+ *  pile has no such order to respect, so browse mode keeps the scan sort. */
+function filterByName(entries: CarouselEntry[], filter: string): CarouselEntry[] {
+  const needle = filter.trim().toLowerCase();
+  if (needle === '') return entries;
+  return entries.filter(e => e.label.toLowerCase().includes(needle));
 }
 
 const ZONE_TITLE: Record<BrowseZone, string> = { graveyard: 'graveyard', exile: 'exile' };
 
 /** What the carousel shows right now, or undefined (closed). Prompt mode wins
- *  over an open browse — the ask is the one thing that must be answerable. */
+ *  over an open browse — the ask is the one thing that must be answerable.
+ *
+ *  `filter` is a name needle applied in every mode: a library search hands you
+ *  99 cards and offered no way to find one in them, while the graveyard scan
+ *  beside it had a filter all along (Issues.txt #14). `filterKey` fences it to
+ *  the content it was typed against — a needle left over from the last ask would
+ *  silently hide candidates in the next one — and defaults to unfenced for
+ *  callers with a single content in hand. */
 export function carouselContent(
   prompt: PromptStoreState | undefined,
   state: GameState | undefined,
   browse: BrowseRef | undefined,
   filter: string,
+  filterKey?: string,
 ): CarouselContent | undefined {
+  const needleFor = (key: string): string =>
+    filterKey === undefined || filterKey === key ? filter : '';
+  const promptContent = (key: string, all: CarouselEntry[]): CarouselContent => ({
+    mode: 'prompt', key, title: 'Choose',
+    entries: filterByName(all, needleFor(key)), total: all.length,
+  });
+
   const p = prompt?.pending;
   if (p?.kind === 'chooseTargets' && state !== undefined) {
     // The server sent the candidates as cards: they are usually not on the felt
     // at all (a library look) — the fan is the whole affordance.
     if (p.cards !== undefined && p.cards.length > 0) {
-      return {
-        mode: 'prompt', key: `prompt:${p.promptId}`, title: 'Choose',
-        entries: p.cards.map(c => ({ id: c.id, card: c, label: c.name })),
-      };
+      return promptContent(`prompt:${p.promptId}`,
+        p.cards.map(c => ({ id: c.id, card: c, label: c.name })));
     }
     // Candidates the board can't offer as a click — pile-zone ids buried under a
     // pile top, ids outside this seat's view. Players are board-reachable (their
@@ -68,10 +108,8 @@ export function carouselContent(
     const stranded = unreachableCandidates(state, p.candidates)
       .filter(s => !state.players.some(pl => pl.id === s.id));
     if (stranded.length > 0) {
-      return {
-        mode: 'prompt', key: `prompt:${p.promptId}`, title: 'Choose',
-        entries: stranded.map(s => ({ id: s.id, card: s.card, label: s.label })),
-      };
+      return promptContent(`prompt:${p.promptId}`,
+        stranded.map(s => ({ id: s.id, card: s.card, label: s.label })));
     }
   }
   // Reveal windows (§6 revealed/lookedAt): ambient state, not an ask — they
@@ -88,13 +126,13 @@ export function carouselContent(
       const title = windows
         .map(w => (w.private ? `${w.name} (only you)` : w.name))
         .join(' · ');
+      // Names identify the windows; a growing card count keeps the newest
+      // additions in view without resetting on unrelated patches.
+      const key = `reveal:${windows.map(w => `${w.name}#${w.cards.length}`).join('|')}`;
+      const all = windows.flatMap(w => w.cards.map(c => ({ id: c.id, card: c, label: c.name })));
       return {
-        mode: 'reveal',
-        // Names identify the windows; a growing card count keeps the newest
-        // additions in view without resetting on unrelated patches.
-        key: `reveal:${windows.map(w => `${w.name}#${w.cards.length}`).join('|')}`,
-        title,
-        entries: windows.flatMap(w => w.cards.map(c => ({ id: c.id, card: c, label: c.name }))),
+        mode: 'reveal', key, title,
+        entries: filterByName(all, needleFor(key)), total: all.length,
       };
     }
   }
@@ -102,70 +140,101 @@ export function carouselContent(
     const player = state.players.find(pl => pl.id === browse.playerId);
     if (player !== undefined) {
       const cards = player[browse.zone];
+      const key = `browse:${browse.playerId}:${browse.zone}`;
       return {
-        mode: 'browse',
-        key: `browse:${browse.playerId}:${browse.zone}`,
+        mode: 'browse', key,
         title: `${player.name} — ${ZONE_TITLE[browse.zone]} (${cards.length})`,
-        entries: filterSortPile(cards, filter).map(c => ({ id: c.id, card: c, label: c.name })),
+        // The pile scan sort comes with the filter here (pile.ts) — a pile has no
+        // meaningful order of its own to preserve, unlike a candidate list.
+        entries: filterSortPile(cards, needleFor(key)).map(c => ({ id: c.id, card: c, label: c.name })),
+        total: cards.length,
       };
     }
   }
   return undefined;
 }
 
-export function carouselPageCount(count: number): number {
-  return Math.max(1, Math.ceil(count / CAROUSEL_PAGE_SIZE));
-}
-
 const CARD_TEX = { w: 200, h: 280 } as const;
 
-export interface CarouselFan {
-  /** Clamped page actually shown. */
-  page: number;
-  pageCount: number;
-  /** Placement per shown entry, keyed by its index into `entries`. */
+// Centre-to-centre spacing, as a fraction of a card. Cards overlap slightly —
+// the left ~82% of each shows, which is the name bar, the mana cost and most of
+// the art, the same reading the hand fan relies on. Laying them edge to edge
+// instead looked tidier and cost a third of the cards on screen: a nine-card
+// graveyard used to fit one page and would have needed scrolling. #8 asked for
+// the *curve* to go, not for the density.
+const STRIP_STEP_RATIO = 0.82;
+const STRIP_MARGIN = 32;   // kept clear at both ends of the scrollable run
+// How far past the viewport an entry is still given a placement. The strip is
+// laid out in full (a library look is ~99 cards), but only what is near the
+// window becomes an actor — one card of slack each side so a scroll never pops
+// a card into existence at the edge of vision.
+const STRIP_CULL = 1.5;
+
+export interface CarouselStrip {
+  /** Clamped scroll offset actually used, px from the strip's start. The scene
+   *  writes this back to the store, so an over-scrolled offset self-corrects
+   *  on the next sync instead of leaving the slider miles past its end. */
+  offset: number;
+  /** Largest useful offset. 0 ⇒ the whole strip fits and never scrolls. */
+  maxOffset: number;
+  /** Centre-to-centre spacing — one "card" of scroll, for the wheel and keys. */
+  step: number;
+  /** Placement per *shown* entry, keyed by its index into `entries`. Entries
+   *  scrolled far off-screen are absent (see STRIP_CULL). */
   placements: Map<number, ActorPlacement>;
 }
 
-/** The current page's fan, in screen coordinates: centred in the felt left of
- *  the log gutter, one band above the hand, arced like the hand fan but with
- *  enough spread that every face reads. Pure — the bar and the scene both call
- *  it, so the page the buttons show is the page the cards show. */
-export function layoutCarouselFan(
-  count: number, page: number, viewport: Size, rightInset = 0,
-): CarouselFan {
-  const pageCount = carouselPageCount(count);
-  const p = Math.min(Math.max(0, page), pageCount - 1);
-  const start = p * CAROUSEL_PAGE_SIZE;
-  const n = Math.min(CAROUSEL_PAGE_SIZE, count - start);
-  const placements = new Map<number, ActorPlacement>();
-  if (n <= 0) return { page: p, pageCount, placements };
-
+/** The strip, in screen coordinates: one flat row of card fronts centred in the
+ *  felt left of the log gutter, a band above the hand, scrolled continuously by
+ *  `offset` (Issues.txt #8).
+ *
+ *  Flat is deliberate. The fan curve — an arc and a per-card rotation — belongs
+ *  to the *hand*, where it says "these are yours, held". Wearing it here made a
+ *  graveyard scan and a library search read like a second hand you could play
+ *  from, and it cost legibility at exactly the moment you are reading names. The
+ *  hand keeps its fan; every other zone is a filmstrip.
+ *
+ *  Continuous, also deliberate. Paging cut a scan into arbitrary blocks of nine
+ *  and made "is the card I want in here?" a question you answered one page at a
+ *  time; a strip you push is the same gesture as pushing the pile itself. Pure,
+ *  so the bar's slider and the canvas can never disagree about where you are. */
+export function layoutCarouselStrip(
+  count: number, offset: number, viewport: Size, rightInset = 0,
+): CarouselStrip {
   const band = handBandHeight(viewport);
   const availW = Math.max(200, viewport.w - Math.max(0, rightInset));
-  // A readable face: taller than a hand card, capped so a full page plus the
-  // hand still fits the viewport.
+  // A readable face: taller than a hand card, capped so the strip plus the hand
+  // still fits the viewport.
   const cardH = Math.min(320, Math.max(200, (viewport.h - band) * 0.42));
   const scale = cardH / CARD_TEX.h;
   const cardW = CARD_TEX.w * scale;
-  const margin = 32;
-  const step = n > 1 ? Math.min(cardW * 0.78, (availW - cardW - 2 * margin) / (n - 1)) : 0;
-  const spanW = step * (n - 1);
-  const cx = availW / 2;
-  const baseY = viewport.h - band - cardH / 2 - 28;
+  const step = cardW * STRIP_STEP_RATIO;
+  const placements = new Map<number, ActorPlacement>();
+  if (count <= 0) return { offset: 0, maxOffset: 0, step, placements };
 
-  for (let i = 0; i < n; i++) {
-    const t = n > 1 ? i / (n - 1) - 0.5 : 0;        // -0.5 … 0.5 across the fan
-    placements.set(start + i, {
-      x: cx - spanW / 2 + i * step,
-      y: baseY + Math.abs(t) * cardH * 0.06,        // slight downward arc at the ends
-      rotation: t * 0.06,
+  const stripW = step * (count - 1) + cardW;
+  const runW = availW - 2 * STRIP_MARGIN;
+  const maxOffset = Math.max(0, stripW - runW);
+  const o = Math.min(Math.max(0, offset), maxOffset);
+  // Short enough to fit ⇒ centre it and never scroll; longer ⇒ pin to the left
+  // margin and slide, so the first card sits where the eye already is.
+  const x0 = maxOffset === 0
+    ? (availW - stripW) / 2 + cardW / 2
+    : STRIP_MARGIN + cardW / 2 - o;
+  const y = viewport.h - band - cardH / 2 - 28;
+
+  for (let i = 0; i < count; i++) {
+    const x = x0 + i * step;
+    if (x < -cardW * STRIP_CULL || x > availW + cardW * STRIP_CULL) continue;
+    placements.set(i, {
+      x, y,
+      rotation: 0,            // flat: the fan curve is the hand's alone (#8)
       scale,
       zone: 'library',        // a neutral portrait zone: no battlefield chrome, no hand hit-area
       faceUp: true,
     });
   }
-  return { page: p, pageCount, placements };
+  return { offset: o, maxOffset, step, placements };
 }
 
 /** Where the DOM bar sits: just above the fan's tallest card, as px from the
