@@ -14,7 +14,9 @@
 // rather than destroying and recreating it. The stack's ephemeral id is adopted
 // onto that stable key via `stackLink` (scene/keys.ts), unifying cast → resolve.
 
-import { Application, Container, Graphics, PerspectiveMesh, Rectangle, Text, Texture, TextStyle } from 'pixi.js';
+import {
+  Application, Container, FillGradient, Graphics, PerspectiveMesh, Rectangle, Text, Texture, TextStyle,
+} from 'pixi.js';
 import type { FederatedPointerEvent } from 'pixi.js';
 import type {
   Card, GameEvent, GameState, Id, NightScene, Phase, SceneActor, ScryfallResolver, Step, Verb, Zone,
@@ -25,10 +27,12 @@ import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
 import { Effects } from '../render/Effects';
 import {
-  NAMEPLATE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
+  NAMEPLATE, OPP_HAND_MAX, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
   type PileZone, type SeatLayout,
 } from '../layout/world';
-import type { ActorSpace, PlacedActor, Point, Rect, Size, Transform } from '../layout/types';
+import type {
+  ActorPlacement, ActorSpace, PlacedActor, Point, Rect, Size, Transform,
+} from '../layout/types';
 import {
   camera, worldToScreen, screenToWorld, depthScaleAt, type CameraPreset, type CameraView,
 } from '../camera/camera';
@@ -37,8 +41,8 @@ import { layoutKeyed, type StackLinks } from './keys';
 import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX, PAGE_TURN_MS } from '../tuning';
 import { handPageCount, stackAnchor } from '../layout/screen';
 import {
-  carouselContent, layoutCarouselStrip,
-  type BrowseZone, type CarouselContent, type CarouselEntry,
+  carouselContent, layoutCarouselStrip, stripAlphaAt,
+  type BrowseZone, type CarouselContent, type CarouselEntry, type CarouselStrip,
 } from '../layout/carousel';
 import { carouselStore, offsetFor, scrollCarousel, setOffset } from './carousel-store';
 import { promptObjectIds, spreadBoardIds, stackTargetIds } from './prompt-objects';
@@ -47,17 +51,71 @@ import {
   type Projector, type ScreenAnchor,
 } from './interaction';
 
-const RAIL = 0x0e0b08;      // the floor the table sits on
-const FELT = 0x1f3a2e;
-const FELT_EDGE = 0x14261d;
-const BRASS = 0x8a6a3a;
-const BRASS_FILL = 0x3a2f1c;
-const INK = 0xe8d9b0;
+// ── the palette (design §7.2, Issues.txt #3) ─────────────────────────────────
+// Lifted from the mockup's `:root` (table-mockup-reference) rather than eyeballed.
+// What shipped through the first night was a flat mid-green slab with no rail, no
+// gradient and four hard-edged discs of "lamplight": legible, but it read as a
+// diagram of a table rather than a table. The named tokens below are the mockup's;
+// where our renderer can't do a CSS thing directly (gradients on keystoned quads)
+// the comment says what we do instead.
+const ROOM = 0x060907;         // --void: the dark beyond the table
+const ROOM_MID = 0x101713;     // the room's radial-gradient centre, behind the table
+const WOOD = 0x241a11;         // --wood: the rail the felt is inlaid into
+const WOOD_HI = 0x3a2a19;      // --wood-hi
+const WOOD_LO = 0x150f09;
+// The felt is a radial pool, not a colour: bright where the lamp falls, sinking to
+// near-black in the corners. These are the mockup's four stops.
+const FELT_STOPS = [0x2a3a30, 0x1e2b23, 0x17211b, 0x121a16] as const;
+const FELT = FELT_STOPS[1];    // the representative mid-tone, for anything flat
+const LAMP = 0xe8c07a;         // the hanging lamp's warm core
+const POOL = 0xc99a46;         // a seat's own pool of light (= --brass)
+const BRASS = 0xc99a46;        // --brass
+const BRASS_HI = 0xf2c86c;     // --brass-hi: life totals, your own plate's edge
+const BRASS_DIM = 0x7e6330;    // --brass-dim: an opponent's plate edge
+const BRASS_FILL = 0x2a2317;   // plate face (top of the mockup's plate gradient)
+const BRASS_FILL_LO = 0x1a1610;// ...and its bottom
+const OWN_FILL = 0x3a2e17;     // your own plate sits a stop brighter
+const OWN_FILL_LO = 0x221b10;
+const INK = 0xeae5d8;          // --ink
+const INK_2 = 0xa6b0a9;        // --ink-2
+const INK_3 = 0x6c7871;        // --ink-3
 const DIM_ALPHA = 0.72;
 // Commander-damage plate chips (§6): a cold red pill per attacking commander.
-const DMG_INK = 0xf0a89a;
-const DMG_FILL = 0x2a100c;
-const DMG_EDGE = 0x5e1f16;
+const DANGER = 0xd2452f;       // --danger
+const DMG_INK = 0xffd9d2;
+const DMG_FILL = 0x7a2318;
+const DMG_EDGE = DANGER;
+const HIT_FILL = 0x3b1a12;     // a nameplate taking unblocked damage
+const HIT_FILL_LO = 0x23100b;
+
+// Table geometry, in world px. The felt is *inlaid* into a wooden rail (the
+// mockup's `--rail: 40px` against its 1664-wide world; ours is 2400 wide, so this
+// is the same fraction) — an edge you can see the table end at.
+const RAIL = 58;
+const TABLE_RADIUS = 38;
+const FELT_RADIUS = 18;
+const WEAVE_PITCH = 7;         // spacing of the cloth's diagonal hairlines
+
+/** A soft pool of light: concentric discs painted outside-in, since a Graphics
+ *  circle is a hard-edged disc and four of those at 5% is exactly what read as
+ *  "four pale circles on a green rectangle" after the first night (#3).
+ *
+ *  The stack composites to a chosen profile rather than an arbitrary ramp: the
+ *  light should reach `peak` alpha at the centre and fall to nothing at `radius`
+ *  as (1−t)^`power`, so each ring carries only the *difference* between its own
+ *  target and the next one out. That keeps `peak` meaning what it says instead of
+ *  being a number you tune by eye against the ring count. */
+function feather(
+  g: Graphics, cx: number, cy: number, radius: number, color: number, peak: number, power: number,
+): void {
+  const steps = 18;
+  const at = (t: number): number => peak * Math.max(0, 1 - t) ** power;
+  for (let i = steps; i >= 1; i--) {
+    const alpha = at((i - 0.5) / steps) - at((i + 0.5) / steps);
+    if (alpha <= 0.0006) continue;
+    g.circle(cx, cy, (radius * i) / steps).fill({ color, alpha });
+  }
+}
 
 // Player-counter chips (#26): the common counters get a glyph; anything else
 // shows its own name. Poison renders in the danger tone (10 = dead).
@@ -78,6 +136,9 @@ const HOVER_GRACE_MS = 140;     // let the pointer cross the gap from a card to 
 // this ceiling is a taste call, not a safety one.
 const HAND_ZOOM_MAX = 4;
 const HAND_ZOOM_STEP = 0.2;
+// Below this alpha a strip card is in the dissolve, not the reading window, and
+// stops taking clicks (#8 amendment) — you cannot read what you would be picking.
+const CAROUSEL_LIVE_ALPHA = 0.5;
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
 const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
 
@@ -151,6 +212,9 @@ export class TableScene implements DirectorSink {
   private latestState: GameState | undefined;
   private readonly carouselActors = new Map<string, CardActor>();
   private carouselKey: string | undefined;          // last content identity, for open/turn juice
+  /** The last laid-out strip, kept so `paint` can dissolve each card against the
+   *  reading window from its *live* x every frame (#8 amendment). */
+  private carouselStrip: CarouselStrip | undefined;
   private unsubCarousel?: () => void;
   private lastHandPage = -1;
   // Stack tethers (T4 §9): the source + target arrows of the top-of-stack item.
@@ -253,7 +317,7 @@ export class TableScene implements DirectorSink {
   async mount(parent: HTMLElement, resolver: ScryfallResolver): Promise<void> {
     this.app = new Application();
     await this.app.init({
-      background: RAIL, antialias: true, resizeTo: parent,
+      background: ROOM, antialias: true, resizeTo: parent,
       resolution: window.devicePixelRatio || 1, autoDensity: true,
     });
     parent.appendChild(this.app.canvas);
@@ -433,7 +497,7 @@ export class TableScene implements DirectorSink {
       } else {
         actor.snapTo(p.placement);
       }
-      actor.view.alpha = this.dimAlpha(p.space, p.placement.zone, p.placement.ownerId, focusedId);
+      actor.view.alpha = this.dimAlpha(p.space, p.placement, focusedId);
     }
 
     for (const [key, actor] of this.actors) {
@@ -487,10 +551,27 @@ export class TableScene implements DirectorSink {
     this.updateFeltMesh(preset);
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
-    for (const a of this.carouselActors.values()) a.render(screen);
+    this.paintCarousel(screen);
     this.drawStackTethers(preset);   // arrows read the actors' fresh projected bounds
     this.drawDragLine();             // the §4.2 chalk line tracks the same fresh bounds
     this.effects.render(world);   // effects live in world space (they self-project)
+  }
+
+  /** Paint the strip and dissolve its ends (#8 amendment). The alpha comes from
+   *  each card's *live* x, not its placement, so a card sliding in from beyond the
+   *  window fades up as it travels rather than arriving already lit. A card faded
+   *  past legibility also stops taking clicks — it is outside the reading window,
+   *  and a ghost that answers a prompt is worse than one you can't see. */
+  private paintCarousel(screen: Projector): void {
+    const strip = this.carouselStrip;
+    for (const a of this.carouselActors.values()) {
+      a.render(screen);
+      if (strip === undefined) continue;
+      const alpha = stripAlphaAt(strip, a.pos.x);
+      a.view.alpha = alpha;
+      const mode = alpha > CAROUSEL_LIVE_ALPHA ? 'static' : 'none';
+      if (a.view.eventMode !== mode) a.view.eventMode = mode;
+    }
   }
 
   /** Map the felt texture onto the four projected world corners — the trapezoid
@@ -841,10 +922,16 @@ export class TableScene implements DirectorSink {
     // Source arrow (triggered/activated abilities): the source permanent → the
     // pile. The stackLink binds the ability's ephemeral id to its source; a spell's
     // link points at the stack actor itself (zone 'stack'), which we skip.
+    //
+    // The head belongs on the *pile*: the ability came off the permanent and went
+    // onto the stack, so the arrow reads in the direction the thing travelled.
+    // It shipped with the head on the source until 2026-07-30 (Issues.txt #21) —
+    // the comment already said "head at the pile" while the flag said otherwise —
+    // which read as the stack reaching back to grab the permanent.
     const srcActor = this.actorByObject(this.stackLinks.get(top.id));
     if (srcActor !== undefined && srcActor.placement.zone !== 'stack') {
       const col = srcActor.card !== undefined ? identityColor(srcActor.card) : TETHER_SOURCE;
-      this.tether(g, centreOf(srcActor.bounds()), pile, col, false);   // head at the pile
+      this.tether(g, centreOf(srcActor.bounds()), pile, col, true);   // head at the pile
     }
 
     // Target arrows: the pile → each chosen target (permanent, player, or — for a
@@ -992,10 +1079,13 @@ export class TableScene implements DirectorSink {
   }
 
   /** Unfocused seats dim (design §7.3); the contested stack and your hand never do. */
-  private dimAlpha(space: ActorSpace, zone: Zone, ownerId: Id | undefined, focusedId: Id | undefined): number {
-    if (focusedId === undefined || space === 'screen') return 1;
-    if (zone === 'stack') return 1;
-    return ownerId === focusedId ? 1 : DIM_ALPHA;
+  private dimAlpha(space: ActorSpace, p: ActorPlacement, focusedId: Id | undefined): number {
+    // The layout's own fade (an elided hand's ends, #11) multiplies with the §7.3
+    // focus dimming — a faded card in an unfocused quadrant is both.
+    const own = p.alpha ?? 1;
+    if (focusedId === undefined || space === 'screen') return own;
+    if (p.zone === 'stack') return own;
+    return own * (p.ownerId === focusedId ? 1 : DIM_ALPHA);
   }
 
   /** Re-apply §7.3 dimming to every actor for the current camera focus. Called on
@@ -1005,7 +1095,7 @@ export class TableScene implements DirectorSink {
     if (state === undefined) return;
     const focusedId = this.focusedPlayerId(state);
     for (const a of this.actors.values()) {
-      a.view.alpha = this.dimAlpha(a.space, a.placement.zone, a.placement.ownerId, focusedId);
+      a.view.alpha = this.dimAlpha(a.space, a.placement, focusedId);
     }
   }
 
@@ -1101,6 +1191,7 @@ export class TableScene implements DirectorSink {
     const entries = content?.entries ?? [];
     const strip = layoutCarouselStrip(
       entries.length, offsetFor(content?.key), this.size, this.rightInset);
+    this.carouselStrip = content === undefined ? undefined : strip;
     // Opening (or swapping to different content) is a different motion from
     // scrolling the same strip: the first rises through the table edge, the
     // second slides in from whichever end it entered by.
@@ -1110,7 +1201,7 @@ export class TableScene implements DirectorSink {
     // itself from these, and an over-scroll (a filter that shortened the strip,
     // a resize) corrects itself here rather than stranding the thumb past its end.
     if (content !== undefined) setOffset(content.key, strip.offset, strip.maxOffset);
-    const runW = Math.max(200, this.size.w - Math.max(0, this.rightInset));
+    const runMid = strip.run.left + strip.run.width / 2;
 
     const live = new Set<string>();
     for (const [index, placement] of strip.placements) {
@@ -1131,9 +1222,11 @@ export class TableScene implements DirectorSink {
           actor.animateTo(placement, PAGE_TURN_MS);
         } else {
           // a scroll: enter from the end it came in by, at strip height, and let
-          // the mask do the clipping (#8). Rising here read as cards popping up
+          // the dissolve do the rest (#8). Rising here read as cards popping up
           // out of the table one at a time while you pushed the row sideways.
-          const from = placement.x > runW / 2 ? runW + strip.step : -strip.step;
+          const from = placement.x > runMid
+            ? strip.run.left + strip.run.width + strip.step
+            : strip.run.left - strip.step;
           actor.seedCurrent({ x: from, y: placement.y, rotation: 0, scale: placement.scale });
           actor.animateTo(placement, PAGE_TURN_MS);
         }
@@ -1699,32 +1792,103 @@ export class TableScene implements DirectorSink {
 
   // ── felt + furniture ─────────────────────────────────────────────────────────
 
-  /** Bake the static felt surface (rail-inset cloth, edge, quarter folds, and each
-   *  seat's pool of lamplight) into a world-sized texture, then hand it to the felt
-   *  mesh. The lamplight rides the felt so it keystones with the surface for free.
+  /** Bake the whole table surface into a world-sized texture, then hand it to the
+   *  felt mesh: the wood rail, the felt inlaid into it, the cloth's weave and
+   *  quarter folds, the hanging lamp, and each seat's pool of light. Everything
+   *  rides the one texture, so all of it keystones with the surface for free.
    *  Rebuilt only when the seat layout moves (guarded by a signature) — the mesh's
-   *  four corners are re-projected every frame regardless. */
+   *  four corners are re-projected every frame regardless.
+   *
+   *  Issues.txt #3: this used to be a flat green rounded rectangle with a darker
+   *  border and four hard-edged discs at 5% alpha. Every one of those is now the
+   *  mockup's own treatment — a rail the cloth is *inset* into (so the table has an
+   *  edge you can see it end at), a radial felt that is brightest under the lamp,
+   *  a weave, and light that falls off instead of stopping. */
   private rebuildFelt(state: GameState): void {
     const seats = seatLayouts(state);
     const sig = seats.map(s => `${Math.round(s.lamplight.x)},${Math.round(s.lamplight.y)},${Math.round(s.lamplight.r)}`).join('|');
     if (sig === this.feltSig && this.feltTex !== undefined) return;
     this.feltSig = sig;
     const g = new Graphics();
-    g.roundRect(0, 0, WORLD.w, WORLD.h, 36).fill(FELT);
-    g.roundRect(6, 6, WORLD.w - 12, WORLD.h - 12, 30).stroke({ width: 10, color: FELT_EDGE, alpha: 0.9 });
-    // quarter folds, stopping short of the edges (§7.2)
-    g.moveTo(WORLD.w / 2, WORLD.h * 0.06).lineTo(WORLD.w / 2, WORLD.h * 0.94)
-      .moveTo(WORLD.w * 0.06, WORLD.h / 2).lineTo(WORLD.w * 0.94, WORLD.h / 2)
-      .stroke({ width: 2, color: 0x000000, alpha: 0.16 });
-    for (const seat of seats) {
-      const { x, y, r } = seat.lamplight;
-      g.circle(x, y, r).fill({ color: 0xffe6ad, alpha: 0.05 });
+    const { w, h } = WORLD;
+
+    // The rail: a wooden table top, lit from the upper left.
+    g.roundRect(0, 0, w, h, TABLE_RADIUS).fill(new FillGradient({
+      type: 'linear', textureSpace: 'local', start: { x: 0.15, y: 0 }, end: { x: 0.85, y: 1 },
+      colorStops: [
+        { offset: 0, color: WOOD_HI }, { offset: 0.46, color: WOOD }, { offset: 1, color: WOOD_LO },
+      ],
+    }));
+    // ...with a hairline of light along its top edge, so the rail reads as raised.
+    g.roundRect(2, 2, w - 4, h - 4, TABLE_RADIUS - 2)
+      .stroke({ width: 3, color: 0xffffff, alpha: 0.06 });
+
+    // The felt inlay. Brightest where the lamp hangs (a touch above centre, as the
+    // mockup has it), sinking toward the corners — this is what makes the table
+    // read as lit from one point rather than uniformly filled.
+    const inner = { x: RAIL, y: RAIL, w: w - 2 * RAIL, h: h - 2 * RAIL };
+    g.roundRect(inner.x, inner.y, inner.w, inner.h, FELT_RADIUS).fill(new FillGradient({
+      type: 'radial', textureSpace: 'local',
+      center: { x: 0.5, y: 0.46 }, innerRadius: 0,
+      outerCenter: { x: 0.5, y: 0.46 }, outerRadius: 0.62,
+      colorStops: [
+        { offset: 0, color: FELT_STOPS[0] }, { offset: 0.52, color: FELT_STOPS[1] },
+        { offset: 0.8, color: FELT_STOPS[2] }, { offset: 1, color: FELT_STOPS[3] },
+      ],
+    }));
+    // The cloth's shadowed lip where it meets the rail.
+    g.roundRect(inner.x, inner.y, inner.w, inner.h, FELT_RADIUS)
+      .stroke({ width: 6, color: 0x000000, alpha: 0.4 });
+
+    this.paintWeave(g, inner);
+
+    // The quarter folds — where the cloth was creased, so *light* catching a raised
+    // crease, not a drawn line. (They were dark before, which read as ruled ink and
+    // was the single strongest "this is a diagram" cue.) Both stop short of the
+    // edges: a fold does not run off a table.
+    for (const fold of [
+      { x1: w / 2, y1: h * 0.08, x2: w / 2, y2: h * 0.92 },
+      { x1: w * 0.08, y1: h / 2, x2: w * 0.92, y2: h / 2 },
+    ]) {
+      g.moveTo(fold.x1, fold.y1).lineTo(fold.x2, fold.y2)
+        .stroke({ width: 2, color: 0xffffff, alpha: 0.055 });
     }
-    const tex = this.app.renderer.generateTexture({ target: g, frame: new Rectangle(0, 0, WORLD.w, WORLD.h), resolution: 1 });
+
+    // One lamp over the middle of the table, and a pool at each place setting.
+    // Both are feathered by hand: a Graphics circle is a hard-edged disc, and four
+    // of those at 5% was the "four pale circles" look the night reported.
+    feather(g, w / 2, h * 0.46, w * 0.46, LAMP, 0.15, 1.5);
+    for (const seat of seats) {
+      feather(g, seat.lamplight.x, seat.lamplight.y, seat.lamplight.r, POOL, 0.11, 1.3);
+    }
+
+    const tex = this.app.renderer.generateTexture({ target: g, frame: new Rectangle(0, 0, w, h), resolution: 1 });
     this.feltMesh.texture = tex;
     this.feltTex?.destroy(true);
     this.feltTex = tex;
     g.destroy();
+  }
+
+  /** The cloth's weave: two sets of fine diagonal hairlines, one catching light and
+   *  one in shadow, clipped to the felt. Baked once with the felt, so the cost is a
+   *  few hundred line ops at layout time and nothing per frame. Without it the felt
+   *  is a plane of solid colour, and no amount of gradient makes that read as cloth. */
+  private paintWeave(g: Graphics, r: Rect): void {
+    const pitch = WEAVE_PITCH;
+    // Each 45° line is addressed by where it crosses the felt's top edge and walks
+    // down at ±1; clipped analytically to the felt rect (there is no mask on a
+    // baked texture, and an unclipped diagonal runs out over the rail).
+    for (const [dir, color, alpha] of [[1, 0xffffff, 0.022], [-1, 0x000000, 0.05]] as const) {
+      for (let x0 = r.x - r.h; x0 < r.x + r.w + r.h; x0 += pitch) {
+        const a = dir === 1 ? r.x - x0 : x0 - r.x - r.w;
+        const b = dir === 1 ? r.x + r.w - x0 : x0 - r.x;
+        const t0 = Math.max(0, a);
+        const t1 = Math.min(r.h, b);
+        if (t1 <= t0) continue;
+        g.moveTo(x0 + dir * t0, r.y + t0).lineTo(x0 + dir * t1, r.y + t1);
+      }
+      g.stroke({ width: 1, color, alpha });
+    }
   }
 
   /** Rebuild the furniture model for a new state: shape specs (drawn as projected
@@ -1767,8 +1931,19 @@ export class TableScene implements DirectorSink {
       const count = counts[zone];
       const cold = zone === 'exile';
       const rect: Rect = { x: a.x - w / 2, y: a.y - h / 2, w, h };
-      if (count === 0) this.shapeSpecs.push({ rect, stroke: { width: 1.5, color: cold ? 0x486070 : 0x000000, alpha: 0.3 } });
-      else this.shapeSpecs.push({ rect, fill: { color: cold ? 0x121d24 : 0x000000, alpha: cold ? 0.42 : 0.3 } });
+      // An occupied pile's footprint is the *edge of the stack under the top card*
+      // (the mockup's `.pile-layer`): a shade lighter than the felt, with a hairline
+      // of light on it. It used to be a black rectangle, which is what a hole in a
+      // table looks like — not a stack of cards. Empty stays an outline.
+      if (count === 0) {
+        this.shapeSpecs.push({ rect, stroke: { width: 1.5, color: cold ? 0x486070 : 0xffffff, alpha: 0.11 } });
+      } else {
+        this.shapeSpecs.push({
+          rect,
+          fill: { color: cold ? 0x1c2228 : 0x232a26, alpha: 0.95 },
+          stroke: { width: 1, color: 0xffffff, alpha: 0.09 },
+        });
+      }
 
       // The command zone is always 1–2 (the commander), so a count there is noise —
       // the zone tag alone. Every other pile carries its size.
@@ -1776,7 +1951,7 @@ export class TableScene implements DirectorSink {
         zone === 'command' ? PILE_LABEL[zone] : `${PILE_LABEL[zone]} ${count}`,
         new TextStyle({
           fontFamily: 'ui-monospace, monospace', fontSize: 15, letterSpacing: 1,
-          fill: count === 0 ? 0x6c7871 : 0xa6b0a9, fontWeight: '600',
+          fill: count === 0 ? INK_3 : INK_2, fontWeight: '600',
         }),
         0.5, 0, { x: a.x, y: a.y + h / 2 + 6 },
       );
@@ -1784,14 +1959,24 @@ export class TableScene implements DirectorSink {
   }
 
   /** The public count of an opponent's held hand, beside their back-fan (§7.2
-   *  ".held-n"). My own hand is the screen-space fan, so it carries no count here. */
+   *  ".held-n"). My own hand is the screen-space fan, so it carries no count here.
+   *
+   *  Once the fan is elided (#11) the glyph is no longer a footnote to something
+   *  countable — it *is* the hand size, since the drawn backs stop at OPP_HAND_MAX
+   *  and dissolve. So it steps up to the plate's own ink and weight there. */
   private drawHandCount(seat: SeatLayout, meId: Id): void {
     const p = seat.player;
     if (p.id === meId || p.handSize === 0) return;
+    const elided = p.handSize > OPP_HAND_MAX;
     const side = seat.corner.left ? 1 : -1;   // the glyph sits inboard of the fan
     this.addFurnitureText(
       `${p.handSize}`,
-      new TextStyle({ fontFamily: 'ui-monospace, monospace', fontSize: 16, fill: 0x8b95a0, fontWeight: '700' }),
+      new TextStyle({
+        fontFamily: 'ui-monospace, monospace',
+        fontSize: elided ? 21 : 16,
+        fill: elided ? INK : 0x8b95a0,
+        fontWeight: '700',
+      }),
       side === 1 ? 0 : 1, 0.5,
       { x: seat.handFan.x + side * (opponentHandHalfWidth(p.handSize) + 10), y: seat.handFan.y },
     );
@@ -1809,14 +1994,29 @@ export class TableScene implements DirectorSink {
     // like any candidate card (selected = in the multi-pick scratch) — it is
     // clickable (felt tap) and a drag-release target, so it must look like one.
     const target = this.plateTarget(p.id);
+    // The plate is engraved brass, so it is lit from above: a lighter band over a
+    // darker one, with the seam of light at the top edge (the mockup's
+    // `linear-gradient(180deg, …)` — a keystoned quad can't carry a real gradient,
+    // and two bands read the same at plate size). **Your own** plate sits a stop
+    // brighter with the bright-brass edge, which is how the mockup says "this seat
+    // is you" without a label (#3).
+    const mine = p.id === state.me.playerId;
+    const hit = incoming > 0;
+    const face = hit ? HIT_FILL : mine ? OWN_FILL : BRASS_FILL;
+    const faceLo = hit ? HIT_FILL_LO : mine ? OWN_FILL_LO : BRASS_FILL_LO;
+    const plate = { x: box.x, y: box.y, w: n.w, h: n.h };
+    this.shapeSpecs.push({ rect: plate, fill: { color: faceLo, alpha: 1 } });
     this.shapeSpecs.push({
-      rect: { x: box.x, y: box.y, w: n.w, h: n.h },
-      fill: { color: incoming > 0 ? DMG_FILL : BRASS_FILL, alpha: 1 },
+      rect: { ...plate, h: n.h * 0.52 },
+      fill: { color: face, alpha: 1 },
+    });
+    this.shapeSpecs.push({
+      rect: plate,
       stroke: target !== undefined
         ? { width: target.selected ? 4 : 2.5, color: HL_TARGET, alpha: 1 }
-        : incoming > 0
-          ? { width: 2, color: 0xc0392b, alpha: 1 }
-          : { width: 1.5, color: BRASS, alpha: 1 },
+        : hit
+          ? { width: 2, color: DANGER, alpha: 1 }
+          : { width: 1.5, color: mine ? BRASS : BRASS_DIM, alpha: 1 },
     });
     const dead = p.flags?.dead === true || p.flags?.left === true;
     this.addFurnitureText(
@@ -1824,9 +2024,14 @@ export class TableScene implements DirectorSink {
       new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
       0, 0.5, { x: box.x + 12, y: box.y + n.h / 2 },     // left-pinned, vertically centred
     );
+    // Life is the number you glance at across the table, so it takes the brightest
+    // thing on the plate — bright brass, as the mockup's `.life` does.
     this.addFurnitureText(
       `${p.life}`,
-      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: incoming > 0 ? DMG_INK : INK, fontWeight: '700' }),
+      new TextStyle({
+        fontFamily: 'Georgia, serif', fontSize: 24,
+        fill: hit ? DMG_INK : dead ? 0x8a8375 : BRASS_HI, fontWeight: '700',
+      }),
       1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
     );
     const chips: SeatChip[] = commanderDamageRows(state, p).map(row => {

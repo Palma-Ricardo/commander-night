@@ -10,7 +10,9 @@
 // because that vocabulary means "held cards, yours" and wearing it here made a
 // graveyard read like a second hand, the pages because they cut a scan into
 // arbitrary blocks of nine when the natural gesture for a long row is to push
-// it. Every mode now also takes a name filter, which only browse had.
+// it. Every mode now also takes a name filter, which only browse had. The strip
+// runs through a ten-card window with dissolving ends, not across the whole
+// felt: a row you can take in at a glance, which scrolling actually changes.
 //
 // Three clients of one surface:
 //  • Prompt mode — a chooseTargets whose candidates the felt can't offer: a
@@ -164,11 +166,21 @@ const CARD_TEX = { w: 200, h: 280 } as const;
 // the *curve* to go, not for the density.
 const STRIP_STEP_RATIO = 0.82;
 const STRIP_MARGIN = 32;   // kept clear at both ends of the scrollable run
-// How far past the viewport an entry is still given a placement. The strip is
-// laid out in full (a library look is ~99 cards), but only what is near the
-// window becomes an actor — one card of slack each side so a scroll never pops
-// a card into existence at the edge of vision.
-const STRIP_CULL = 1.5;
+// The reading window, in cards. A 1440p felt fits ~15 of them edge to edge, and
+// filling it made the strip a wall: the eye has nowhere to rest, and a scroll
+// moves a row so long that nothing about it changes. Ten is about the span you
+// can take in without tracking (asked for 2026-07-30), so past that the strip
+// scrolls *inside* a fixed run centred on the felt rather than growing wider.
+const STRIP_VISIBLE = 10;
+// Width of the dissolve at each end of the run, in cards. Cards do not stop at a
+// hard edge — they thin out — so the strip reads as a longer row passing through
+// a window, and the presence of a fade is itself the "there is more this way"
+// signal (the slider says how much, this says which direction).
+const STRIP_FADE_CARDS = 0.8;
+// How far past the fade an entry is still given a placement — it must be fully
+// invisible before it is culled, plus a little slack so a scroll never pops a
+// card into existence somewhere the eye can see it happen.
+const STRIP_CULL_CARDS = 0.6;
 
 export interface CarouselStrip {
   /** Clamped scroll offset actually used, px from the strip's start. The scene
@@ -179,14 +191,46 @@ export interface CarouselStrip {
   maxOffset: number;
   /** Centre-to-centre spacing — one "card" of scroll, for the wheel and keys. */
   step: number;
+  /** The reading window in screen px: where the run starts and how wide it is.
+   *  At most STRIP_VISIBLE cards wide, centred in the felt left of the log. */
+  run: { left: number; width: number };
+  /** One card's drawn width — the fade ramp and the scene's cull both measure
+   *  themselves in these. */
+  cardW: number;
+  /** Whether the strip continues past each end of the run right now (⇒ that edge
+   *  dissolves). Both false when the whole strip fits, so a short reveal window
+   *  is drawn plainly and never looks like it is hiding something. */
+  fadeLeft: boolean;
+  fadeRight: boolean;
   /** Placement per *shown* entry, keyed by its index into `entries`. Entries
-   *  scrolled far off-screen are absent (see STRIP_CULL). */
+   *  scrolled out of the window are absent (see STRIP_CULL_CARDS). */
   placements: Map<number, ActorPlacement>;
+}
+
+/** How opaque a strip card at screen-x `x` (its centre) should be: 1 well inside
+ *  the run, ramping to 0 across STRIP_FADE_CARDS at whichever end still has more
+ *  strip behind it.
+ *
+ *  Deliberately a function of the card's *live* x rather than a field on its
+ *  placement: a card slides into the window over PAGE_TURN_MS, and a placement
+ *  alpha would jump to the destination value the instant the tween was armed —
+ *  so a card would fade in while still outside the run and arrive already lit.
+ *  The scene calls this per frame from the actor's animated position, which is
+ *  the only place that reads correctly. Pure, so the ramp is unit-testable. */
+export function stripAlphaAt(strip: CarouselStrip, x: number): number {
+  const fade = strip.cardW * STRIP_FADE_CARDS;
+  if (fade <= 0) return 1;
+  const right = strip.run.left + strip.run.width;
+  let a = 1;
+  if (strip.fadeLeft) a = Math.min(a, (x - strip.run.left) / fade);
+  if (strip.fadeRight) a = Math.min(a, (right - x) / fade);
+  return a < 0 ? 0 : a > 1 ? 1 : a;
 }
 
 /** The strip, in screen coordinates: one flat row of card fronts centred in the
  *  felt left of the log gutter, a band above the hand, scrolled continuously by
- *  `offset` (Issues.txt #8).
+ *  `offset` through a window at most STRIP_VISIBLE cards wide whose ends dissolve
+ *  while there is more strip past them (Issues.txt #8).
  *
  *  Flat is deliberate. The fan curve — an arc and a per-card rotation — belongs
  *  to the *hand*, where it says "these are yours, held". Wearing it here made a
@@ -210,22 +254,33 @@ export function layoutCarouselStrip(
   const cardW = CARD_TEX.w * scale;
   const step = cardW * STRIP_STEP_RATIO;
   const placements = new Map<number, ActorPlacement>();
-  if (count <= 0) return { offset: 0, maxOffset: 0, step, placements };
+  // The reading window: whatever the felt can spare, but never more than
+  // STRIP_VISIBLE cards. A long strip scrolls *through* this run.
+  const runW = Math.min(availW - 2 * STRIP_MARGIN, step * (STRIP_VISIBLE - 1) + cardW);
+  const runLeft = (availW - runW) / 2;
+  const run = { left: runLeft, width: runW };
+  if (count <= 0) {
+    return { offset: 0, maxOffset: 0, step, run, cardW, fadeLeft: false, fadeRight: false, placements };
+  }
 
   const stripW = step * (count - 1) + cardW;
-  const runW = availW - 2 * STRIP_MARGIN;
   const maxOffset = Math.max(0, stripW - runW);
   const o = Math.min(Math.max(0, offset), maxOffset);
-  // Short enough to fit ⇒ centre it and never scroll; longer ⇒ pin to the left
-  // margin and slide, so the first card sits where the eye already is.
+  // Short enough to fit ⇒ centre it in the felt and never scroll; longer ⇒ pin to
+  // the run's left edge and slide, so the first card sits where the eye already is.
   const x0 = maxOffset === 0
     ? (availW - stripW) / 2 + cardW / 2
-    : STRIP_MARGIN + cardW / 2 - o;
+    : runLeft + cardW / 2 - o;
   const y = viewport.h - band - cardH / 2 - 28;
 
+  // An edge dissolves only while there is strip beyond it. The half-pixel guard
+  // keeps a fully-scrolled strip from flickering its trailing edge on rounding.
+  const fadeLeft = o > 0.5;
+  const fadeRight = o < maxOffset - 0.5;
+  const cull = cardW * (STRIP_FADE_CARDS + STRIP_CULL_CARDS);
   for (let i = 0; i < count; i++) {
     const x = x0 + i * step;
-    if (x < -cardW * STRIP_CULL || x > availW + cardW * STRIP_CULL) continue;
+    if (x < runLeft - cull || x > runLeft + runW + cull) continue;
     placements.set(i, {
       x, y,
       rotation: 0,            // flat: the fan curve is the hand's alone (#8)
@@ -234,7 +289,7 @@ export function layoutCarouselStrip(
       faceUp: true,
     });
   }
-  return { offset: o, maxOffset, step, placements };
+  return { offset: o, maxOffset, step, run, cardW, fadeLeft, fadeRight, placements };
 }
 
 /** Where the DOM bar sits: just above the fan's tallest card, as px from the

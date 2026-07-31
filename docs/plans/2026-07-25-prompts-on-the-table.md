@@ -131,6 +131,18 @@ cluster** — front and center, not buried under a grid.
   wheel, the ←/→ keys and a slider in the bar all push; the layout owns the clamp, and the scene
   writes the clamped value back, so an over-scroll (a filter that shortened the strip, a resize)
   corrects itself rather than stranding the thumb.
+- **A ten-card reading window with dissolving ends**, not the full width of the felt (asked for
+  2026-07-30, same review). A 1440p table fits fifteen cards edge to edge, and filling it made the
+  strip a wall: nowhere for the eye to rest, and a scroll that moves a row so long nothing about it
+  appears to change. The run is capped at ten cards and centred in the felt left of the log; a
+  longer strip passes *through* it. The ends dissolve over about a card's width, but **only on a
+  side that still has strip behind it** — so the fade is itself the "there is more this way" signal
+  (the slider says how much, the fade says which way), and a short reveal window is drawn plainly
+  and never looks like it is hiding something. The alpha is a function of each card's *live* x, not
+  of its placement: a placement alpha would jump to the destination the instant the tween was armed,
+  so a card would fade up while still outside the window and arrive already lit. A card faded past
+  legibility also stops taking clicks — a ghost that answers a prompt is worse than one you can't
+  see.
 - **Alt is the magnifier; the bare wheel belongs to the strip.** #13 had put preview magnification
   on the bare wheel. Once the strip scrolls continuously the two gestures collide — and the strip
   loses, since hovering its cards pops previews constantly. Zoom moved to a held modifier, applied

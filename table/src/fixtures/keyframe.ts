@@ -122,6 +122,30 @@ const pacifism: Permanent = {
 };
 tomWall.attachments = [pacifism.id];
 
+// Fourteen cards, every one a real printing so the art ladder resolves (see the
+// BASIC_PRINTING note above). Names deliberately spread across the alphabet and
+// share a few prefixes, so the §4.4 name filter has something to bite on.
+// Every set/number below was read off Scryfall's `cards/named?exact=` (2026-07-30),
+// not guessed — the resolver's first rung is `cards/{set}/{number}`, so a plausible
+// pair returns *some other card* and the demo quietly renders a graveyard of
+// strangers. The first draft of this list did exactly that.
+const GRAVEYARD: Card[] = [
+  card('Eternal Witness', 'cmm', '286', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' }),
+  card('Brainstorm', 'tle', '155', 1, ['INSTANT'], { manaCost: '{U}', colors: ['U'] }),
+  card('Cultivate', 'msc', '172', 3, ['SORCERY'], { manaCost: '{2}{G}', colors: ['G'] }),
+  card('Dark Ritual', 'msc', '793', 1, ['INSTANT'], { manaCost: '{B}', colors: ['B'] }),
+  card('Deadly Rollick', 'cmm', '147', 4, ['INSTANT'], { manaCost: '{3}{B}', colors: ['B'] }),
+  card('Demonic Tutor', 'cmm', '150', 2, ['SORCERY'], { manaCost: '{1}{B}', colors: ['B'] }),
+  card('Farseek', 'msc', '173', 2, ['SORCERY'], { manaCost: '{1}{G}', colors: ['G'] }),
+  card('Ponder', 'tdc', '159', 1, ['SORCERY'], { manaCost: '{U}', colors: ['U'] }),
+  card('Reanimate', 'dsc', '155', 1, ['SORCERY'], { manaCost: '{B}', colors: ['B'] }),
+  card('Sakura-Tribe Elder', 'soc', '285', 2, ['CREATURE'], { colors: ['G'], power: '1', toughness: '1' }),
+  card('Swords to Plowshares', 'msc', '143', 1, ['INSTANT'], { manaCost: '{W}', colors: ['W'] }),
+  card('Sylvan Library', 'dmr', '179', 2, ['ENCHANTMENT'], { manaCost: '{1}{G}', colors: ['G'] }),
+  card('Thoughtseize', '2xm', '109', 1, ['SORCERY'], { manaCost: '{B}', colors: ['B'] }),
+  card('Worldly Tutor', 'dmr', '185', 1, ['INSTANT'], { manaCost: '{G}', colors: ['G'] }),
+];
+
 const you = seat('p1', 'You', true, 34, {
   commander: commander('Muldrotha, the Gravetide', 'ecc', '128', ['B', 'G', 'U'], '{3}{B}{G}{U}', ['6', '6']),
   battlefield: [
@@ -135,7 +159,11 @@ const you = seat('p1', 'You', true, 34, {
     elder, rancor, bonesplitter,
     pacifism,   // on Tom's Wall — an attachment lives in its *controller's* battlefield
   ],
-  graveyard: [card('Eternal Witness', 'cmm', '286', 3, ['CREATURE'], { colors: ['G'], power: '2', toughness: '1' })],
+  // Turn 12 with Muldrotha out: the graveyard is a resource, and a fat one is
+  // what makes the §4.4 browse strip reviewable in the demo — a one-card pile
+  // never scrolls, so the reading window and its dissolving ends (#8) had to be
+  // shot against a hand-built fixture until this existed.
+  graveyard: GRAVEYARD,
   handSize: 4, librarySize: 71,
   // Mid-cast: two Forests + Sol Ring tapped for Cultivate leave floating mana, so
   // the bottom-left pool window shows real glyph pips (T4 mana symbols).
@@ -176,7 +204,9 @@ const tom = seat('p3', 'Tom', false, 40, {
     perm('p3', land('Island', ['U'])),
     tomWall,
   ],
-  handSize: 6, librarySize: 74,
+  // Seventeen held — past OPP_HAND_MAX, so Tom's fan is the elided one (#11): ten
+  // backs whose ends dissolve, with the real number beside them in plate ink.
+  handSize: 17, librarySize: 74,
 });
 
 const marta = seat('p4', 'Marta', false, 31, {

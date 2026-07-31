@@ -197,6 +197,34 @@ function stripPerm(p: GameState['players'][number]['battlefield'][number]): Card
   return { id, name, set, number, manaCost, manaValue, types, subtypes, supertypes, colors, text, power, toughness };
 }
 
+/** `?demo=aim`: park a multi-target `chooseTargets` over the demo board so the §7
+ *  affordance glow can actually be looked at (Issues.txt #2). It is the one piece
+ *  of the table with no other review loop — the screenshot harness settles to a
+ *  still frame with no prompt, so every ring change until now was judged from the
+ *  code or from a live game. Dev-only, like the reel.
+ *
+ *  The candidate set is deliberately mixed: a permanent on your own board, a
+ *  folded token cell across the table (which is where the "two highlighter
+ *  effects" reading came from — every member of a cell rings), one already in the
+ *  selection scratch (the `selected` treatment), and a player. */
+export function seedAimDemo(stores: Stores): void {
+  const s = demoKeyframe.state;
+  const mine = s.players[0]!.battlefield.filter(b => !b.types.includes('LAND')).slice(0, 3);
+  const theirs = s.players[1]!.battlefield.filter(b => b.token === true).slice(0, 4);
+  const candidates = [...mine, ...theirs].map(b => b.id);
+  stores.prompt.setState({
+    pending: {
+      t: 'game.prompt', seq: 90_000, gameId: 'demo', promptId: 90_001,
+      message: 'Choose up to four targets (glow review)',
+      kind: 'chooseTargets',
+      candidates: [...candidates, s.players[2]!.id], min: 0, max: 4, required: false,
+    },
+    selected: candidates.slice(0, 1),
+    inflight: false,
+    cantPay: [],
+  });
+}
+
 /** Start the reel. Returns a stop() handle. Dev-only; never called in prod. */
 export function runJuiceDemo(stores: Stores, stepMs = 1500): () => void {
   const base = demoKeyframe.state;

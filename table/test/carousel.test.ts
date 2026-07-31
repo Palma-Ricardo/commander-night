@@ -7,7 +7,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import type { Prompt } from '@night/core';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import {
-  CAROUSEL_FILTER_MIN, carouselBarBottom, carouselContent, layoutCarouselStrip,
+  CAROUSEL_FILTER_MIN, carouselBarBottom, carouselContent, layoutCarouselStrip, stripAlphaAt,
 } from '../src/layout/carousel';
 import {
   carouselStore, filterFor, offsetFor, scrollCarousel, setFilter, setHandPage, setOffset, toggleBrowse,
@@ -282,6 +282,70 @@ describe('layoutCarouselStrip (#8: one continuous flat strip)', () => {
     const strip = layoutCarouselStrip(0, 0, VIEW);
     expect(strip.maxOffset).toBe(0);
     expect(strip.placements.size).toBe(0);
+  });
+
+  it('never shows more than ten cards at once, however wide the felt', () => {
+    // The reading window is a fixed span, not "whatever fits": a 1440p felt would
+    // otherwise line up fifteen and the row stops being scannable.
+    for (const view of [VIEW, { w: 1920, h: 1080 }, { w: 2560, h: 1440 }, { w: 3840, h: 1600 }]) {
+      const strip = layoutCarouselStrip(60, 0, view);
+      const inWindow = [...strip.placements.values()]
+        .filter(p => p.x >= strip.run.left && p.x <= strip.run.left + strip.run.width);
+      expect(inWindow.length).toBeLessThanOrEqual(10);
+      expect(inWindow.length).toBeGreaterThanOrEqual(8);
+      expect(strip.run.width).toBeLessThanOrEqual(view.w);
+      // and the window is centred on the felt, not pinned to one side
+      expect(strip.run.left + strip.run.width / 2).toBeCloseTo(view.w / 2, 5);
+    }
+  });
+
+  it('the window is centred in the felt left of the log, not in the window', () => {
+    const inset = 380;
+    const strip = layoutCarouselStrip(60, 0, VIEW, inset);
+    expect(strip.run.left + strip.run.width / 2).toBeCloseTo((VIEW.w - inset) / 2, 5);
+    expect(strip.run.left + strip.run.width).toBeLessThanOrEqual(VIEW.w - inset);
+  });
+});
+
+describe('stripAlphaAt (#8 amendment: the window dissolves at the ends)', () => {
+  it('a strip that fits is drawn plainly — no edge suggests hidden cards', () => {
+    const strip = layoutCarouselStrip(4, 0, VIEW);
+    expect(strip.fadeLeft).toBe(false);
+    expect(strip.fadeRight).toBe(false);
+    for (const p of strip.placements.values()) expect(stripAlphaAt(strip, p.x)).toBe(1);
+  });
+
+  it('only the end that has more strip behind it dissolves', () => {
+    const start = layoutCarouselStrip(60, 0, VIEW);
+    expect(start.fadeLeft).toBe(false);      // nothing to the left of the first card
+    expect(start.fadeRight).toBe(true);
+    const end = layoutCarouselStrip(60, 1e6, VIEW);
+    expect(end.fadeLeft).toBe(true);
+    expect(end.fadeRight).toBe(false);
+    const mid = layoutCarouselStrip(60, start.maxOffset / 2, VIEW);
+    expect(mid.fadeLeft).toBe(true);
+    expect(mid.fadeRight).toBe(true);
+  });
+
+  it('ramps monotonically to nothing at the window edge and stays 1 in the middle', () => {
+    const strip = layoutCarouselStrip(60, 400, VIEW);
+    const right = strip.run.left + strip.run.width;
+    expect(stripAlphaAt(strip, (strip.run.left + right) / 2)).toBe(1);
+    expect(stripAlphaAt(strip, strip.run.left)).toBe(0);
+    expect(stripAlphaAt(strip, right)).toBe(0);
+    expect(stripAlphaAt(strip, strip.run.left - 200)).toBe(0);   // never negative
+    let prev = -1;
+    for (let x = strip.run.left; x < strip.run.left + strip.cardW; x += 4) {
+      const a = stripAlphaAt(strip, x);
+      expect(a).toBeGreaterThanOrEqual(prev);
+      prev = a;
+    }
+  });
+
+  it('leaves most of the window fully lit — the fade is a hem, not a vignette', () => {
+    const strip = layoutCarouselStrip(60, 400, VIEW);
+    const lit = [...strip.placements.values()].filter(p => stripAlphaAt(strip, p.x) === 1);
+    expect(lit.length).toBeGreaterThanOrEqual(6);
   });
 
   it('the bar sits above the strip cards', () => {

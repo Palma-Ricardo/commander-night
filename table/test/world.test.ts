@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  displaySeats, layoutWorld, seatLayouts, seatOfPlayer,
+  displaySeats, layoutWorld, OPP_HAND_MAX, opponentHandHalfWidth, seatLayouts, seatOfPlayer,
   seatQuadrantRect, WORLD,
 } from '../src/layout/world';
 import type { Card, Permanent } from '@night/core';
@@ -100,6 +100,29 @@ describe('layoutWorld', () => {
         expect(backs.every(b => !b.placement.faceUp && b.card === undefined)).toBe(true);
       }
     }
+  });
+
+  it('caps an opponent fan at ten and dissolves its ends (#11)', () => {
+    const them = mkPlayer('p2', 'Them', { handSize: 22 });
+    const state = mkState([mkPlayer('p1', 'You', { human: true }), them], 'p1');
+    const backs = layoutWorld(state).filter(p => p.key.startsWith('p2:hand:'));
+    expect(backs.length).toBe(OPP_HAND_MAX);
+    const alphas = backs.map(b => b.placement.alpha ?? 1);
+    expect(alphas[0]).toBeLessThan(0.5);                       // the outermost is nearly gone
+    expect(alphas[0]).toBeLessThan(alphas[1]!);                // ...ramping inward
+    expect(alphas[Math.floor(OPP_HAND_MAX / 2)]).toBe(1);      // the middle is solid
+    expect(alphas.at(-1)).toBe(alphas[0]);                     // symmetric: both ends dissolve
+    // The fan is no wider than one that fits, so it cannot run into the neighbour.
+    const capped = opponentHandHalfWidth(22);
+    expect(capped).toBe(opponentHandHalfWidth(OPP_HAND_MAX));
+  });
+
+  it('a hand at the cap is drawn plainly — the fade only means "there is more"', () => {
+    const them = mkPlayer('p2', 'Them', { handSize: OPP_HAND_MAX });
+    const state = mkState([mkPlayer('p1', 'You', { human: true }), them], 'p1');
+    const backs = layoutWorld(state).filter(p => p.key.startsWith('p2:hand:'));
+    expect(backs.length).toBe(OPP_HAND_MAX);
+    for (const b of backs) expect(b.placement.alpha).toBeUndefined();
   });
 
   it('caps the library back-stack but shows the pile', () => {
@@ -202,6 +225,42 @@ describe('layoutWorld', () => {
     // the spells — so it is pinned to the bottom regardless of how few spells there are.
     for (const l of lands) expect(l.placement.y).toBeCloseTo(seat.landRowY, 5);
     expect(seat.landRowY).toBeGreaterThan(seat.boardTopY);   // rail is below the seam for you
+  });
+
+  it('draws lands smaller than spells, and fits more of them per row (#12)', () => {
+    const you = mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: [mkPerm('p1', mkCreature('A')), mkPerm('p1', mkLand('L1'))],
+    });
+    const state = mkState([you], 'p1');
+    const seat = seatLayouts(state)[0]!;
+    const placed = layoutWorld(state);
+    const spell = placed.find(p => p.card?.name === 'A')!;
+    const land = placed.find(p => p.card?.name === 'L1')!;
+    expect(land.placement.scale).toBeLessThan(spell.placement.scale);
+    // The saving is real estate, not just pixels: a narrower cell means more
+    // columns before the mana row wraps into the space the threats need.
+    expect(seat.lands.cols).toBeGreaterThan(seat.spells.cols);
+    expect(seat.lands.colW).toBeLessThan(seat.spells.colW);
+  });
+
+  it('a small land row still clears the nameplate when every land is tapped', () => {
+    // The row is pinned by the reach of a *tapped* card's lowest corner, which
+    // shrank with the cards — it must hug the rail, not float where the big row sat.
+    const lands = Array.from({ length: 5 },
+      (_, i) => ({ ...mkPerm('p1', mkLand(`L${i}`)), tapped: true }));
+    const you = mkPlayer('p1', 'You', { human: true, battlefield: lands });
+    const state = mkState([you], 'p1');
+    const seat = seatLayouts(state)[0]!;
+    const placed = layoutWorld(state).filter(p => p.card?.types.includes('LAND'));
+    const cardH = 184 * seat.lands.scale;
+    const cardW = 200 * seat.lands.scale;
+    const reach = (cardW / 2) * Math.sin(28 * Math.PI / 180) + (cardH / 2) * Math.cos(28 * Math.PI / 180);
+    for (const l of placed) {
+      expect(l.placement.y + reach).toBeLessThanOrEqual(seat.nameplate.y + 0.5);
+    }
+    // ...and it does hug it — within the gap, not half a quadrant clear of it.
+    expect(seat.nameplate.y - (seat.landRowY + reach)).toBeLessThan(24);
   });
 
   it('moves an animated land up to the creature rows, and home again when it wears off', () => {

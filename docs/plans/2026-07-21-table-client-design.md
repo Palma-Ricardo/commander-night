@@ -349,8 +349,32 @@ Everything in §7 that reads as a design decision is a consequence of this table
   located by its brass nameplate at the outer edge, its piles at the outer elbow, and a soft pool of
   lamplight — all of which sit *on* the shared felt. The only marks on the cloth are the quarter
   folds, and they stop well short of the edges.
+- **The table is a table, not a green rectangle** (Issues.txt #3, fixed 2026-07-30). What shipped
+  through the first night was flat `#1f3a2e` with a darker border and four hard-edged discs at 5%
+  alpha for "lamplight" — perfectly legible, and it read as a *diagram* of a table. Every surface
+  value now comes from the mockup's own `:root` (table-mockup-reference) rather than being eyeballed,
+  and the whole surface is baked into the one felt texture, so all of it keystones for free:
+  - a **wooden rail** the felt is inlaid into, so the table has an edge you can see it end at
+    (before, the cloth ran to the world's bounds and the table had no outside);
+  - the felt as a **radial pool** — brightest under the lamp, sinking toward the corners — plus a
+    **weave** of fine diagonal hairlines, because no amount of gradient makes a plane of solid
+    colour read as cloth;
+  - the quarter folds as **light catching a crease**, not dark ruled lines (the single strongest
+    "this is a diagram" cue);
+  - **one lamp** over the middle plus a pool at each setting, feathered into concentric rings that
+    composite to a chosen falloff — a Pixi `circle` is a hard-edged disc, and four of those is
+    exactly what "four pale circles" was;
+  - **brass that is brass** (`#C99A46`), life totals in bright brass, and **your own nameplate a
+    stop brighter with the bright-brass edge** — which is how the mockup says "this seat is you"
+    without a label;
+  - pile footprints as the **edge of the stack under the top card** (a shade lighter than the felt,
+    hairline of light) instead of a black rectangle, which is what a hole in a table looks like.
 - **Spells face the middle, lands sit behind them**, mirrored across the seam, exactly as people lay
-  out a real table. Combat therefore happens across the centre by construction.
+  out a real table. Combat therefore happens across the centre by construction. **Lands are drawn
+  smaller than the rest of the setting** (Issues.txt #12) and get their own column pitch, so the
+  mana row stops eating the half of the quadrant the threats need: they are the most numerous thing
+  on a Commander board and, since auto-mana (T10) pays costs on its own, the least often *clicked* —
+  read as a count of untapped symbols rather than as cards you pick.
 - **The seam belongs to the stack and to combat.** Attackers physically step off their own half into
   it, and attack/block arrows are drawn on the felt *under* the cards, so an arrow reads as chalk on
   the table rather than an overlay floating above it. Because the arrow can be occluded, the
@@ -390,7 +414,18 @@ Everything in §7 that reads as a design decision is a consequence of this table
   literal table and it is unreadable; seat identity is carried by the furniture instead. This is a
   deliberate break from realism and the only one.
 - **Opponents' hands are on the table, face down and fanned.** The count is public information, so
-  render it as objects; six card backs beats the string "Hand 6".
+  render it as objects; six card backs beats the string "Hand 6". **Past ten the fan is elided**
+  (Issues.txt #11): it stops growing, its end cards dissolve, and the number beside it — now in the
+  plate's own ink — carries the truth. Twenty backs march clean out of the quadrant and across the
+  neighbour's board, and nobody counts a fan anyway; past ten its whole job is to say "a lot, and it
+  is a hand". A hand *at* the cap is drawn plainly, so the fade only ever means "there is more".
+- **The affordance highlight is a glow, not a ring** (Issues.txt #2). One spec painted two things
+  that read separately — a translucent fill over a pad band *and* a heavy stroke centred on the same
+  rectangle — so a picked target wore a coloured band with a hard outline half on top of it, and a
+  folded cell drew one outline per member three px apart. It is now a single graded halo: concentric
+  bands hugging the card, each dimmer and wider than the last, drawn *behind* the face so it blooms
+  without touching the art. `?demo=aim` parks a targeting ask over the demo table, because this was
+  the one piece of the felt with no review loop of its own.
 
 ### 7.3 The camera
 
@@ -487,6 +522,7 @@ Driven entirely by §4 events. First pass, in the order they earn their keep:
 | `move` …→exile | rises and fades off-table into the exile pile, cold-toned |
 | `counters` | pip pops onto the card with a small bounce |
 | `trigger` | source card pulses and a ribbon spawns toward the stack |
+| stack tethers (top item only) | a **source** arrow from the permanent to the stack pile — arrowhead on the *pile*, because the ability came off the permanent and went onto the stack; it shipped reversed until 2026-07-30 (Issues.txt #21), reading as the stack reaching back to grab the permanent — plus a **target** arrow per chosen target, arrowhead on the thing pointed at |
 | `counter` (spell countered) | stack card shatters instead of resolving |
 | `step` | phase ribbon sweeps; untap step drives a rippling untap across the board |
 | `step` with new `activePlayerId` | camera re-frames to the new active player, unless the view is manually pinned (§7.3) |

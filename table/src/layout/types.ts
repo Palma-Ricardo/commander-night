@@ -22,6 +22,11 @@ export interface ActorPlacement extends Transform {
   /** A tapped battlefield permanent (design T4): the render layer dims the art and
    *  overlays a tap glyph; the ~30° turn rides on `rotation` from the layout. */
   tapped?: boolean;
+  /** <1 ⇒ the layout wants this actor drawn partly transparent — currently only
+   *  the ends of an elided opponent hand (Issues.txt #11), where the fade says
+   *  "the fan goes on past here, the number is the truth". Multiplies with the
+   *  §7.3 camera-focus dimming rather than replacing it. */
+  alpha?: number;
   /** >1 ⇒ this actor is the visible top of a collapsed stack of identical
    *  permanents (basic lands / tokens); the render layer overlays a "×count"
    *  tally so eight Forests read as one cell, not eight (design T4). */

@@ -30,6 +30,13 @@ const CARD_TEX = { w: 200, h: 280 } as const;   // native portrait px (hand/stac
 // stack, the opponent hand and the hover preview all stay full portrait cards.
 const ARTBOX_TEX = { w: 200, h: 184 } as const;  // native battlefield art-box px
 const BOARD_SCALE = 0.62;                        // permanents on the felt
+// Lands are drawn smaller than the rest of the place setting (Issues.txt #12).
+// They are the most numerous thing on a Commander board and the least often
+// *looked at*: since auto-mana (T10) pays costs on its own, a land is read as a
+// count of untapped symbols, not as a card you pick. At three quarters of a
+// permanent they still read — name bar, art, tap glyph — while the mana row stops
+// eating the half of the quadrant that the threats need.
+const LAND_SCALE = 0.46;
 const PILE_SCALE = 0.42;                         // piles read a touch smaller
 // The nameplate and an opponent's held fan share the rail band, so they read as
 // one strip when they are the same height: the average of what each used to be
@@ -43,11 +50,16 @@ const TAP_ANGLE = 28 * Math.PI / 180;
 
 const CARD_W = ARTBOX_TEX.w * BOARD_SCALE;       // 124 — battlefield cell width
 const CARD_H = ARTBOX_TEX.h * BOARD_SCALE;       // ~114 — battlefield cell height
+const LAND_W = ARTBOX_TEX.w * LAND_SCALE;        // 92 — land cell width
+const LAND_H = ARTBOX_TEX.h * LAND_SCALE;        // ~85 — land cell height
 const PILE_H = CARD_TEX.h * PILE_SCALE;          // ~118
 // A tapped card is rotated TAP_ANGLE, so its lowest corner reaches further than
-// CARD_H/2 from the centre — the land row reserves this (not the upright half) so
-// a tapped land in the front row clears the nameplate instead of dipping into it.
-const CARD_TAPPED_HALF_H = (CARD_W / 2) * Math.sin(TAP_ANGLE) + (CARD_H / 2) * Math.cos(TAP_ANGLE);  // ~79
+// half its height from the centre — the land row reserves this (not the upright
+// half) so a tapped land clears the nameplate instead of dipping into it.
+function tappedHalfH(w: number, h: number): number {
+  return (w / 2) * Math.sin(TAP_ANGLE) + (h / 2) * Math.cos(TAP_ANGLE);
+}
+const LAND_TAPPED_HALF_H = tappedHalfH(LAND_W, LAND_H);   // ~59
 
 // An aura/equipment is not a permanent of its own on the felt: it is tucked under
 // the thing it enchants, offset just enough for its name bar to show past the
@@ -97,11 +109,29 @@ const LIBRARY_MAX_VISIBLE = 8;   // a library is a stack of backs, not 70 actors
 // backs no longer bunch into a steep hump against the rail (reviewed 2026-07-23).
 const OPP_HAND_ADVANCE = OPP_HAND_SCALE * CARD_TEX.w * 0.5;
 
+/** Most backs an opponent's fan ever draws (Issues.txt #11). Past this the fan
+ *  stops growing and its end cards dissolve instead: a Windfall or a Whispering
+ *  Madness leaves someone holding twenty, and twenty backs march clean out of the
+ *  quadrant and across their neighbour's board. Nobody counts a fan anyway — the
+ *  number beside it is the public information, and past ten the fan's whole job is
+ *  to say "a lot, and it is a hand". */
+export const OPP_HAND_MAX = 10;
+/** How many cards at each end of an elided fan dissolve, and how far. Index 0 is
+ *  the outermost. */
+const OPP_HAND_FADE = [0.28, 0.6, 0.85] as const;
+
+/** How many backs an opponent's hand of `n` actually draws. */
+export function opponentHandDrawn(n: number): number {
+  return Math.min(Math.max(0, n), OPP_HAND_MAX);
+}
+
 /** Half the width a face-down opponent hand of `n` cards occupies, for placing the
- *  count glyph just past the fan (shared by layout + the furniture pass). */
+ *  count glyph just past the fan (shared by layout + the furniture pass). Measured
+ *  on the *drawn* fan, so an elided hand's glyph still sits against its edge. */
 export function opponentHandHalfWidth(n: number): number {
-  if (n <= 0) return 0;
-  return ((n - 1) / 2) * OPP_HAND_ADVANCE + (OPP_HAND_SCALE * CARD_TEX.w) / 2;
+  const drawn = opponentHandDrawn(n);
+  if (drawn <= 0) return 0;
+  return ((drawn - 1) / 2) * OPP_HAND_ADVANCE + (OPP_HAND_SCALE * CARD_TEX.w) / 2;
 }
 
 // ── seat → quadrant ──────────────────────────────────────────────────────────
@@ -122,6 +152,18 @@ const CORNER_BY_DISPLAY: Corner[] = [
   { left: false, bottom: true },   // 3 last       — bottom-right
 ];
 
+/** One row family's grid: where its first column sits, how wide a column is, how
+ *  many fit across the quadrant, and how big its cards are drawn. Spells and lands
+ *  have separate ones because lands are drawn smaller (#12) — a shared pitch would
+ *  either waste the space a small land saves, or crowd the spells. */
+export interface RowGeom {
+  startX: number;                  // centre-x of the first column
+  colW: number;                    // column pitch (card + gap)
+  rowH: number;                    // row pitch (card + gap)
+  cols: number;
+  scale: number;                   // draw scale of the cards in this row
+}
+
 /** All the fixed geometry of one seat's place setting, shared by `layoutWorld`
  *  (to place cards) and the scene (to draw furniture). */
 export interface SeatLayout {
@@ -132,8 +174,8 @@ export interface SeatLayout {
   out: 1 | -1;                     // sign from the seam toward the outer edge (y)
   boardTopY: number;               // centre-y of the seam-nearest permanent row
   landRowY: number;                // centre-y of the rail-most land row (lands sit here)
-  rowStartX: number;               // centre-x of the first column
-  cols: number;
+  spells: RowGeom;                 // the threat rows, pinned to the seam
+  lands: RowGeom;                  // the mana row, pinned to the rail
   bandY: number;                   // centre-y of the nameplate + pile band
   nameplate: Rect;
   lamplight: { x: number; y: number; r: number };
@@ -199,8 +241,16 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   const boardRightX = q.x + q.w - (corner.left ? SIDE_MARGIN : boardInset);
 
   const boardTopY = seamEdge + out * (SEAM_MARGIN + CARD_H / 2);
-  const rowStartX = boardLeftX + CARD_W / 2;
-  const cols = Math.max(3, Math.floor((boardRightX - boardLeftX) / (CARD_W + GAP)));
+  const boardW = boardRightX - boardLeftX;
+  const row = (cardW: number, cardH: number, scale: number): RowGeom => ({
+    startX: boardLeftX + cardW / 2,
+    colW: cardW + GAP,
+    rowH: cardH + ROW_GAP,
+    cols: Math.max(3, Math.floor(boardW / (cardW + GAP))),
+    scale,
+  });
+  const spells = row(CARD_W, CARD_H, BOARD_SCALE);
+  const lands = row(LAND_W, LAND_H, LAND_SCALE);
 
   // The pile column, anchored at the player's outer corner. Far seats mirror the
   // near order so a zone lands at the same spot relative to whoever sits there.
@@ -233,7 +283,7 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   // of the nameplate band (§7.2). Permanents fill forward from the seam; lands fill
   // back from here, so your mana sits in front of you and your threats face the
   // contested centre. Overflow wraps toward the seam (see layoutBoard).
-  const landRowY = bandY - out * (NAMEPLATE.h / 2 + LAND_GAP + CARD_TAPPED_HALF_H);
+  const landRowY = bandY - out * (NAMEPLATE.h / 2 + LAND_GAP + LAND_TAPPED_HALF_H);
   const nameX = corner.left ? boardLeftX : boardRightX - NAMEPLATE.w;
   const nameplate: Rect = { x: nameX, y: bandY - NAMEPLATE.h / 2, w: NAMEPLATE.w, h: NAMEPLATE.h };
   const handHalf = opponentHandHalfWidth(player.handSize);
@@ -243,7 +293,7 @@ function seatGeometry(display: number, player: Player): SeatLayout {
 
   return {
     display, player, corner, quadrant: q, out,
-    boardTopY, landRowY, rowStartX, cols, bandY, nameplate,
+    boardTopY, landRowY, spells, lands, bandY, nameplate,
     lamplight: { x: q.x + q.w / 2, y: q.y + q.h / 2, r: Math.min(q.w, q.h) * 0.62 },
     piles, handFan,
   };
@@ -397,10 +447,14 @@ function placeAttachments(
   if (kids === undefined) return;
   const cos = Math.cos(t.rotation);
   const sin = Math.sin(t.rotation);
+  // The peek is "just past the host's name bar", so it is a fraction of the host,
+  // not a fixed distance: on a small land row (#12) a constant step would shove an
+  // aura a whole card clear of what it enchants.
+  const k = t.scale / BOARD_SCALE;
   for (let i = kids.length - 1; i >= 0; i--) {
     const kid = kids[i]!;
-    const dx = ATTACH_SIDE * (i + 1);
-    const dy = -ATTACH_PEEK * (i + 1);
+    const dx = ATTACH_SIDE * k * (i + 1);
+    const dy = -ATTACH_PEEK * k * (i + 1);
     const kt: Transform = {
       x: t.x + dx * cos - dy * sin,
       y: t.y + dx * sin + dy * cos,
@@ -434,19 +488,22 @@ const CELL_DEPTH_MAX = 6;
 /** One grid slot: every member is placed (so each keeps its own actor, hit-test
  *  and affordance ring), co-located under a small depth offset so the cell reads
  *  as a tidy pile; only the topmost (last, so it renders over the rest) carries
- *  the "×N" tally. Whatever is attached to a member goes down first, under it. */
+ *  the "×N" tally. Whatever is attached to a member goes down first, under it.
+ *  The stagger scales with the row, so a small land row's cells look like the
+ *  big row's shrunk rather than smeared. */
 function placeCell(
-  seat: SeatLayout, cell: readonly Permanent[], cx: number, cy: number,
+  seat: SeatLayout, cell: readonly Permanent[], cx: number, cy: number, geom: RowGeom,
   att: AttachIndex, out: PlacedActor[],
 ): void {
   const n = cell.length;
+  const k = geom.scale / BOARD_SCALE;
   cell.forEach((perm, i) => {
     const d = Math.min(i, CELL_DEPTH_MAX);
     const t: Transform = {
-      x: cx + d * CELL_STEP_X,
-      y: cy - d * CELL_STEP_Y,
+      x: cx + d * CELL_STEP_X * k,
+      y: cy - d * CELL_STEP_Y * k,
       rotation: perm.tapped ? TAP_ANGLE : 0,
-      scale: BOARD_SCALE,
+      scale: geom.scale,
     };
     placeAttachments(seat, perm, t, att, out);
     place(out, perm.id, perm, perm.id, {
@@ -460,20 +517,21 @@ function placeCell(
   });
 }
 
-/** Lay a list of cells as a grid anchored at (rowStartX, anchorY), rows advancing
- *  in `rowStep` (toward the rail for permanents, toward the seam for lands). */
+/** Lay a list of cells as a grid on `geom`, anchored at (geom.startX, anchorY),
+ *  rows advancing in `rowStep` (toward the rail for permanents, toward the seam
+ *  for lands). */
 function placeCells(
   seat: SeatLayout, cells: readonly Permanent[][], anchorY: number, rowStep: 1 | -1,
-  att: AttachIndex, out: PlacedActor[],
+  geom: RowGeom, att: AttachIndex, out: PlacedActor[],
 ): void {
   cells.forEach((cell, i) => {
-    const col = i % seat.cols;
-    const row = Math.floor(i / seat.cols);
+    const col = i % geom.cols;
+    const row = Math.floor(i / geom.cols);
     placeCell(
       seat, cell,
-      seat.rowStartX + col * (CARD_W + GAP),
-      anchorY + rowStep * row * (CARD_H + ROW_GAP),
-      att, out,
+      geom.startX + col * geom.colW,
+      anchorY + rowStep * row * geom.rowH,
+      geom, att, out,
     );
   });
 }
@@ -506,8 +564,8 @@ function layoutBoard(
   const cursed = att.onPlayer.get(seat.player.id) ?? [];
   const nonlands = groupCells([...bf.filter(p => !inLandRow(p)), ...cursed], spread);
   const lands = groupCells(bf.filter(inLandRow), spread);
-  placeCells(seat, nonlands, seat.boardTopY, seat.out, att, out);
-  placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, att, out);
+  placeCells(seat, nonlands, seat.boardTopY, seat.out, seat.spells, att, out);
+  placeCells(seat, lands, seat.landRowY, -seat.out as 1 | -1, seat.lands, att, out);
 }
 
 // ── combat: the three battle lanes (§7.2/§9) ─────────────────────────────────
@@ -766,10 +824,16 @@ function layoutLibrary(seat: SeatLayout, out: PlacedActor[]): void {
 }
 
 function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
-  const n = seat.player.handSize;
+  const n = opponentHandDrawn(seat.player.handSize);
+  const elided = seat.player.handSize > n;
   const mid = (n - 1) / 2;
   for (let i = 0; i < n; i++) {
     const t = i - mid;
+    // Past the cap the fan is a sample, so its ends dissolve rather than stopping:
+    // a hard edge on a capped fan is a lie about the size, a fade is an ellipsis
+    // (#11). The count glyph beside it carries the real number.
+    const fromEnd = Math.min(i, n - 1 - i);
+    const alpha = elided ? OPP_HAND_FADE[fromEnd] : undefined;
     place(out, `${seat.player.id}:hand:${i}`, undefined, undefined, {
       // A tight fan of backs beside the nameplate — the count is public, the faces
       // are not (§7.2). The middle rides highest (smaller y) so the arc's interior
@@ -778,6 +842,7 @@ function layoutOpponentHand(seat: SeatLayout, out: PlacedActor[]): void {
       y: seat.handFan.y + Math.abs(t) * 3,
       rotation: t * 0.045,
       scale: OPP_HAND_SCALE, zone: 'hand', ownerId: seat.player.id, faceUp: false,
+      ...(alpha !== undefined ? { alpha } : {}),
     });
   }
 }

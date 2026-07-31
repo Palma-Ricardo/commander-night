@@ -29,7 +29,35 @@ export type { HighlightSpec } from '../scene/interaction';
 
 const TWO_PI = Math.PI * 2;
 const FACE_VERTS = 8;          // mesh grid per axis — smooth keystone, cheap at card size
-const RING_PAD = 0.06;         // affordance ring inset outside the face, in native-tex fractions
+
+// The affordance highlight (§7), as a **glow** rather than a ring — Issues.txt #2,
+// from the 2026-07-26 night: "all highlighter is too large … we seem to have two
+// highlighter effects". There was only ever one spec, but it painted two things
+// that read separately: a translucent fill over the pad band *and* a heavy stroke
+// centred on the same rectangle, so a selected card wore a coloured band with a
+// hard bright outline sitting half on top of it. Folded cells made it worse —
+// every member of a stack of Treasures drew its own outline three px apart, so a
+// pile looked double-ruled.
+//
+// Now it is one graded halo: concentric bands hugging the card, each dimmer and
+// wider than the last, so the edge dissolves into the felt instead of ending. The
+// card is drawn *over* the halo (the highlight sits behind the face), so it can
+// bloom inward past the card edge without touching the art. Bands are fractions
+// of the card's own native size, so an art box, a hand card and a strip card all
+// wear a proportionally identical glow.
+//
+// pad = how far the band's centre-line sits outside the face; width = how thick.
+// Contiguous spans (pad ± width/2) make the falloff read as continuous.
+const RING_BANDS: readonly { pad: number; width: number; alpha: number }[] = [
+  { pad: 0.070, width: 0.060, alpha: 0.14 },   // outer haze
+  { pad: 0.038, width: 0.044, alpha: 0.30 },   // body
+  { pad: 0.016, width: 0.024, alpha: 0.68 },   // the bright core, tight to the edge
+];
+// A picked target glows harder and carries a wash in the band, so "chosen" reads
+// across the table without a second kind of mark.
+const RING_SELECTED_GAIN = 1.35;
+const RING_SELECTED_FILL = 0.26;
+const RING_DIM_GAIN = 0.42;    // an unpayable source (§7 `cantPay`) — present, not offered
 
 // Hand hover-lift (§9), restoring the classic client's `.hand-slot:hover`
 // (translateY up + scale 1.35): a pointed-at hand card rises and enlarges so it
@@ -427,20 +455,33 @@ export class CardActor {
         .fill({ color: 0xffffff, alpha: 0.7 * this.flashAmt });
     }
 
-    // affordance ring: a keystoned quad just outside the face
+    // affordance glow: concentric keystoned quads just outside the face, fading
+    // outward into the felt (#2). Behind the face, so none of it covers the art.
     const spec = this.highlightSpec;
     this.highlight.clear();
     if (spec !== undefined) {
-      const padX = RING_PAD * this.texW * this.current.scale;
-      const padY = RING_PAD * this.texH * this.current.scale;
-      const r0 = proj.toScreen(at(-1, -1, padX, padY));
-      const r1 = proj.toScreen(at(1, -1, padX, padY));
-      const r2 = proj.toScreen(at(1, 1, padX, padY));
-      const r3 = proj.toScreen(at(-1, 1, padX, padY));
-      const poly = [r0.x, r0.y, r1.x, r1.y, r2.x, r2.y, r3.x, r3.y];
-      if (spec.selected === true) this.highlight.poly(poly).fill({ color: spec.color, alpha: 0.22 });
-      const width = Math.max(2, this.texW * 0.035 * screenScale);
-      this.highlight.poly(poly).stroke({ width, color: spec.color, alpha: spec.dim === true ? 0.4 : 1 });
+      const selected = spec.selected === true;
+      const gain = spec.dim === true ? RING_DIM_GAIN : selected ? RING_SELECTED_GAIN : 1;
+      const ring = (padFrac: number): number[] => {
+        const px = padFrac * this.texW * this.current.scale;
+        const py = padFrac * this.texH * this.current.scale;
+        const q0 = proj.toScreen(at(-1, -1, px, py));
+        const q1 = proj.toScreen(at(1, -1, px, py));
+        const q2 = proj.toScreen(at(1, 1, px, py));
+        const q3 = proj.toScreen(at(-1, 1, px, py));
+        return [q0.x, q0.y, q1.x, q1.y, q2.x, q2.y, q3.x, q3.y];
+      };
+      if (selected) {
+        this.highlight.poly(ring(RING_BANDS[1]!.pad))
+          .fill({ color: spec.color, alpha: RING_SELECTED_FILL });
+      }
+      for (const b of RING_BANDS) {
+        this.highlight.poly(ring(b.pad)).stroke({
+          width: Math.max(1, this.texW * b.width * screenScale),
+          color: spec.color,
+          alpha: Math.min(1, b.alpha * gain),
+        });
+      }
     }
 
     // chrome: billboard upright at the projected centre, sized + turned with the card

@@ -15,7 +15,7 @@ import { wireNoLegalChoiceDetector, wireRescindDetector } from '@night/core/stat
 import { createStores } from '@night/core/stores';
 import { browserKV } from '@night/core/stores/storage';
 import { demoKeyframe } from './fixtures/keyframe';
-import { runJuiceDemo } from './fixtures/juice-demo';
+import { runJuiceDemo, seedAimDemo } from './fixtures/juice-demo';
 import { getActiveScene } from './scene/TableScene';
 
 function bridgeUrl(): string {
@@ -77,6 +77,9 @@ export function bootApp(): void {
     // (dev-only review loop — see fixtures/juice-demo.ts). A short delay lets the
     // first paint settle before the first beat animates.
     if (location.search.includes('juice')) setTimeout(() => runJuiceDemo(appStores), 900);
+    // `?demo=aim`: park a targeting ask over the seeded table so the §7 affordance
+    // glow has a review loop of its own (Issues.txt #2).
+    if (location.search.includes('aim')) setTimeout(() => seedAimDemo(appStores), 600);
   }
   appManager.connect();
 }
