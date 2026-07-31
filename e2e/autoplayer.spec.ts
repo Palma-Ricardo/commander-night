@@ -9,10 +9,14 @@
 //     ≥1 enabled control, and no prompt sat unanswered for 60 s.
 
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
 import { createLobby, openHome, repoFile, startGame, submitDeckAndReady } from './chrome';
 import { attachConsole, driveGame, snapshot, waitForBoard } from './driver';
 
-const DECK = repoFile('bridge/src/test/resources/decks/upgrades_unleashed.dck');
+// NIGHT_DECK: absolute path to a .dck to play instead of the default fixture.
+const DECK = process.env.NIGHT_DECK
+  ? fs.readFileSync(process.env.NIGHT_DECK, 'utf8')
+  : repoFile('bridge/src/test/resources/decks/upgrades_unleashed.dck');
 
 const GAME_MS = 45 * 60_000;        // AI-pace Commander games run long (§2),
                                     // and an active fourth seat prolongs them
