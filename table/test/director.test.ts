@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, GameState } from '@night/core';
 import { Director, BASE_STEP_MS, type DirectorSink } from '../src/scene/Director';
-import { camera, seatView, TABLE_VIEW } from '../src/camera/camera';
-import { mkPlayer, mkState } from './helpers';
+import { camera, seatView, TABLE_VIEW, worldToScreen } from '../src/camera/camera';
+import { mkCard, mkPlayer, mkState } from './helpers';
+import { WORLD } from '../src/layout/world';
 import type { Size } from '../src/layout/types';
+import { stackGutterWidth } from '../src/layout/screen';
 
 const VP: Size = { w: 1920, h: 1080 };
 
@@ -173,6 +175,41 @@ describe('Director — camera is the director\'s (§7.3)', () => {
     const want = camera(seatView(1), VP);
     expect(dir.cameraPreset().scale).toBeCloseTo(want.scale, 3);
     expect(dir.cameraPreset().x).toBeCloseTo(want.x, 1);
+  });
+
+  it('the table makes room for the stack pile, and takes it back (#9)', () => {
+    const { dir } = spy();
+    const withStack = (id: string): GameState => ({
+      ...game(id, 'p1'),
+      stack: [{ id: 'stk', kind: 'spell', controllerId: 'p1', text: [], card: mkCard('Bolt', ['INSTANT']) }],
+    });
+    // The felt's right edge on screen, which is what the pile covers.
+    const feltRight = (): number => {
+      const p = dir.cameraPreset();
+      return Math.max(...[{ x: WORLD.w, y: 0 }, { x: WORLD.w, y: WORLD.h }]
+        .map(c => worldToScreen(p, c).x));
+    };
+    const settleCamera = (): void => { drain(dir); for (let i = 0; i < 40; i++) dir.tick(16); };
+
+    dir.present(game('a', 'p1'), []);
+    dir.showTable();                       // pin the lens so only the gutter moves it
+    settleCamera();
+    const open = dir.cameraPreset();
+    const pileLeft = VP.w - stackGutterWidth(VP, 1);
+    expect(feltRight()).toBeGreaterThan(pileLeft);      // ← the bug: felt runs under the pile
+
+    // A spell on the stack draws a big screen-space pile over the right edge, so
+    // the felt must frame beside it: everything under it was invisible *and*
+    // unclickable (the Issues.txt #9 / Aura Shards diagnosis).
+    dir.present(withStack('a'), STEP);
+    settleCamera();
+    expect(feltRight()).toBeLessThanOrEqual(pileLeft);
+    expect(dir.cameraPreset()).toEqual(camera(TABLE_VIEW, VP, stackGutterWidth(VP, 1)));
+
+    // …and it resolves: the reservation is released, not sticky.
+    dir.present(game('a', 'p1'), STEP);
+    settleCamera();
+    expect(dir.cameraPreset()).toEqual(open);
   });
 
   it('a manual override is sticky against follow', () => {

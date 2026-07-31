@@ -177,6 +177,22 @@ const BEATS: Beat[] = [
     ],
   },
   {
+    // Issues.txt #16 — both halves of an opponent's draw. Ana holds two, so her
+    // fan grows and the new back flies off her deck like any arriving card; Tom
+    // holds seventeen, past the #11 cap, so nothing is added to his fan at all and
+    // the motion has to be an ephemeral flyer or the draw is invisible.
+    label: 'opponents draw (fan grows · capped fan flies)',
+    mutate: s => {
+      const ana = s.players[1]!; const tom = s.players[2]!;
+      ana.handSize += 1; ana.librarySize -= 1;
+      tom.handSize += 2; tom.librarySize -= 2;
+    },
+    events: () => [
+      { k: 'hidden', playerId: 'p2', from: 'library', to: 'hand', count: 1, verb: 'draw' },
+      { k: 'hidden', playerId: 'p3', from: 'library', to: 'hand', count: 2, verb: 'draw' },
+    ],
+  },
+  {
     label: 'phase ribbon (combat ends, fighters march home)',
     mutate: s => { s.turn.phase = 'POSTCOMBAT_MAIN'; s.turn.step = 'POST_MAIN'; s.combat = undefined; },
     events: () => [{ k: 'step', phase: 'POSTCOMBAT_MAIN', step: 'POST_MAIN' }],

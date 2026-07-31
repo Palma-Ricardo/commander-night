@@ -464,6 +464,24 @@ There is no free pan or zoom: the user's problem is "show me that player", not n
   in over a table is the metaphor and it costs one interpolated number.
 - **Unfocused seats dim with a filter on their cards, never a scrim over their region.** A scrim
   would redraw the exact box edges this layout exists to remove.
+- **The safe area is framed *beside* the screen-space surfaces, never under them.** The open log's
+  gutter has always been reserved this way; since 2026-07-31 the **stack pile** is too, for as long
+  as it holds anything (`layout/screen.ts stackGutterWidth`, added to the camera's `rightInset` by
+  the director alone — the pile lays itself out against the log gutter only, or it would walk
+  further left every time it grew). This is the fix for Issues.txt **#9** and for "Aura Shards never
+  let me target their Blind Obedience": the pile is a screen-space surface drawn *over* the world,
+  so every permanent beneath it was invisible **and** unclickable — the pointer hit the stack card
+  instead. It bit enemy creatures and not lands or piles because a stack is at the right edge,
+  vertically centred, which is exactly where the seat across the vertical seam keeps its **spells
+  row**; its lands and pile column sit at the outer edge, clear of it. A target ask is also the
+  moment the stack is *guaranteed* non-empty — the ask's own trigger is sitting on it. Measured on
+  the demo table: a two-item stack ate one or two board cards in every camera view, none after.
+  The reservation grows with the pile and is released when it resolves, so the table takes its room
+  back; the fan's own spread is capped at one card width so the gutter stays bounded. It also
+  hardens §14 for free: the pull-back's visibility test measures against the same inset, so a prompt
+  naming an object that would sit under the pile now counts as *not visible* and widens the lens,
+  instead of leaving you clicking at a card you cannot see. A seat view still frames only its
+  quadrant, so a neighbour's board can bleed past the reservation — §14 is what covers that.
 
 Camera moves are the director's (§6.3), so they queue, scale and flush with everything else, and
 `prefers-reduced-motion` collapses them to cuts.
@@ -510,7 +528,8 @@ Driven entirely by §4 events. First pass, in the order they earn their keep:
 |---|---|
 | `move` hand→stack (`cast`) | card lifts from the fan, arcs to the stack slot, scales up, glows by colour identity |
 | `move` stack→battlefield (`resolve`) | drops onto the board with a landing squash + dust ring |
-| `move` library→hand (`draw`) | slides from the library pile into the fan; opponents' draws use `hidden` and show backs |
+| `move` library→hand (`draw`) | slides from the library pile into the fan |
+| `hidden` library→hand (an opponent's draw) | a back flies off their deck into their fan. It is the *only* signal — the card has no id on our side, so nothing else about the table changes but a count. Two paths, because the fan is capped at ten (§7.2): under the cap the new back **is** an actor and takes its origin + arc from the `hidden` event exactly as an identified card takes them from a `move`; at or past the cap no actor is created at all, so an ephemeral back is flown instead and dissolves into the fan (Issues.txt #16) |
 | `move` hand→battlefield (`play`, land) | short direct arc, softer landing |
 | `tap` / `untap` | 90° rotation with overshoot ease; `forMana` adds a brief mana-coloured pip toward the pool |
 | `attack` | attacker marches to the border its quadrant shares with its defender's — a row along the horizontal seam, a column along the vertical seam, or the table's centre corner (tilted 45° toward the diagonal) — crossing the line slightly; chalk arrow drawn on the felt under the cards; defender's nameplate turns to danger with incoming damage |

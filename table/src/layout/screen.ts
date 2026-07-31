@@ -137,6 +137,7 @@ export function stackEffectText(item: StackItem): { label: string; lines: string
 
 const STACK_MARGIN = 30;             // right edge → front card
 const STACK_SLIVER = 0.15;           // fraction of a card width each buried item shows
+const STACK_SPAN_CARDS = 1;          // widest the fan ever spreads, in front-card widths
 const STACK_DEPTH_CAP = 8;           // buried-item falloff saturates here (deep stacks)
 
 /** Height of the stack's front card: a constant third of the viewport height, so
@@ -157,13 +158,38 @@ function stackGeometry(viewport: Size, rightInset: number, n: number): StackGeom
   const frontX = rightEdge - STACK_MARGIN - cardW / 2;
   // Centre the pile vertically in the play area (clear of the hand band below).
   const frontY = (viewport.h - handBandHeight(viewport)) / 2;
-  // The fan steps left by a sliver per buried item, but never so far that a deep
-  // stack runs off into the centre of the table: cap the total spread at ~45% of
-  // the felt width and shrink the step to fit.
+  // The fan steps left by a sliver per buried item, but never past its own strip:
+  // the camera reserves exactly this pile's width (stackGutterWidth) so the felt
+  // is framed beside it and never under it (#9), and a fan free to smear across
+  // half the viewport would either re-cover the table or shove it off-screen. Past
+  // ~seven items the slivers compress instead — depth still reads as "more of
+  // them", which is all a buried sliver ever said.
   const baseStep = cardW * STACK_SLIVER;
-  const maxSpan = Math.min(viewport.w * 0.45, rightEdge - cardW - STACK_MARGIN);
+  const maxSpan = Math.min(cardW * STACK_SPAN_CARDS, rightEdge - cardW - STACK_MARGIN);
   const step = Math.min(baseStep, maxSpan / Math.max(1, n - 1));
   return { frontX, frontY, scale, cardW, step };
+}
+
+/** The width the stack pile claims at the right edge, so the camera can frame the
+ *  felt *beside* it instead of under it — the same reservation the open log gutter
+ *  already gets (§8, camera.ts safeArea).
+ *
+ *  Issues.txt #9 and the 2026-07-31 "Aura Shards never let me target their Blind
+ *  Obedience" both trace here: the pile is a screen-space surface drawn over the
+ *  world, so every permanent beneath it was invisible *and* unclickable — the
+ *  pointer hit the stack card instead. Measured on the demo table, a two-item
+ *  stack already ate one or two board cards per camera view, and a stack is
+ *  non-empty exactly when a target ask is on screen (the ask's own trigger is
+ *  sitting there). Zero when the stack is empty, so the felt spreads back.
+ *
+ *  Covers the whole pile — front card, margins and every buried sliver — which is
+ *  bounded because the fan's own spread is capped (STACK_SPAN_CARDS). It grows
+ *  with the stack and shrinks back as it resolves, so the table makes room for a
+ *  stack war and takes it back afterwards. */
+export function stackGutterWidth(viewport: Size, stackSize: number): number {
+  if (stackSize <= 0) return 0;
+  const g = stackGeometry(viewport, 0, stackSize);
+  return g.cardW + 2 * STACK_MARGIN + (stackSize - 1) * g.step;
 }
 
 /** The screen point of the top-of-stack card's centre — where a trigger ghost

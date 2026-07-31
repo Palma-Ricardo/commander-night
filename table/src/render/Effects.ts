@@ -298,6 +298,33 @@ export class Effects {
     });
   }
 
+  /** A face-down card flying into a hand (design §9 draw, Issues.txt #16). Unlike
+   *  `ghost` this one *arrives*: it holds full opacity for the flight and dissolves
+   *  only in the last fifth, where the fan it joins is already drawn — so it reads
+   *  as a card being taken, not as a spirit passing through. Used for an opponent's
+   *  draw when their fan is at the #11 cap and gains no back of its own. */
+  flyIn(texture: Texture, from: Point, to: Point, scale: number, ttl = 420): void {
+    const mesh = new PerspectiveMesh({ texture, verticesX: 4, verticesY: 4 });
+    let t = 0;
+    const hw = texture.width * scale / 2;
+    const hh = texture.height * scale / 2;
+    this.add({
+      node: mesh, screen: false,
+      update: dt => (t += dt) < ttl,
+      render: proj => {
+        const k = ease(clamp01(t / ttl));
+        const w = {
+          x: from.x + (to.x - from.x) * k,
+          y: from.y + (to.y - from.y) * k - 44 * Math.sin(Math.PI * k),
+        };
+        const c = (dx: number, dy: number): Point => proj.toScreen({ x: w.x + dx * hw, y: w.y + dy * hh });
+        const tl = c(-1, -1); const tr = c(1, -1); const br = c(1, 1); const bl = c(-1, 1);
+        mesh.setCorners(tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
+        mesh.alpha = 1 - clamp01((k - 0.8) / 0.2);
+      },
+    });
+  }
+
   /** A countered spell shatters instead of resolving (design §9): the card face
    *  splits into a grid of shards that burst outward, tumble under gravity, and
    *  fade — spawned where the stack card was. `scale` is the card's world scale

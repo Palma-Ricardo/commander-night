@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StackItem } from '@night/core';
-import { handBandHeight, layoutScreen, stackEffectText } from '../src/layout/screen';
+import { handBandHeight, layoutScreen, stackEffectText, stackGutterWidth } from '../src/layout/screen';
 import { cid, fourSeats, mkCard, mkPlayer, mkState, SUPPORTED_VIEWPORTS } from './helpers';
 
 const spell = (name: string): StackItem =>
@@ -255,5 +255,24 @@ describe('layoutScreen (the stack spread for stack-item targeting)', () => {
     const xs = stackOf(layoutScreen(withStack(items), vp, 500, true)).map(p => p.placement.x);
     expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo((vp.w - 500) / 2, 1);
     expect(Math.max(...xs)).toBeLessThan(vp.w - 500);
+  });
+});
+
+describe('stackGutterWidth (Issues.txt #9 — the pile stops covering the felt)', () => {
+  it('is zero with an empty stack: the table gets the whole viewport back', () => {
+    for (const vp of SUPPORTED_VIEWPORTS) expect(stackGutterWidth(vp, 0)).toBe(0);
+  });
+
+  it('covers the whole pile at every supported viewport', () => {
+    for (const vp of SUPPORTED_VIEWPORTS) {
+      for (const n of [1, 2, 5, 12]) {
+        const xs = stackOf(layoutScreen(withStack(Array.from({ length: n }, (_, i) => spell(`s${i}`))), vp))
+          .map(p => ({ x: p.placement.x, halfW: (200 * p.placement.scale) / 2 }));
+        // The gutter is measured from the right edge; nothing the pile draws may
+        // stick out to the left of it, or a card would sit under that sliver.
+        const leftmost = Math.min(...xs.map(c => c.x - c.halfW));
+        expect(vp.w - stackGutterWidth(vp, n)).toBeLessThanOrEqual(leftmost);
+      }
+    }
   });
 });

@@ -27,6 +27,7 @@ import {
   camera, lerpPreset, seatView, TABLE_VIEW, type CameraPreset, type CameraView,
 } from '../camera/camera';
 import { CameraController } from '../camera/controller';
+import { stackGutterWidth } from '../layout/screen';
 import { accumulateStackLinks, pruneStackLinks, type StackLinks } from './keys';
 import type { Point } from '../layout/types';
 
@@ -76,6 +77,11 @@ export class Director {
   private viewport: Size;
   private reducedMotion: boolean;
   private rightInset = 0;                  // width the open log steals from the right (§8)
+  // Width the stack pile steals from the right *while it is occupied* (#9). Held
+  // apart from `rightInset` because only the camera reserves it: the pile lays
+  // itself out against the log gutter alone, or reserving its own width would
+  // walk it further left every time it changed.
+  private stackGutter = 0;
 
   // ── the two clocks ──
   private presentedState?: GameState;     // last *settled* real state
@@ -94,7 +100,7 @@ export class Director {
   constructor(private readonly sink: DirectorSink, opts: DirectorOpts = {}) {
     this.viewport = opts.viewport ?? { w: 1920, h: 1080 };
     this.reducedMotion = opts.reducedMotion ?? false;
-    this.camFrom = camera(TABLE_VIEW, this.viewport, this.rightInset);
+    this.camFrom = camera(TABLE_VIEW, this.viewport, this.cameraInset());
     this.camTo = this.camFrom;
   }
 
@@ -177,7 +183,12 @@ export class Director {
     this.boardCombat = (state.combat?.length ?? 0) > 0;   // attacks on the board
     this.controller.setCombat(this.boardCombat || this.declaringCombat);
     const after = this.controller.view();
-    if (sameView(before, after)) return;
+    // The pile filling or emptying re-frames the same view (#9): the table slides
+    // clear of the stack while a spell is on it, and spreads back when it resolves.
+    const gutter = stackGutterWidth(this.viewport, state.stack.length);
+    const gutterMoved = gutter !== this.stackGutter;
+    this.stackGutter = gutter;
+    if (sameView(before, after) && !gutterMoved) return;
     // The camera glides on its own clock (§7.3, CAMERA_FOLLOW_MS), decoupled from the
     // step animation: a turn change eases in even when the state step itself is a cut
     // (an eventless advisory update, or a snap while a deep backlog catches up). Only
@@ -189,10 +200,14 @@ export class Director {
     this.moveCameraTo(after, hardCut ? 0 : CAMERA_FOLLOW_MS);
   }
 
+  /** Everything the camera must frame *beside* rather than under: the open log's
+   *  gutter and, while it is occupied, the stack pile (§8, screen.ts). */
+  private cameraInset(): number { return this.rightInset + this.stackGutter; }
+
   /** Retarget the camera, tweening from its current interpolated preset. A 0
    *  duration (or reduced motion, or a game/first change) cuts. */
   private moveCameraTo(view: CameraView, durationMs: number): void {
-    const to = camera(view, this.viewport, this.rightInset);
+    const to = camera(view, this.viewport, this.cameraInset());
     if (durationMs <= 0 || this.reducedMotion) {
       this.camFrom = to; this.camTo = to; this.camDuration = 0; this.camElapsed = 0;
       return;
@@ -237,7 +252,7 @@ export class Director {
    *  each interrupts an in-flight move smoothly (moveCameraTo eases from the live
    *  interpolated preset). Returns true if it moved the camera. */
   keepVisible(points: Point[]): boolean {
-    if (!this.controller.keepVisible(points, this.viewport, this.rightInset)) return false;
+    if (!this.controller.keepVisible(points, this.viewport, this.cameraInset())) return false;
     this.moveCameraTo(this.controller.view(), CAMERA_FOLLOW_MS);
     return true;
   }

@@ -27,8 +27,8 @@ import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
 import { Effects } from '../render/Effects';
 import {
-  NAMEPLATE, OPP_HAND_MAX, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth, seatLayouts, WORLD,
-  type PileZone, type SeatLayout,
+  NAMEPLATE, OPP_HAND_MAX, OPP_HAND_SCALE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth,
+  seatLayouts, WORLD, type PileZone, type SeatLayout,
 } from '../layout/world';
 import type {
   ActorPlacement, ActorSpace, PlacedActor, Point, Rect, Size, Transform,
@@ -139,6 +139,11 @@ const HAND_ZOOM_STEP = 0.2;
 // Below this alpha a strip card is in the dissolve, not the reading window, and
 // stops taking clicks (#8 amendment) — you cannot read what you would be picking.
 const CAROUSEL_LIVE_ALPHA = 0.5;
+// Most ephemeral backs one anonymous draw fires (#16). A Windfall refills four
+// hands at once and every card of it is the same information — "they drew" — so
+// past a few the flock only costs frames and reading time.
+const HIDDEN_FLYERS_MAX = 3;
+const HIDDEN_FLYER_MIN_MS = 260;
 const TETHER_TARGET = 0xff5647;  // a stack item points at its target (aggressive red)
 const TETHER_SOURCE = 0xbfd0ff;  // fallback source-arrow tint when identity is unknown
 
@@ -454,6 +459,16 @@ export class TableScene implements DirectorSink {
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
     for (const e of events) if (e.k === 'move') moveByObj.set(e.objectId, e);
+    // An opponent's draw is hidden information: no object id exists on our side, so
+    // it rides the count-only §7.1 `hidden` event and the only thing that changes in
+    // the layout is one more anonymous back in their fan. Index the events by the
+    // arriving player + zone so a freshly-created back can take its origin (their
+    // deck) and its verb from them, exactly as an identified card takes them from a
+    // `move` (Issues.txt #16 — an enemy draw used to pop into the fan with no
+    // motion at all, which is why nobody at the table could see who had drawn).
+    const hiddenIn = new Map<string, Extract<GameEvent, { k: 'hidden' }>>();
+    for (const e of events) if (e.k === 'hidden') hiddenIn.set(`${e.playerId}:${e.to}`, e);
+    const flewIn = new Set<string>();   // hidden arrivals that DID create an actor
 
     // Cache what the per-frame tether redraw needs: the stackLink bindings and the
     // actor key of the top-of-stack item (matched by its card view id, which is the
@@ -472,14 +487,27 @@ export class TableScene implements DirectorSink {
 
     for (const [key, p] of placed) {
       live.add(key);
+      const mv = p.objectId !== undefined ? moveByObj.get(p.objectId) : undefined;
+      let entry: { from: Zone; to: Zone; verb: Verb } | undefined =
+        mv !== undefined ? { from: mv.from, to: mv.to, verb: mv.verb } : undefined;
       let actor = this.actors.get(key);
       if (actor === undefined) {
+        // A new actor with no move of its own is an anonymous arrival — the one
+        // that exists is an opponent's hand back, whose motion the `hidden` event
+        // describes (#16). Only *new* actors read it: the rest of the fan is
+        // re-laying, not arriving, and must not all arc off the deck.
+        const anonKey = `${p.placement.ownerId ?? ''}:${p.placement.zone}`;
+        const hid = entry === undefined ? hiddenIn.get(anonKey) : undefined;
+        if (hid !== undefined) {
+          entry = { from: hid.from, to: hid.to, verb: hid.verb };
+          flewIn.add(anonKey);
+        }
         actor = this.createActor(key, p);
         this.actors.set(key, actor);
         this.layerFor(p.space).addChild(actor.view);
         actor.space = p.space;
         // Fly in from the zone the move names, else appear at the target.
-        const origin = duration > 0 ? this.entryOrigin(p, moveByObj, to, preset) : undefined;
+        const origin = duration > 0 ? this.entryOrigin(p, entry?.from, to, preset) : undefined;
         actor.seedCurrent(origin ?? this.transformOf(p));
       } else {
         this.refreshTexture(actor, p);
@@ -492,8 +520,7 @@ export class TableScene implements DirectorSink {
         }
       }
       if (duration > 0) {
-        const mv = p.objectId !== undefined ? moveByObj.get(p.objectId) : undefined;
-        actor.animateTo(p.placement, duration, arcForMove(mv?.verb, p.space, mv?.to));
+        actor.animateTo(p.placement, duration, arcForMove(entry?.verb, p.space, entry?.to));
       } else {
         actor.snapTo(p.placement);
       }
@@ -517,7 +544,10 @@ export class TableScene implements DirectorSink {
     this.syncCarousel();         // browse contents live-update; prompt fans re-lay
     this.syncCameraFocus(to);    // §14: widen for a cross-board stack target, no prompt needed
     this.announcePhase(events);  // outside the juice gate on purpose — see below
-    if (duration > 0 && !this.reducedMotion) this.playJuice(to, events, duration, preset);
+    if (duration > 0 && !this.reducedMotion) {
+      this.playHiddenArrivals(hiddenIn, flewIn, to, duration);
+      this.playJuice(to, events, duration, preset);
+    }
     this.paint(preset);          // project felt + furniture + actors now, so nothing flashes unplaced
   }
 
@@ -639,6 +669,33 @@ export class TableScene implements DirectorSink {
     for (const e of events) {
       if (e.k === 'step' && e.phase !== undefined) {
         this.effects.phaseRibbon(phaseLabel(e.phase, e.step), this.size, this.rightInset);
+      }
+    }
+  }
+
+  /** The other half of #16: an opponent's fan is capped at ten backs (#11), and a
+   *  player holding ten or more gains no new actor when they draw — the one thing
+   *  that changes is a number. Their draws are the ones that matter most, so fly an
+   *  ephemeral back from their deck to the fan and let it dissolve into it. Only for
+   *  arrivals no real actor covered (`flewIn`), so a draw never animates twice, and
+   *  only into `hand`: it is the one anonymous destination the table draws as a
+   *  place a card can land. */
+  private playHiddenArrivals(
+    hidden: Map<string, Extract<GameEvent, { k: 'hidden' }>>,
+    flewIn: ReadonlySet<string>, to: GameState, duration: number,
+  ): void {
+    for (const [key, e] of hidden) {
+      if (e.to !== 'hand' || flewIn.has(key)) continue;
+      const seat = seatLayouts(to).find(s => s.player.id === e.playerId);
+      const from = this.zoneAnchorWorld(e.from, e.playerId, to);
+      if (seat === undefined || from === undefined) continue;
+      // Floored, unlike the actor tween it stands in for: a burst-compressed step
+      // (§6.3) can be a few dozen ms, and this is the *only* thing that says the
+      // draw happened — an ephemeral nobody sees is the bug being fixed.
+      const flight = Math.max(HIDDEN_FLYER_MIN_MS, duration);
+      for (let i = 0; i < Math.min(e.count, HIDDEN_FLYERS_MAX); i++) {
+        this.after(i * 90, () =>
+          this.effects.flyIn(this.textures.faceDown(), from, seat.handFan, OPP_HAND_SCALE, flight));
       }
     }
   }
@@ -1042,16 +1099,14 @@ export class TableScene implements DirectorSink {
     }
   }
 
-  /** Where a new actor should spawn: the owner's source-zone anchor named by its
-   *  `move` event, in the actor's destination space. Undefined ⇒ appear at target. */
+  /** Where a new actor should spawn: the owner's anchor for the zone it came from
+   *  (named by its `move`, or by the `hidden` count-only event for an anonymous
+   *  arrival), in the actor's destination space. Undefined ⇒ appear at target. */
   private entryOrigin(
-    p: PlacedActor, moveByObj: Map<Id, Extract<GameEvent, { k: 'move' }>>,
-    to: GameState, preset: CameraPreset,
+    p: PlacedActor, from: Zone | undefined, to: GameState, preset: CameraPreset,
   ): Transform | undefined {
-    const objId = p.objectId;
-    const mv = objId !== undefined ? moveByObj.get(objId) : undefined;
-    if (mv === undefined) return undefined;
-    const world = this.zoneAnchorWorld(mv.from, p.placement.ownerId, to);
+    if (from === undefined) return undefined;
+    const world = this.zoneAnchorWorld(from, p.placement.ownerId, to);
     if (world === undefined) return undefined;
     if (p.space === 'screen') {
       const s = worldToScreen(preset, world);

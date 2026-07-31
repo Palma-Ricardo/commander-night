@@ -6,6 +6,8 @@ import mage.view.GameClientMessage;
 import mage.view.GameView;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -114,6 +116,17 @@ public final class TapAutopsyMain {
                                         System.out.printf("    hand   %s%n", shortId(h)));
                             }
                         }
+                        // Target-coverage probe (Issues.txt, 2026-07-31: "Aura Shards
+                        // never let me target my opponent's Blind Obedience"). The
+                        // bridge forwards msg.getTargets() verbatim as protocol §8
+                        // `candidates`, so the question "did the client hide a legal
+                        // target, or did the server never offer it?" is answered here:
+                        // every battlefield permanent in the ask's OWN view, split into
+                        // offered and not-offered, with the controller named.
+                        if ("GAME_TARGET".equals(cb.getMethod().name())
+                                && msg.getTargets() != null && msg.getGameView() != null) {
+                            targetCoverage(msg);
+                        }
                         if (msg.getChoice() != null) {
                             System.out.printf("  choice: %s keyChoices=%s%n",
                                     clip(msg.getChoice().getMessage(), 80),
@@ -178,6 +191,34 @@ public final class TapAutopsyMain {
         System.out.printf("active-player sequence (indices into players[]): %s%n", turnSeq);
         System.out.println("views carrying revealed/lookedAt, per method (with/without):");
         windowTally.forEach((m, t) -> System.out.printf("  %-24s %d/%d%n", m, t[0], t[0] + t[1]));
+    }
+
+    /**
+     * Print what a GAME_TARGET ask offered against what was actually on the
+     * table. Anything in the "not offered" list is a permanent XMage itself
+     * ruled out (protection, a controller/zone restriction in the filter, or
+     * simply the wrong type) — never something the bridge dropped, which
+     * forwards this set verbatim.
+     */
+    private static void targetCoverage(GameClientMessage msg) {
+        var view = msg.getGameView();
+        var offered = msg.getTargets();
+        List<String> yes = new ArrayList<>();
+        List<String> no = new ArrayList<>();
+        int board = 0;
+        for (var pv : view.getPlayers()) {
+            for (var e : pv.getBattlefield().entrySet()) {
+                board++;
+                String label = e.getValue().getName() + " (" + pv.getName() + ")";
+                (offered.contains(e.getKey()) ? yes : no).add(label);
+            }
+        }
+        long offBoard = offered.stream().filter(t -> view.getPlayers().stream()
+                .noneMatch(pv -> pv.getBattlefield().containsKey(t))).count();
+        System.out.printf("  board: %d permanents · offered %d of them (+%d off-board ids)%n",
+                board, yes.size(), offBoard);
+        System.out.printf("    offered:     %s%n", clip(String.join(", ", yes), 220));
+        System.out.printf("    NOT offered: %s%n", clip(String.join(", ", no), 220));
     }
 
     private static String firstName(CardView[] cards) {
