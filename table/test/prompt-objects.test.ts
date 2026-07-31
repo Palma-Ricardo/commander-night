@@ -5,10 +5,11 @@
 import { describe, expect, it } from 'vitest';
 import { emptyScratch, type PromptStoreState } from '@night/core/stores/prompt';
 import type { Prompt, StackItem } from '@night/core/protocol/protocol';
-import { promptObjectIds, stackTargetIds } from '../src/scene/prompt-objects';
+import { promptObjectIds, spreadBoardIds, stackTargetIds } from '../src/scene/prompt-objects';
 
 const base = { t: 'game.prompt', seq: 1, gameId: 'g', promptId: 1, message: 'm' } as const;
 const ids = (pending: Prompt) => promptObjectIds({ ...emptyScratch(), pending }).sort();
+const spread = (pending: Prompt) => spreadBoardIds({ ...emptyScratch(), pending }).sort();
 
 describe('promptObjectIds (§14 pull-back scope)', () => {
   it('no pending prompt → no objects', () => {
@@ -45,6 +46,41 @@ describe('promptObjectIds (§14 pull-back scope)', () => {
 
   it('a plain confirm concerns no board object', () => {
     expect(ids({ ...base, kind: 'confirm' })).toEqual([]);
+  });
+});
+
+describe('spreadBoardIds (#24/#25 un-fold policy)', () => {
+  it('nothing pending → nothing spreads', () => {
+    expect(spreadBoardIds(emptyScratch())).toEqual([]);
+  });
+
+  it('a multi-target ask spreads its candidates — a folded pile dead-ends past its top', () => {
+    expect(spread({ ...base, kind: 'chooseTargets', candidates: ['a', 'b'], min: 0, max: 3, required: false }))
+      .toEqual(['a', 'b']);
+  });
+
+  it('a single-target pick keeps its piles — fold members are fungible by construction', () => {
+    expect(spread({ ...base, kind: 'chooseTargets', candidates: ['a', 'b'], min: 1, max: 1, required: true }))
+      .toEqual([]);
+  });
+
+  it('a combat declaration spreads candidates AND declared (#25)', () => {
+    // A declared attacker stays in the grid until Done, so without this the top of
+    // a Saproling pile is the only attacker that pile can ever send; `declared` is
+    // in the set so toggling one back off is reachable too.
+    expect(spread({
+      ...base, kind: 'priority', canPass: true, playable: {},
+      combat: { role: 'attackers', candidates: ['c1', 'c2'], declared: ['d1'] },
+    })).toEqual(['c1', 'c2', 'd1']);
+  });
+
+  it('a plain priority window spreads nothing — the board stays folded to play from', () => {
+    expect(spread({ ...base, kind: 'priority', canPass: true, playable: { a: [] } })).toEqual([]);
+  });
+
+  it('other asks leave the board alone', () => {
+    expect(spread({ ...base, kind: 'payMana', remaining: '{G}', sources: ['s'], canCancel: false })).toEqual([]);
+    expect(spread({ ...base, kind: 'confirm' })).toEqual([]);
   });
 });
 

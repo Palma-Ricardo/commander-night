@@ -361,6 +361,31 @@ Everything in §7 that reads as a design decision is a consequence of this table
   cluster turns as one when the host taps. The host may be in another seat's quadrant (your
   Pacifism on their creature) or out in a battle lane (a sword on an attacker) — the attachment
   follows it, and dims with the board it is lying on.
+- **Interchangeable permanents fold into one cell with a `×N` tally** — the board's answer to
+  overflow, and the way people actually stack basics and tokens on a real table. Only basics and
+  tokens ever fold, and only across states the felt itself shows: tapped, counters and P/T split a
+  cell, and any individuated permanent (attached, damaged, morphed, flipped) refuses to fold at all.
+  Every member keeps its own actor under a small depth stagger, so the pile has real height and the
+  card underneath is still a card. Two rules make it work in practice, both added 2026-07-30:
+  - **Nothing the board doesn't draw may split a cell** (Issues.txt #18). Summoning sickness was in
+    the fold key and is drawn nowhere; XMage sets it on *every* permanent that came under your
+    control this turn — lands and Treasures included, since `hasSummoningSickness()` never checks
+    for a creature — and holds it until your next turn, a full four-player cycle. So the land you
+    just played and each Treasure you just made sat out in a cell of their own for that whole cycle.
+    That is what "permanents aren't stacking when they first enter" was.
+  - **An ask that must reach past the top of a pile un-folds it first** (`spreadBoardIds`). A
+    multi-target ask does (#24) — "destroy up to three artifacts" dead-ends past one treasure — and
+    so does a **combat declaration** (#25), which needs it more: a declared attacker does not leave
+    the grid until you press Done, so toggling the top of a folded pile leaves the rest buried and
+    five Saprolings could send exactly one attacker. Spreading the declaration is also what lets the
+    fold key ignore sickness: the one ask where a sick token differs from a ready one never folds.
+- **The battle lanes fold on the same rule** (Issues.txt #25). Identical attackers hitting the same
+  defender take one slot in the line-up with a `×N` tally, so a swarm reads as a rank rather than
+  smearing past the rail — the front line closes up exactly as the board does, and the same stagger
+  makes it the same silhouette. Two exceptions, both about what the lane has to show: a **blocked**
+  attacker never folds, because it owns a face-off and its blockers are drawn in line across the
+  border from it, and the **defender is part of the fold key**, so a swarm hitting the player never
+  reads as one squad with a swarm hitting that player's planeswalker.
 - **Cards always billboard upright.** Rotating opponents' cards to face their own seat is the
   literal table and it is unreadable; seat identity is carried by the furniture instead. This is a
   deliberate break from realism and the only one.

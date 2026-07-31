@@ -266,13 +266,24 @@ function place(
 // A permanent's stack key: permanents sharing one collapse into a single grid cell
 // (a "×N" tally, drawn by CardActor). Only basics and tokens ever stack — eight
 // Forests or eight Saprolings are interchangeable, eight distinct nonbasics are
-// not — and even then never across a difference the board must show: tapped, sick,
-// counters, or P/T all split the stack, and any individuated permanent (attached,
-// damaged, morphed, flipped) refuses to stack at all. Token *copies* do stack with
-// each other — two identical Sandwurm Convergence copies (Anikthea + Doubling
-// Season) are interchangeable — so `copy` folds into the key rather than
+// not — and even then never across a difference **the board actually shows**:
+// tapped, counters, or P/T all split the stack, and any individuated permanent
+// (attached, damaged, morphed, flipped) refuses to stack at all. Token *copies* do
+// stack with each other — two identical Sandwurm Convergence copies (Anikthea +
+// Doubling Season) are interchangeable — so `copy` folds into the key rather than
 // disqualifying, keeping copies apart from a real printing but merging like copies.
 // undefined ⇒ singleton.
+//
+// Summoning sickness is deliberately NOT in the key (Issues.txt #18). XMage sets
+// it on *every* permanent that came under your control this turn — lands and
+// Treasures included, since `hasSummoningSickness()` never checks for a creature —
+// and it stays set until your next turn begins, a full four-player cycle away. In
+// the key it meant the land you just played, and each Treasure you just made, sat
+// out in a cell of its own for a whole turn cycle: "permanents aren't stacking when
+// they first enter". Nothing on the canvas draws sickness, so by the rule above it
+// has no business splitting a cell; the one moment it decides anything — which
+// creatures may be declared as attackers — the board is spread flat anyway
+// (TableScene.updateBoardSpread), so no legal attacker can end up buried.
 function stackKey(p: Permanent): string | undefined {
   const basicLand = p.types.includes('LAND') && p.supertypes.includes('Basic');
   if (!basicLand && p.token !== true) return undefined;
@@ -283,7 +294,7 @@ function stackKey(p: Permanent): string | undefined {
   return [
     p.token === true ? 'tok' : 'basic', p.name,
     p.copy === true ? 'copy' : '_',
-    p.tapped ? 'T' : 'U', p.summoningSick === true ? 'S' : '_',
+    p.tapped ? 'T' : 'U',
     p.power ?? '', p.toughness ?? '', counters,
   ].join('|');
 }
@@ -412,6 +423,14 @@ function placeAttachments(
   }
 }
 
+// The depth stagger of a folded cell — each member peeks this far past the one
+// below, capped so a twenty-Saproling cell can't climb into the row above. Shared
+// by the board grid and the battle lanes (#25) so a stack that marches out to
+// fight keeps exactly the silhouette it had at home.
+const CELL_STEP_X = 2;
+const CELL_STEP_Y = 3;
+const CELL_DEPTH_MAX = 6;
+
 /** One grid slot: every member is placed (so each keeps its own actor, hit-test
  *  and affordance ring), co-located under a small depth offset so the cell reads
  *  as a tidy pile; only the topmost (last, so it renders over the rest) carries
@@ -422,10 +441,10 @@ function placeCell(
 ): void {
   const n = cell.length;
   cell.forEach((perm, i) => {
-    const d = Math.min(i, 6);
+    const d = Math.min(i, CELL_DEPTH_MAX);
     const t: Transform = {
-      x: cx + d * 2,
-      y: cy - d * 3,
+      x: cx + d * CELL_STEP_X,
+      y: cy - d * CELL_STEP_Y,
       rotation: perm.tapped ? TAP_ANGLE : 0,
       scale: BOARD_SCALE,
     };
@@ -516,6 +535,38 @@ const CORNER_CLEAR = 180;         // border kept free around the centre corner
 
 type LaneKind = 'h' | 'v' | 'corner';
 
+interface LaneEntry { perm: Permanent; g: CombatGroup }
+
+/** Fold a lane's attackers the way `groupCells` folds a board row: identical
+ *  attackers hitting the same defender share one slot with a "×N" tally
+ *  (Issues.txt #25), so twenty Saprolings are one column of the front line rather
+ *  than twenty cards smeared past the rail. Two extra conditions beyond
+ *  `stackKey`, both about what the lane has to *show*:
+ *
+ *   · a **blocked** attacker never folds — it owns a face-off, with its blockers
+ *     drawn in line directly across the border from it, and a folded cell has no
+ *     single place to point them at. Fights stay individual; only the unopposed
+ *     rank closes up.
+ *   · the defender joins the key, because two attackers of the same seat can be
+ *     hitting different planeswalkers and must not read as one squad.
+ *
+ *  Attackers are tapped as a rule, so `stackKey`'s tapped component is uniform
+ *  here and does no work — but a vigilant attacker still refuses to merge with a
+ *  tapped one, which is right: the board shows the difference. */
+function laneCells(entries: readonly LaneEntry[]): LaneEntry[][] {
+  const cells: LaneEntry[][] = [];
+  const byKey = new Map<string, LaneEntry[]>();
+  for (const en of entries) {
+    const fold = en.g.blocked || en.g.blockerIds.length > 0 ? undefined : stackKey(en.perm);
+    if (fold === undefined) { cells.push([en]); continue; }
+    const key = `${en.g.defenderId}|${fold}`;
+    const cell = byKey.get(key);
+    if (cell === undefined) { const fresh = [en]; byKey.set(key, fresh); cells.push(fresh); }
+    else cell.push(en);
+  }
+  return cells;
+}
+
 /** Which border an attacking quadrant shares with its defender's: the horizontal
  *  seam, the vertical seam, or just the centre corner. Undefined when they share
  *  a quadrant (corrupt state) — the combatant degrades to its grid slot. */
@@ -557,8 +608,7 @@ function layoutCombat(
   // Pass 1 — bucket every resolvable attacker into its seat's lane toward its
   // defender. A stale id or an unknown/same-quadrant defender is skipped here,
   // so it degrades to the ordinary grid slot, never to a vanished card.
-  interface Entry { perm: Permanent; g: CombatGroup }
-  const lanes = new Map<string, { seat: SeatLayout; kind: LaneKind; entries: Entry[] }>();
+  const lanes = new Map<string, { seat: SeatLayout; kind: LaneKind; entries: LaneEntry[] }>();
   for (const g of combat) {
     for (const aid of g.attackerIds) {
       const hit = permOf.get(aid);
@@ -576,13 +626,16 @@ function layoutCombat(
     }
   }
 
-  const placeCombatant = (perm: Permanent, seat: SeatLayout, x: number, y: number, tilt: number): void => {
+  const placeCombatant = (
+    perm: Permanent, seat: SeatLayout, x: number, y: number, tilt: number, count?: number,
+  ): void => {
     ids.add(perm.id);
     const t: Transform = { x, y, rotation: tilt, scale: BOARD_SCALE };
     placeAttachments(seat, perm, t, att, out);   // a creature marches with its kit on
     place(out, perm.id, perm, perm.id, {
       ...t, zone: 'battlefield',
       ownerId: seat.player.id, faceUp: !(perm.faceDown ?? false), tapped: perm.tapped,
+      count,
     });
   };
 
@@ -597,7 +650,10 @@ function layoutCombat(
     const seat = lane.seat;
     const q = seat.quadrant;
     const side: 1 | -1 = seat.corner.left ? 1 : -1;   // toward the other column
-    const mid = (lane.entries.length - 1) / 2;
+    // Slots are per *cell*, not per attacker: a folded rank takes one place in the
+    // line-up and the line-up centres on that count (#25).
+    const cells = laneCells(lane.entries);
+    const mid = (cells.length - 1) / 2;
     let segMid = 0;
     if (lane.kind === 'h') {
       segMid = seat.corner.left
@@ -608,7 +664,7 @@ function layoutCombat(
         ? (centreY + CORNER_CLEAR + q.y + q.h - EDGE_MARGIN) / 2
         : (q.y + EDGE_MARGIN + centreY - CORNER_CLEAR) / 2;
     }
-    lane.entries.forEach((en, i) => {
+    cells.forEach((cell, i) => {
       let bx: number, by: number, dirX: number, dirY: number, tilt: number;
       if (lane.kind === 'h') {          // row along the horizontal seam
         bx = segMid + (i - mid) * (CARD_W + GAP);
@@ -626,13 +682,25 @@ function layoutCombat(
         by = centreY + dirX * off;
         tilt = side * CORNER_TILT;
       }
-      const adv = en.g.blocked ? -ATTACK_NUDGE_BACK : ATTACK_ADVANCE;
-      placeCombatant(en.perm, seat, bx + dirX * adv, by + dirY * adv, tilt);
+      // Every member of the cell shares the group's stance (a folded cell is
+      // unblocked by construction), then stacks under the same depth stagger the
+      // board grid uses, topmost carrying the tally.
+      const g = cell[0]!.g;
+      const adv = g.blocked ? -ATTACK_NUDGE_BACK : ATTACK_ADVANCE;
+      const ax = bx + dirX * adv;
+      const ay = by + dirY * adv;
+      cell.forEach((en, k) => {
+        const d = Math.min(k, CELL_DEPTH_MAX);
+        placeCombatant(
+          en.perm, seat, ax + d * CELL_STEP_X, ay - d * CELL_STEP_Y, tilt,
+          cell.length > 1 && k === cell.length - 1 ? cell.length : undefined,
+        );
+      });
       // Its blockers: directly across the border, in line, same rotation —
       // fanned along the border when several gang up. First placement wins if a
-      // creature somehow blocks twice.
-      const bMid = (en.g.blockerIds.length - 1) / 2;
-      en.g.blockerIds.forEach((bid, j) => {
+      // creature somehow blocks twice. Only an unfolded cell ever has any.
+      const bMid = (g.blockerIds.length - 1) / 2;
+      g.blockerIds.forEach((bid, j) => {
         const bHit = permOf.get(bid);
         if (bHit === undefined || ids.has(bid) || att.nested.has(bid)) return;
         const f = (j - bMid) * BLOCK_FAN;

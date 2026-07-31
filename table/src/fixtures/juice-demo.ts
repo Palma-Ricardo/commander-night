@@ -41,15 +41,20 @@ const BEATS: Beat[] = [
   {
     // Ana (bottom-right) swings at all three opponents at once, so the reel mans
     // every battle lane: p1 across the vertical seam, p3 across the horizontal
-    // seam, p4 at the centre corner (the 45° diagonal).
-    label: 'attack (all three lanes + danger plates)',
+    // seam, p4 at the centre corner (the 45° diagonal). The p3 lane gets a *rank*
+    // of four identical goblins, which is the #25 fold — they must arrive as one
+    // slot carrying a ×4 tally, not four cards smeared along the seam.
+    label: 'attack (all three lanes, one folded rank + danger plates)',
     mutate: s => {
-      const gobs = s.players[1]!.battlefield.filter(b => b.name === 'Goblin Token' && !b.tapped).slice(0, 3);
+      const gobs = s.players[1]!.battlefield.filter(b => b.name === 'Goblin Token' && !b.tapped).slice(0, 6);
       s.turn.phase = 'COMBAT'; s.turn.step = 'DECLARE_ATTACKERS';
-      if (gobs.length < 3) return;
+      if (gobs.length < 6) return;
       gobs.forEach(g => { g.tapped = true; });
-      s.combat = (['p1', 'p3', 'p4'] as const).map((pid, i) =>
-        ({ attackerIds: [gobs[i]!.id], defenderId: pid, blockerIds: [], blocked: false }));
+      s.combat = [
+        { attackerIds: [gobs[0]!.id], defenderId: 'p1', blockerIds: [], blocked: false },
+        { attackerIds: gobs.slice(1, 5).map(g => g.id), defenderId: 'p3', blockerIds: [], blocked: false },
+        { attackerIds: [gobs[5]!.id], defenderId: 'p4', blockerIds: [], blocked: false },
+      ];
     },
     events: s => (s.combat ?? []).map(g => ({ k: 'attack', attackerIds: g.attackerIds, defenderId: g.defenderId })),
   },

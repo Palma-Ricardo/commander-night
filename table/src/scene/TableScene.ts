@@ -40,7 +40,7 @@ import {
   carouselContent, carouselPageCount, layoutCarouselFan, type BrowseZone, type CarouselEntry,
 } from '../layout/carousel';
 import { carouselStore, pageFor, turnPage } from './carousel-store';
-import { promptObjectIds, stackTargetIds } from './prompt-objects';
+import { promptObjectIds, spreadBoardIds, stackTargetIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, HL_TARGET, isClickable, rectContains,
   type Projector, type ScreenAnchor,
@@ -1557,15 +1557,14 @@ export class TableScene implements DirectorSink {
     return false;
   }
 
-  /** During a multi-target ask, candidate ids refuse to fold into board piles —
-   *  folded, only the top of a treasure stack could ever be picked (#24). The
-   *  members tween apart into their own grid cells and fold back when the ask
-   *  clears; a single-target pick keeps its piles (fold members are fungible by
-   *  construction — `stackKey` only merges identical state). */
+  /** Un-fold the board piles a pending ask has to reach into (`spreadBoardIds`,
+   *  #24/#25): the members tween apart into their own grid cells and fold back the
+   *  moment the ask clears, which for a combat declaration means the rank closes up
+   *  again on its way out to the battle lane (`laneCells`). */
   private updateBoardSpread(): void {
-    const p = this.currentPrompt?.pending;
-    const want: ReadonlySet<Id> = p?.kind === 'chooseTargets' && p.max > 1
-      ? new Set(p.candidates) : new Set<Id>();
+    const prompt = this.currentPrompt;
+    const want: ReadonlySet<Id> =
+      prompt === undefined ? new Set<Id>() : new Set(spreadBoardIds(prompt));
     if (want.size === this.spreadBoard.size && [...want].every(id => this.spreadBoard.has(id))) return;
     this.spreadBoard = want;
     const presented = this.director?.presented;

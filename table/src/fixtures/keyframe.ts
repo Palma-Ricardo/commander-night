@@ -156,8 +156,10 @@ const ana = seat('p2', 'Ana', false, 22, {
     // Krenko's swarm: identical tokens as the wire sends them (scryfall.ts): token=true,
     // empty collector number, a " Token" name suffix — so the resolver takes its
     // token-search ladder (degrading to colour-only), and the table folds them into
-    // one ×N cell instead of five. One is tapped, so it splits off (attacked?).
-    goblin(), goblin(), goblin(), goblin(),
+    // one ×N cell instead of seven. One is tapped, so it splits off (attacked?).
+    // Six untapped is enough for the reel to march a *rank* down one battle lane
+    // and still man the other two (#25 — the lane folds like the board does).
+    goblin(), goblin(), goblin(), goblin(), goblin(), goblin(),
     { ...goblin(), tapped: true },
   ],
   graveyard: [card('Lightning Bolt', 'msc', '806', 1, ['INSTANT'], { colors: ['R'], text: ['Deal 3 damage.'] })],

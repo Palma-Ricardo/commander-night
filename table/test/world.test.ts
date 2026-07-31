@@ -267,6 +267,38 @@ describe('layoutWorld', () => {
     expect(tallies).toEqual([3]);                         // only the identical trio collapses
   });
 
+  it('a permanent joins its stack the moment it enters — sickness never splits (#18)', () => {
+    // XMage flags `summoningSick` on everything that came under your control this
+    // turn, lands and Treasures included, and it stays set until your NEXT turn —
+    // a whole four-player cycle. While that was in the stack key, the land you just
+    // played and each Treasure you just made sat out in a cell of their own for
+    // that entire cycle, which is exactly what "permanents aren't stacking when
+    // they first enter" looked like at the table.
+    const forest = (o: Partial<Permanent> = {}): Permanent =>
+      ({ ...mkCard('Forest', ['LAND'], { supertypes: ['Basic'] }), controllerId: 'p1', tapped: false, ...o });
+    const treasure = (o: Partial<Permanent> = {}): Permanent =>
+      ({ ...mkCard('Treasure', ['ARTIFACT'], { token: true }), controllerId: 'p1', tapped: false, ...o });
+    const you = mkPlayer('p1', 'You', {
+      human: true,
+      battlefield: [
+        forest(), forest(), forest(),            // three settled Forests…
+        forest({ summoningSick: true }),          // …and the one just played
+        treasure(), treasure({ summoningSick: true }),
+      ],
+    });
+    const bf = layoutWorld(mkState([you], 'p1')).filter(p => p.placement.zone === 'battlefield');
+    expect(bf.length).toBe(6);                    // every permanent keeps its own actor
+    const tallies = bf.map(p => p.placement.count)
+      .filter((n): n is number => n !== undefined).sort();
+    expect(tallies).toEqual([2, 4]);              // 4 Forests in one cell, 2 Treasures in another
+
+    // Sickness is the ONLY difference here, so the fresh Forest must land in the
+    // settled ones' cell — co-located to within the depth stagger, not a cell away.
+    const forests = bf.filter(p => p.card?.name === 'Forest');
+    const xs = forests.map(p => p.placement.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(30);
+  });
+
   it('handles a crowded board (20 permanents) with no collisions', () => {
     const bf = Array.from({ length: 20 }, (_, i) =>
       mkPerm('p1', i % 3 === 0 ? mkLand(`L${i}`) : mkCreature(`C${i}`)));
@@ -522,6 +554,79 @@ describe('combat: the three battle lanes (§7.2/§9)', () => {
     const { state } = combatState(true);
     const placed = layoutWorld(state);
     expect(new Map(placed.map(p => [p.key, p])).size).toBe(placed.length);
+  });
+
+  // ── #25: the front line folds the way the board does ───────────────────────
+  const swarm = (n: number, name = 'Saproling'): Permanent[] =>
+    Array.from({ length: n }, () => ({
+      ...mkCard(name, ['CREATURE'], { power: '1', toughness: '1', token: true }),
+      controllerId: 'p1', tapped: true,
+    }));
+
+  it('identical unblocked attackers fold into one lane slot with a ×N tally (#25)', () => {
+    const state = fourSeats();
+    const army = swarm(6);
+    state.players[0]!.battlefield = [...state.players[0]!.battlefield, ...army];
+    state.combat = [{
+      attackerIds: army.map(p => p.id), defenderId: 'p4', blockerIds: [], blocked: false,
+    }];
+    const placed = byKey(layoutWorld(state));
+    const slots = army.map(p => placed.get(p.id)!.placement);
+    expect(slots.every(s => s !== undefined)).toBe(true);   // each keeps its own actor
+    // One slot, not six: co-located to within the depth stagger.
+    const xs = slots.map(s => s.x), ys = slots.map(s => s.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(30);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(30);
+    // …tallied once, on the topmost.
+    const tallies = slots.map(s => s.count).filter((n): n is number => n !== undefined);
+    expect(tallies).toEqual([6]);
+    // And it is still a real attack: across the horizontal seam toward p4.
+    expect(slots[0]!.y).toBeLessThan(SEAM_Y);
+  });
+
+  it('a blocked attacker never folds — a face-off stays individual (#25)', () => {
+    const state = fourSeats();
+    const army = swarm(4);
+    state.players[0]!.battlefield = [...state.players[0]!.battlefield, ...army];
+    const blocker = state.players[3]!.battlefield.find(p => p.types.includes('CREATURE'))!;
+    state.combat = [
+      // Two of them get through; one is blocked and owns its own duel.
+      { attackerIds: [army[0]!.id, army[1]!.id], defenderId: 'p4', blockerIds: [], blocked: false },
+      { attackerIds: [army[2]!.id], defenderId: 'p4', blockerIds: [blocker.id], blocked: true },
+      { attackerIds: [army[3]!.id], defenderId: 'p4', blockerIds: [], blocked: false },
+    ];
+    const placed = byKey(layoutWorld(state));
+    const at = (p: Permanent) => placed.get(p.id)!.placement;
+    // The three unblocked ones share a slot despite spanning two combat groups…
+    const open = [army[0]!, army[1]!, army[3]!].map(at);
+    const xs = open.map(s => s.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(30);
+    expect(open.map(s => s.count).filter(n => n !== undefined)).toEqual([3]);
+    // …while the blocked one stands apart, with its blocker in line across the seam.
+    const fight = at(army[2]!);
+    expect(Math.abs(fight.x - open[0]!.x)).toBeGreaterThan(100);
+    expect(fight.count).toBeUndefined();
+    expect(at(blocker).x).toBeCloseTo(fight.x, 5);
+  });
+
+  it('attackers hitting different defenders in one lane do not fold together (#25)', () => {
+    // Both defenders resolve to p4's seat — the same horizontal lane — but a swarm
+    // hitting the player must not read as one squad with the swarm hitting its
+    // planeswalker. The defender is part of the fold key.
+    const state = fourSeats();
+    const walker = { ...mkCard('Teferi', ['PLANESWALKER'], { loyalty: '4' }), controllerId: 'p4', tapped: false };
+    state.players[3]!.battlefield = [...state.players[3]!.battlefield, walker];
+    const army = swarm(4);
+    state.players[0]!.battlefield = [...state.players[0]!.battlefield, ...army];
+    state.combat = [
+      { attackerIds: [army[0]!.id, army[1]!.id], defenderId: 'p4', blockerIds: [], blocked: false },
+      { attackerIds: [army[2]!.id, army[3]!.id], defenderId: walker.id, blockerIds: [], blocked: false },
+    ];
+    const placed = byKey(layoutWorld(state));
+    const at = (p: Permanent) => placed.get(p.id)!.placement;
+    expect(Math.abs(at(army[0]!).x - at(army[2]!).x)).toBeGreaterThan(100);   // two slots
+    const tallies = army.map(p => at(p).count).filter((n): n is number => n !== undefined);
+    expect(tallies).toEqual([2, 2]);                                          // one tally each
   });
 
   it('a stale combat id degrades to the ordinary grid, never a vanished card', () => {

@@ -37,6 +37,32 @@ export function promptObjectIds(prompt: PromptStoreState): Id[] {
   }
 }
 
+/** Which board ids must refuse to fold into a stacked cell while this prompt is
+ *  pending (`layoutWorld`'s `spread`). Folded, only the top of a pile is a
+ *  practical hit target, so any ask that needs *several* members of one pile picked
+ *  apart dead-ends — the cells tween apart for the ask and fold back after.
+ *
+ *   · **multi-target** (`chooseTargets`, max > 1): "destroy up to three artifacts"
+ *     must reach past the top treasure (#24). A single-target pick keeps its piles:
+ *     fold members are fungible by construction, since `stackKey` only ever merges
+ *     permanents in identical state.
+ *   · **combat declaration**: the harder case (#25). A declared attacker does *not*
+ *     leave the grid — XMage only moves it into `state.combat` once you press Done
+ *     — so toggling the top of a folded pile leaves it exactly where it was, the
+ *     rest still buried and unclickable: five Saprolings could send one attacker,
+ *     ever. Both candidates and already-declared ids spread, so toggling back off
+ *     works too. This is also what lets `stackKey` ignore summoning sickness (#18):
+ *     the one ask where a sick token differs from a ready one never folds. */
+export function spreadBoardIds(prompt: PromptStoreState): Id[] {
+  const p = prompt.pending;
+  if (p === undefined) return [];
+  if (p.kind === 'chooseTargets') return p.max > 1 ? [...p.candidates] : [];
+  if (p.kind === 'priority' && p.combat !== undefined) {
+    return [...p.combat.candidates, ...p.combat.declared];
+  }
+  return [];
+}
+
 /** Every object/player id that anything on the stack targets — the second input to
  *  the §14 pull-back, orthogonal to any prompt. A targeted effect that reaches off
  *  the framed board (the active player casting removal at another seat's creature
