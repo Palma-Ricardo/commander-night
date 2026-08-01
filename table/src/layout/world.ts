@@ -19,9 +19,18 @@ import type { ActorPlacement, PlacedActor, Point, Rect, Transform } from './type
 
 // ── the fixed world ──────────────────────────────────────────────────────────
 
-/** The felt's extent, in table units. A constant — never a function of the
+/** The cloth's extent, in table units. A constant — never a function of the
  *  player count: short lobbies are AI-filled, so the world is always four seats. */
-export const WORLD = { w: 2400, h: 1520 } as const;
+const FELT = { w: 2400, h: 1520 } as const;
+/** The wooden rail the felt is inlaid into (the scene bakes it at this width).
+ *  A place setting lives on the *cloth*: quadrants tile the felt, not the table
+ *  top, so a pile, a nameplate or its chip strip never rides up onto the wood
+ *  (reviewed 2026-08-01 — the corner pile and the plate both overlapped it). */
+export const RAIL = 58;
+/** The whole table top, rail included — the extent the camera frames and the felt
+ *  texture is baked at. The cloth keeps its size and the rail is added outside it,
+ *  so seat-relative geometry is unchanged by the inlay. */
+export const WORLD = { w: FELT.w + 2 * RAIL, h: FELT.h + 2 * RAIL } as const;
 
 const CARD_TEX = { w: 200, h: 280 } as const;   // native portrait px (hand/stack/piles/hover)
 // Battlefield permanents render as a landscape "art box" — a name bar over the art
@@ -77,6 +86,11 @@ const EDGE_MARGIN = 30;          // outer felt edge → pile column / nameplate 
 const INNER_GAP = 20;            // pile column → board rows
 const HAND_GAP = 20;             // nameplate → opponent hand fan
 const LAND_GAP = 10;             // clear gap between the (tapped-aware) land row and the nameplate
+// The seat-chip strip (commander damage, counters) hangs on the rail side of the
+// plate — TableScene draws it 18 tall, 2 clear — so the band reserves it whether
+// or not a seat has chips today: a plate that moved when someone's commander
+// connected would be worse than a plate one row further in.
+const CHIP_ROOM = 22;
 
 export const NAMEPLATE = { w: 214, h: 63 } as const;   // h matches the held-fan (see OPP_HAND_SCALE)
 const PILE_W = CARD_TEX.w * PILE_SCALE;          // 84
@@ -178,7 +192,6 @@ export interface SeatLayout {
   lands: RowGeom;                  // the mana row, pinned to the rail
   bandY: number;                   // centre-y of the nameplate + pile band
   nameplate: Rect;
-  lamplight: { x: number; y: number; r: number };
   piles: Record<PileZone, Point>;  // pile anchor centres
   handFan: Point;                  // centre of the opponent hand fan
 }
@@ -215,9 +228,9 @@ export function seatOfPlayer(state: GameState, playerId: Id | undefined): number
 }
 
 function quadrantRect(corner: Corner): Rect {
-  const hw = WORLD.w / 2;
-  const hh = WORLD.h / 2;
-  return { x: corner.left ? 0 : hw, y: corner.bottom ? hh : 0, w: hw, h: hh };
+  const hw = FELT.w / 2;
+  const hh = FELT.h / 2;
+  return { x: RAIL + (corner.left ? 0 : hw), y: RAIL + (corner.bottom ? hh : 0), w: hw, h: hh };
 }
 
 /** The world rectangle a display seat occupies (0 = you, bottom-left). Exported
@@ -277,8 +290,10 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   // Nameplate + the opponent's held fan share the band at the outer vertical edge,
   // inboard of the pile column (§7.2 ".plate"). It hugs the rail — a nameplate is
   // short, so inset it by its *own* half-height, not a pile's, or the rail carries
-  // a dead band (reviewed 2026-07-23). The fan sits beside the nameplate.
-  const bandY = outerEdge - out * (EDGE_MARGIN + NAMEPLATE.h / 2);
+  // a dead band (reviewed 2026-07-23) — plus room for the commander-damage chip
+  // strip, which hangs off its rail side and is what actually reaches furthest
+  // out. The fan sits beside the nameplate.
+  const bandY = outerEdge - out * (EDGE_MARGIN + CHIP_ROOM + NAMEPLATE.h / 2);
   // Lands are the back row of the place setting — pinned to the rail, just inboard
   // of the nameplate band (§7.2). Permanents fill forward from the seam; lands fill
   // back from here, so your mana sits in front of you and your threats face the
@@ -294,7 +309,6 @@ function seatGeometry(display: number, player: Player): SeatLayout {
   return {
     display, player, corner, quadrant: q, out,
     boardTopY, landRowY, spells, lands, bandY, nameplate,
-    lamplight: { x: q.x + q.w / 2, y: q.y + q.h / 2, r: Math.min(q.w, q.h) * 0.62 },
     piles, handFan,
   };
 }

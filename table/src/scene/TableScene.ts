@@ -27,8 +27,8 @@ import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
 import { Effects } from '../render/Effects';
 import {
-  NAMEPLATE, OPP_HAND_MAX, OPP_HAND_SCALE, PILE_FOOTPRINT, PILE_LABEL, opponentHandHalfWidth,
-  seatLayouts, WORLD, type PileZone, type SeatLayout,
+  NAMEPLATE, OPP_HAND_MAX, OPP_HAND_SCALE, PILE_FOOTPRINT, PILE_LABEL, RAIL,
+  opponentHandHalfWidth, seatLayouts, WORLD, type PileZone, type SeatLayout,
 } from '../layout/world';
 import type {
   ActorPlacement, ActorSpace, PlacedActor, Point, Rect, Size, Transform,
@@ -68,7 +68,6 @@ const WOOD_LO = 0x150f09;
 const FELT_STOPS = [0x2a3a30, 0x1e2b23, 0x17211b, 0x121a16] as const;
 const FELT = FELT_STOPS[1];    // the representative mid-tone, for anything flat
 const LAMP = 0xe8c07a;         // the hanging lamp's warm core
-const POOL = 0xc99a46;         // a seat's own pool of light (= --brass)
 const BRASS = 0xc99a46;        // --brass
 const BRASS_HI = 0xf2c86c;     // --brass-hi: life totals, your own plate's edge
 const BRASS_DIM = 0x7e6330;    // --brass-dim: an opponent's plate edge
@@ -90,8 +89,8 @@ const HIT_FILL_LO = 0x23100b;
 
 // Table geometry, in world px. The felt is *inlaid* into a wooden rail (the
 // mockup's `--rail: 40px` against its 1664-wide world; ours is 2400 wide, so this
-// is the same fraction) — an edge you can see the table end at.
-const RAIL = 58;
+// is the same fraction) — an edge you can see the table end at. `RAIL` itself is
+// the layout's (seat quadrants tile the cloth inside it).
 const TABLE_RADIUS = 38;
 const FELT_RADIUS = 18;
 const WEAVE_PITCH = 7;         // spacing of the cloth's diagonal hairlines
@@ -183,8 +182,7 @@ export class TableScene implements DirectorSink {
   private unsubResolver?: () => void;
   private readonly worldLayer = new Container();   // identity: children are placed in screen space
   private feltMesh!: PerspectiveMesh;               // the felt surface, keystoned per frame (T4)
-  private feltTex?: Texture;                        // baked felt base (rect + folds + lamplight)
-  private feltSig = '';                             // rebuilds the felt tex only when the layout moves
+  private feltTex?: Texture;                        // baked felt base (rail + cloth + lamp), baked once
   // Furniture keystones geometrically (§7): the footprint / nameplate / chip
   // *shapes* are drawn as projected quads into one Graphics every frame, so they
   // lean with the felt; their text labels billboard upright at the projected anchor
@@ -538,7 +536,7 @@ export class TableScene implements DirectorSink {
       if (hv !== undefined && hv.space === 'screen') this.screenActors.addChild(hv.view);
     }
 
-    this.rebuildFelt(to);
+    this.rebuildFelt();
     this.drawFurniture(to);
     this.refreshAffordances();   // newly-created actors need their §7 highlights
     this.syncCarousel();         // browse contents live-update; prompt fans re-lay
@@ -1854,21 +1852,18 @@ export class TableScene implements DirectorSink {
 
   /** Bake the whole table surface into a world-sized texture, then hand it to the
    *  felt mesh: the wood rail, the felt inlaid into it, the cloth's weave and
-   *  quarter folds, the hanging lamp, and each seat's pool of light. Everything
-   *  rides the one texture, so all of it keystones with the surface for free.
-   *  Rebuilt only when the seat layout moves (guarded by a signature) — the mesh's
-   *  four corners are re-projected every frame regardless.
+   *  quarter folds, and the hanging lamp. Everything rides the one texture, so all
+   *  of it keystones with the surface for free. Nothing on it depends on the seats
+   *  any more (the per-seat pools are gone), so it is baked once — the mesh's four
+   *  corners are re-projected every frame regardless.
    *
    *  Issues.txt #3: this used to be a flat green rounded rectangle with a darker
    *  border and four hard-edged discs at 5% alpha. Every one of those is now the
    *  mockup's own treatment — a rail the cloth is *inset* into (so the table has an
    *  edge you can see it end at), a radial felt that is brightest under the lamp,
    *  a weave, and light that falls off instead of stopping. */
-  private rebuildFelt(state: GameState): void {
-    const seats = seatLayouts(state);
-    const sig = seats.map(s => `${Math.round(s.lamplight.x)},${Math.round(s.lamplight.y)},${Math.round(s.lamplight.r)}`).join('|');
-    if (sig === this.feltSig && this.feltTex !== undefined) return;
-    this.feltSig = sig;
+  private rebuildFelt(): void {
+    if (this.feltTex !== undefined) return;
     const g = new Graphics();
     const { w, h } = WORLD;
 
@@ -1914,18 +1909,16 @@ export class TableScene implements DirectorSink {
         .stroke({ width: 2, color: 0xffffff, alpha: 0.055 });
     }
 
-    // One lamp over the middle of the table, and a pool at each place setting.
-    // Both are feathered by hand: a Graphics circle is a hard-edged disc, and four
-    // of those at 5% was the "four pale circles" look the night reported.
+    // One lamp over the middle of the table — and only that one. Each place setting
+    // used to carry a pool of its own; feathered they no longer read as the four
+    // pale discs the first night reported, but four warm patches under one hanging
+    // lamp is still a light rig no room has (asked for 2026-08-01). Feathered by
+    // hand because a Graphics circle is a hard-edged disc.
     feather(g, w / 2, h * 0.46, w * 0.46, LAMP, 0.15, 1.5);
-    for (const seat of seats) {
-      feather(g, seat.lamplight.x, seat.lamplight.y, seat.lamplight.r, POOL, 0.11, 1.3);
-    }
 
     const tex = this.app.renderer.generateTexture({ target: g, frame: new Rectangle(0, 0, w, h), resolution: 1 });
     this.feltMesh.texture = tex;
-    this.feltTex?.destroy(true);
-    this.feltTex = tex;
+    this.feltTex = tex;   // one bake per scene; `destroy()` releases it
     g.destroy();
   }
 

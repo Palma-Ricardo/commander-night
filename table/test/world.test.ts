@@ -153,11 +153,12 @@ describe('layoutWorld', () => {
     const you = mkPlayer('p1', 'You', { human: true, battlefield: treasures });
     const state = mkState([you], 'p1');
 
-    // folded by default: all four share one cell (co-located, ~2px steps)
+    // folded by default: all four share one cell (co-located, ~2px steps — measure
+    // the spread itself, not which 10px bucket it happens to land in)
     const folded = layoutWorld(state).filter(p => treasures.some(t => t.id === p.objectId));
     expect(folded.length).toBe(4);
-    const xs = new Set(folded.map(p => Math.round(p.placement.x / 10)));
-    expect(xs.size).toBe(1);
+    const xs = folded.map(p => p.placement.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(10);
 
     // spread: each takes its own grid cell
     const spread = layoutWorld(state, new Set(treasures.map(t => t.id)))
