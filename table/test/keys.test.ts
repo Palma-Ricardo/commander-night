@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Card } from '@night/core';
+import type { Card, Permanent } from '@night/core';
 import {
   accumulateStackLinks, canonicalKey, layoutKeyed, pruneStackLinks, type StackLinks,
 } from '../src/scene/keys';
+import { mkCard } from './helpers';
 import { demoSession, SPELL, STK, VICTIM } from './session-fixture';
 
 const VP = { w: 1600, h: 900 };
+const spellCard = () => mkCard('Blind Obedience', ['ENCHANTMENT'], { colors: ['W'] });
 
 describe('stackLink canonicalization (§3, §6.1)', () => {
   it('folds stackLink events into the link map, ignoring other kinds', () => {
@@ -63,6 +65,45 @@ describe('stackLink canonicalization (§3, §6.1)', () => {
     // Contrast: a cast (SPELL absent off-stack) still adopts, unifying cast → resolve.
     const cast = demoSession().steps.find(st => st.label === 'cast')!.state;
     expect(layoutKeyed(cast, VP, new Map([[STK, SPELL]])).has(SPELL)).toBe(true);
+  });
+
+  it('hands a surviving key a DIFFERENT object across cast → resolve', () => {
+    // 1.4.60 does not key an opponent's spell on the stack by the id its
+    // permanent will get: the stack item's card carries one uuid, the stackLink
+    // names another, and the permanent enters under the *link's*. Adoption keeps
+    // one actor across the pair — which is the point — so that actor's object
+    // silently changes identity underneath it.
+    //
+    // Live-caught 2026-07-31 (Issues.txt #9): CardActor cached `objectId` at
+    // construction, so an opponent's cast permanent kept answering for the dead
+    // stack-time id — invisible to findObject, to affordanceFor, to every click.
+    // It drew its own art the whole time, so the board looked right and the card
+    // was simply dead: no hover preview, and never offered as a target. The scene
+    // must therefore re-read `objectId` off the placement on every transition;
+    // this test pins the layout fact that makes that mandatory.
+    const CARD = 'their-card-uuid';
+    const PERM = 'their-permanent-uuid';
+    const STACK_ID = 'stk-theirs';
+
+    const casting = structuredClone(demoSession().initial);
+    casting.stack.push({
+      id: STACK_ID, kind: 'spell', controllerId: 'p2', text: [],
+      card: { ...spellCard(), id: CARD },
+    });
+    const links: StackLinks = new Map([[STACK_ID, PERM]]);
+    const onStack = layoutKeyed(casting, VP, links);
+    expect(onStack.get(PERM)?.placement.zone).toBe('stack');
+    expect(onStack.get(PERM)?.objectId).toBe(CARD);          // ← not PERM
+
+    const resolved = structuredClone(demoSession().initial);
+    resolved.players[1]!.battlefield.push({
+      ...spellCard(), id: PERM, controllerId: 'p2', tapped: false,
+    } as Permanent);
+    const onBoard = layoutKeyed(resolved, VP, new Map());
+    expect(onBoard.get(PERM)?.placement.zone).toBe('battlefield');
+    expect(onBoard.get(PERM)?.objectId).toBe(PERM);          // same key, other object
+
+    expect(onBoard.get(PERM)!.objectId).not.toBe(onStack.get(PERM)!.objectId);
   });
 
   it('prunes a link once its spell has left the stack', () => {

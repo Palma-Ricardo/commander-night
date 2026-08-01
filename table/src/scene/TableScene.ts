@@ -1047,7 +1047,12 @@ export class TableScene implements DirectorSink {
     return actor;
   }
 
+  /** Re-point a surviving actor at whatever object now holds its key: identity,
+   *  card and face. All three travel together — a key that changes hands changes
+   *  all of them at once — so nothing here may be split off as an optimisation
+   *  (the id used to be the one field left behind; see CardActor.objectId). */
   private refreshTexture(actor: CardActor, p: PlacedActor): void {
+    actor.objectId = p.objectId;
     actor.card = p.card;
     actor.setTexture(this.textureFor(p));
   }

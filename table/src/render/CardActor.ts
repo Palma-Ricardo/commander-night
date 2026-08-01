@@ -140,11 +140,24 @@ export class CardActor {
    *  reparents world↔screen when this changes across a transition. */
   space: ActorSpace = 'world';
 
+  /** The object this actor currently *is*, which the scene re-syncs on every
+   *  transition (`card` above travels with it). Not readonly, and that is the
+   *  whole point: an actor's key is stable but the object under it is not.
+   *  A stack actor adopted onto a stable id (§3/§6.1 `stackLink`) is born
+   *  carrying the *stack item's* card id, then the spell resolves and the same
+   *  key becomes a battlefield permanent with a different id. Freezing the id at
+   *  construction left every id-keyed interaction — hover preview, click,
+   *  affordance ring, targeting — aimed at an object that no longer exists, so
+   *  an opponent's cast permanent quietly went dead on the felt while still
+   *  drawing its correct art (Issues.txt #9, live-caught 2026-07-31). */
+  objectId: string | undefined;
+
   constructor(
     readonly key: string,
-    readonly objectId: string | undefined,
+    objectId: string | undefined,
     texture: Texture,
   ) {
+    this.objectId = objectId;
     this.face = new PerspectiveMesh({ texture, verticesX: FACE_VERTS, verticesY: FACE_VERTS });
     // glow behind the ring; flash over the face but under the P/T/tap chrome.
     this.view.addChild(this.glowG, this.highlight, this.face, this.flashG, this.chrome);

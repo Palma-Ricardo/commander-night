@@ -233,6 +233,18 @@ Actors outlive zone changes (that is the whole point), are created on first sigh
 only after their exit animation completes. Stack items get actors keyed by `stackId`, adopted onto
 the stable id when a `stackLink` arrives.
 
+**An actor's key is stable; the object under it is not.** The key is the continuity device — what
+makes the tween happen — and it is deliberately *not* the same thing as the identity of whatever
+currently occupies it. Adoption is exactly where the two part: 1.4.60 gives an opponent's spell on
+the stack a card uuid that is *not* the uuid its permanent enters under, so the adopted actor is
+born carrying the stack-time id and then the permanent lands on the same key with a different one.
+So on every transition an actor re-reads its whole identity — `objectId`, `card`, texture —
+from the placement now at its key (`TableScene.refreshTexture`); none of the three may be cached at
+construction. Caching the id is what Issues.txt #9 was: the card kept drawing its own art while
+every id-keyed interaction — hover preview, click, affordance ring, targeting — was aimed at an
+object that had ceased to exist, so an opponent's cast permanent was simply dead on the felt.
+Pinned by `keys.test.ts` ("hands a surviving key a DIFFERENT object across cast → resolve").
+
 ### 6.2 Layout is a pure function — and the camera is not part of it
 
 The world/screen split (§7.1) buys a factoring that is better than one `layout()` taking a viewport:
