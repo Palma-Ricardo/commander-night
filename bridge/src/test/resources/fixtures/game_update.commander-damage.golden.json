@@ -465,7 +465,8 @@
         "power" : "4",
         "toughness" : "5",
         "controllerId" : "3c671f7f-078a-485b-8cb9-45cff229d8ec",
-        "tapped" : true
+        "tapped" : true,
+        "commander" : true
       }, {
         "id" : "40ed62d3-c450-4833-b9b9-148798180503",
         "name" : "Treetop Village",

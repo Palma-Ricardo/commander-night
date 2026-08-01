@@ -21,7 +21,7 @@ import type { FederatedPointerEvent } from 'pixi.js';
 import type {
   Card, GameEvent, GameState, Id, NightScene, Phase, SceneActor, ScryfallResolver, Step, Verb, Zone,
 } from '@night/core';
-import { affordanceFor, commanderDamageRows } from '@night/core/state/selectors';
+import { affordanceFor, commanderDamageRows, commanderNames } from '@night/core/state/selectors';
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
@@ -86,6 +86,26 @@ const DMG_FILL = 0x7a2318;
 const DMG_EDGE = DANGER;
 const HIT_FILL = 0x3b1a12;     // a nameplate taking unblocked damage
 const HIT_FILL_LO = 0x23100b;
+const PLATE_CMDR_INK = 0xa98f5e;  // the mockup's `.cm` — brass gone quiet, under the name
+const PLATE_PAD = 13;             // plate edge → its first mark
+const PLATE_MARK_GUTTER = 17;     // …and the slot the active-player bead sits in, lit or not
+
+/** Squeeze a plate line into the room the plate has for it. A commander is
+ *  "Atraxa" long before it is "Atraxa, Praetors' Voice", so the epithet is what
+ *  goes first; only then do we ellipsise. Measured, not counted — the plate holds
+ *  proper names, and character counts lie about those. */
+function fitPlateLine(node: Text, max: number): void {
+  if (node.width <= max) return;
+  const comma = node.text.indexOf(',');
+  if (comma > 0) {
+    node.text = node.text.slice(0, comma);
+    if (node.width <= max) return;
+  }
+  const base = node.text;
+  const keep = Math.max(1, Math.floor(base.length * (max / node.width)) - 1);
+  node.text = `${base.slice(0, keep)}…`;
+  while (node.width > max && node.text.length > 2) node.text = `${node.text.slice(0, -2)}…`;
+}
 
 // Table geometry, in world px. The felt is *inlaid* into a wooden rail (the
 // mockup's `--rail: 40px` against its 1664-wide world; ours is 2400 wide, so this
@@ -192,6 +212,13 @@ export class TableScene implements DirectorSink {
   private readonly furnitureText = new Container();
   private shapeSpecs: FurnitureShape[] = [];
   private textItems: { node: Text; anchor: Point }[] = [];
+  // Who each seat's commander is, accumulated over the game (§7.2 ".cm"). The
+  // wire shows a commander in the command zone or flagged on the battlefield
+  // (§6 `commander`) but nowhere else, so a memo is what carries the plate's
+  // identity line through the turns the commander spends in a graveyard. Keyed
+  // by game so a rematch does not inherit the last one's seats.
+  private readonly commanderMemo = new Map<Id, string[]>();
+  private commanderMemoGame?: Id;
   private readonly worldActors = new Container();
   private readonly screenActors = new Container();  // fixed (the hand + the stack pile)
   private readonly actors = new Map<string, CardActor>();
@@ -1951,6 +1978,7 @@ export class TableScene implements DirectorSink {
     for (const c of this.furnitureText.removeChildren()) c.destroy();
     this.shapeSpecs = [];
     this.textItems = [];
+    this.rememberCommanders(state);
     for (const seat of seatLayouts(state)) {
       this.drawPiles(seat);
       this.drawNameplate(seat, state);
@@ -2035,6 +2063,21 @@ export class TableScene implements DirectorSink {
     );
   }
 
+  /** Fold whatever the command zones show this state into the per-seat memo, so
+   *  the plate's identity line survives the commander being cast. Union, not
+   *  replace: a partner pair shows up one at a time once either half is out. */
+  private rememberCommanders(state: GameState): void {
+    if (this.commanderMemoGame !== state.gameId) {
+      this.commanderMemo.clear();
+      this.commanderMemoGame = state.gameId;
+    }
+    for (const p of state.players) {
+      const seen = this.commanderMemo.get(p.id) ?? [];
+      for (const name of commanderNames(p)) if (!seen.includes(name)) seen.push(name);
+      if (seen.length > 0) this.commanderMemo.set(p.id, seen);
+    }
+  }
+
   private drawNameplate(seat: SeatLayout, state: GameState): void {
     const n = NAMEPLATE;
     const p = seat.player;
@@ -2072,21 +2115,57 @@ export class TableScene implements DirectorSink {
           : { width: 1.5, color: mine ? BRASS : BRASS_DIM, alpha: 1 },
     });
     const dead = p.flags?.dead === true || p.flags?.left === true;
-    this.addFurnitureText(
-      `${p.name}`,
-      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 22, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
-      0, 0.5, { x: box.x + 12, y: box.y + n.h / 2 },     // left-pinned, vertically centred
-    );
-    // Life is the number you glance at across the table, so it takes the brightest
+    // The plate reads left to right exactly as the mockup's does (§7.2 ".plate"):
+    // a turn mark, the life total at glance size, then who they are over what they
+    // are playing. The turn mark's gutter is reserved whether or not it is lit, so
+    // the plate does not reflow every time the turn passes.
+    const cy = box.y + n.h / 2;
+    if (state.turn.activePlayerId === p.id) {
+      // Whose turn it is, on the seat itself — the ribbon says it in words, but the
+      // felt is where you are looking. A lit brass bead with the lamp's own glow.
+      this.addFurnitureText(
+        '●',
+        new TextStyle({
+          fontFamily: 'Georgia, serif', fontSize: 20, fill: dead ? 0x8a8375 : BRASS_HI,
+          dropShadow: { color: BRASS, alpha: 0.9, blur: 8, distance: 0, angle: 0 },
+        }),
+        0.5, 0.5, { x: box.x + PLATE_PAD + 6, y: cy },
+      );
+    }
+    // Life is the number you glance at across the table, so it is the big, bright
     // thing on the plate — bright brass, as the mockup's `.life` does.
-    this.addFurnitureText(
+    const lifeX = box.x + PLATE_PAD + PLATE_MARK_GUTTER;
+    const life = this.addFurnitureText(
       `${p.life}`,
       new TextStyle({
-        fontFamily: 'Georgia, serif', fontSize: 24,
+        fontFamily: 'Georgia, serif', fontSize: 34,
         fill: hit ? DMG_INK : dead ? 0x8a8375 : BRASS_HI, fontWeight: '700',
       }),
-      1, 0.5, { x: box.x + n.w - 12, y: box.y + n.h / 2 },
+      0, 0.5, { x: lifeX, y: cy },
     );
+    // The name/commander column starts past whatever life actually measured (a
+    // three-digit total is a real thing) and owns the rest of the plate.
+    const whoX = lifeX + life.width + 11;
+    const whoRoom = box.x + n.w - PLATE_PAD - whoX;
+    const commander = this.commanderMemo.get(p.id)?.join(' & ');
+    const name = this.addFurnitureText(
+      p.name,
+      new TextStyle({ fontFamily: 'Georgia, serif', fontSize: 19, fill: dead ? 0x8a8375 : INK, fontWeight: '600' }),
+      0, commander === undefined ? 0.5 : 1,
+      { x: whoX, y: commander === undefined ? cy : cy + 2 },
+    );
+    fitPlateLine(name, whoRoom);
+    if (commander !== undefined) {
+      const line = this.addFurnitureText(
+        commander,
+        new TextStyle({
+          fontFamily: 'Georgia, serif', fontSize: 14, fontStyle: 'italic',
+          fill: dead ? 0x6f6a5f : PLATE_CMDR_INK,
+        }),
+        0, 0, { x: whoX, y: cy + 5 },
+      );
+      fitPlateLine(line, whoRoom);
+    }
     const chips: SeatChip[] = commanderDamageRows(state, p).map(row => {
       const short = (row.commander.split(/[ ,]/)[0] ?? row.commander).slice(0, 6);
       return { label: `⚔ ${short} ${row.amount}`, tone: 'danger' as const };

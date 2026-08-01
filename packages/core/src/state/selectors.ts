@@ -89,6 +89,21 @@ export function stepLabel(step: Step | undefined): string {
 
 export interface CommanderDamageRow { commander: string; amount: number }
 
+/** The commander(s) this state can see for a player, in the two places a
+ *  commander is ever visible as one: the command zone, and the battlefield via
+ *  the §6 `commander` flag. Neither alone is enough — XMage drops the Commander
+ *  command object the moment its card leaves the zone (CardImpl.removeFromZone
+ *  case COMMAND), and it only flags permanents — so a commander sitting in a
+ *  graveyard is invisible to both, and anything that wants a *stable* identity
+ *  line (the table's nameplate, §7.2) still remembers what it has seen. */
+export function commanderNames(player: Player): string[] {
+  const names = player.commandZone.filter(c => c.kind === 'commander').map(c => c.name);
+  for (const p of player.battlefield) {
+    if (p.commander === true && !names.includes(p.name)) names.push(p.name);
+  }
+  return names;
+}
+
 export function commanderDamageRows(state: GameState, victim: Player): CommanderDamageRow[] {
   return (victim.commanderDamage ?? [])
     .map(cd => ({

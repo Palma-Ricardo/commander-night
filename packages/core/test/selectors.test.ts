@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { decode } from '../src/protocol/codec';
 import type { GameState, LogEntry, Prompt, StateKeyframe } from '../src/protocol/protocol';
 import {
-  affordanceFor, combatLines, commanderDamageRows, findObject, isBoardReachable, me, opponents,
+  affordanceFor, combatLines, commanderDamageRows, commanderNames, findObject, isBoardReachable,
+  me, opponents,
   rematchCode, statusLine, targetName, unreachableCandidates,
 } from '../src/state/selectors';
 import { emptyScratch, type PromptStoreState } from '../src/stores/prompt';
@@ -85,6 +86,31 @@ describe('commander damage (data on the victim, §6)', () => {
   it('empty when absent', () => {
     const s = state();
     expect(commanderDamageRows(s, s.players[0]!)).toEqual([]);
+  });
+});
+
+describe('commanderNames (§6, the two places a commander shows as one)', () => {
+  it('reads the command zone', () => {
+    const p = state().players.find(x => x.id === 'p1')!;
+    expect(commanderNames(p)).toEqual(['Lathril, Blade of the Elves']);
+  });
+
+  it('reads a flagged permanent once the commander is cast and the zone empties', () => {
+    const p = state().players.find(x => x.id === 'p1')!;
+    p.commandZone = [];
+    p.battlefield[0] = { ...p.battlefield[0]!, name: 'Lathril, Blade of the Elves', commander: true };
+    expect(commanderNames(p)).toEqual(['Lathril, Blade of the Elves']);
+  });
+
+  it('does not double-count the same commander in both places', () => {
+    const p = state().players.find(x => x.id === 'p1')!;
+    p.battlefield[0] = { ...p.battlefield[0]!, name: 'Lathril, Blade of the Elves', commander: true };
+    expect(commanderNames(p)).toEqual(['Lathril, Blade of the Elves']);
+  });
+
+  it('is empty for a player whose commander is in neither place', () => {
+    const p = state().players.find(x => x.id === 'p2')!;
+    expect(commanderNames(p)).toEqual([]);
   });
 });
 

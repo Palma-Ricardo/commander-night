@@ -123,7 +123,7 @@ class PromptTranslatorTest {
             battlefield.add(new Permanent(permanentId, permanentId, null, null, null, 0,
                     java.util.List.of(), java.util.List.of(), java.util.List.of(),
                     java.util.List.of(), java.util.List.of(), null, null, null, null, null,
-                    null, null, id, false, null, null, null, null, null, null, null, null));
+                    null, null, id, false, null, null, null, null, null, null, null, null, null));
         }
         return new Player(id, id, true, 40, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
                 0, 0, battlefield, java.util.List.of(), java.util.List.of(),

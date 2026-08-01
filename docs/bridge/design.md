@@ -229,6 +229,15 @@ M7 spike (2026-07-25, `PayManaAnchorReplayTest` over 20 captures, 1114 asks) est
 link as 100 % present and preferred it to the stack-top derivation, whose ephemeral stack id
 is not the id clients key a cast card by.
 
+**Commander in play** (`ViewTranslator.isCommander`; protocol §6 `Permanent.commander`, added
+2026-08-01): unlike the two scrapes above this is not text at all — 1.4.60 puts a typed
+`CardIconType.COMMANDER` on the permanent's view (`CardView.generateCardIconsForPermanent`), so
+we match the enum and there is nothing to pin or canary. It exists because the command zone is
+*not* a lasting record of who someone's commander is: `CardImpl.removeFromZone` drops the
+`Commander` object as the card leaves, so `Player.commandZone` is empty for the whole time the
+commander is in play. XMage generates the icon for permanents only — a commander in a graveyard
+carries no mark, and the bridge does not infer one.
+
 **Log pipeline** (`LogTranslator`): `CHATMESSAGE` per protocol §10 — drop `color:ORANGE`
 structure announcements, strip HTML, extract `object_id='…'` attributes into `refs`,
 `GAME_INFORM_PERSONAL` → `kind:'personal'`. Every entry lands in the seat's ring buffer

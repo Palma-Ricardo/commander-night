@@ -483,14 +483,14 @@ class EventDeriverTest {
     private static Permanent permanent(String id, String name, String controller, Boolean token) {
         return new Permanent(id, name, "SET", "1", null, 0, List.of(), List.of(), List.of(), List.of(),
                 List.of(), null, null, null, null, null, token, null,
-                controller, false, null, null, null, null, null, null, null, null);
+                controller, false, null, null, null, null, null, null, null, null, null);
     }
 
     private static Permanent fullPerm(String id, String name, String controller,
                                       boolean tapped, Integer damage, List<Counter> counters) {
         return new Permanent(id, name, "SET", "1", null, 0, List.of(), List.of(), List.of(), List.of(),
                 List.of(), null, null, null, null, counters, null, null,
-                controller, tapped, null, null, null, damage, null, null, null, null);
+                controller, tapped, null, null, null, damage, null, null, null, null, null);
     }
 
     private static Permanent permTap(String id, String name, String controller) {

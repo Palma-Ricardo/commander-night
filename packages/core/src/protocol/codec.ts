@@ -169,7 +169,7 @@ const permanentC = obj({
     flipped: bool, transformed: bool,
     morph: strEnum('morphed', 'manifested', 'disguised', 'cloaked'),
     damage: num, summoningSick: bool,
-    attachments: arr(idc), attachedTo: idc, copy: bool,
+    attachments: arr(idc), attachedTo: idc, copy: bool, commander: bool,
   },
 });
 

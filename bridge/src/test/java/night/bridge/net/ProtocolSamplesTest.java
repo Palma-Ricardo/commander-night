@@ -437,7 +437,7 @@ class ProtocolSamplesTest {
                                         null, 0, List.of("LAND"), List.of(), List.of(), List.of(),
                                         List.of("{T}: Add one mana of any color in your commander's color identity."),
                                         null, null, null, null, null, null, null,
-                                        "p1", true, null, null, null, null, null, null, null, null)),
+                                        "p1", true, null, null, null, null, null, null, null, null, null)),
                                 List.of(new Card("gy-1", "Arcane Signet", "C21", "251", "{2}", 2,
                                         List.of("ARTIFACT"), List.of(), List.of(), List.of(),
                                         List.of("{T}: Add one mana of any color in your commander's color identity."),

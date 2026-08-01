@@ -1,5 +1,7 @@
 package night.bridge.translate;
 
+import mage.abilities.icon.CardIcon;
+import mage.abilities.icon.CardIconType;
 import mage.view.CardView;
 import mage.view.CardsView;
 import mage.view.CombatGroupView;
@@ -383,7 +385,18 @@ public final class ViewTranslator {
                 v.hasSummoningSickness() ? true : null,
                 ids(v.getAttachments()),
                 v.getAttachedTo() == null ? null : v.getAttachedTo().toString(),
-                v.isCopy() ? true : null);
+                v.isCopy() ? true : null,
+                isCommander(v) ? true : null);
+    }
+
+    /** Protocol §6 {@code Permanent.commander} — XMage marks a commander in play
+     *  with its own card icon (CardView.generateCardIconsForPermanent), which is
+     *  the only signal that survives the commander leaving the command zone. Read
+     *  through the typed enum, not the hint text, so a wording change can't move
+     *  it silently. */
+    private static boolean isCommander(PermanentView v) {
+        List<CardIcon> icons = v.getCardIcons();
+        return icons != null && icons.stream().anyMatch(i -> i.getIconType() == CardIconType.COMMANDER);
     }
 
     private static String morph(PermanentView v) {

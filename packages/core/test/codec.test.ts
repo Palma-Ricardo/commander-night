@@ -118,6 +118,23 @@ describe('deep GameState validation', () => {
     expect(r.msg.state.players[0]?.battlefield[0]?.imageNumber).toBe(0);
   });
 
+  it('accepts commander on a battlefield permanent in strict mode (§6)', () => {
+    // The bridge flags a commander in play from XMage's own card icon (added
+    // 2026-08-01) — the only wire signal for it, since the command zone empties
+    // when the commander is cast. Dev-strict rejects unknown fields, so the
+    // decoder has to carry it or a keyframe with a cast commander is dropped.
+    const doctored = JSON.parse(stateSample) as {
+      state: { players: { battlefield: Record<string, unknown>[] }[] };
+    };
+    doctored.state.players[0]!.battlefield[0]!.commander = true;
+
+    const r = decode(doctored, { strict: true });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (!r.ok || r.msg === null) throw new Error('unreachable');
+    if (r.msg.t !== 'game.state') throw new Error('wrong type');
+    expect(r.msg.state.players[0]?.battlefield[0]?.commander).toBe(true);
+  });
+
   it('accepts ability on a chooseTargets card in strict mode (§7 trigger-order picker)', () => {
     // Regression guard. Live 2026-07-23: a trigger-order picker (Lattice Library's
     // ETB) arrives as a chooseTargets whose cards carry `ability:true` (the source

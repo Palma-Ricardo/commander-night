@@ -35,5 +35,6 @@ public record Permanent(
         Boolean summoningSick,
         List<String> attachments,
         String attachedTo,
-        Boolean copy) {
+        Boolean copy,
+        Boolean commander) {
 }

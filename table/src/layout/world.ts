@@ -92,7 +92,11 @@ const LAND_GAP = 10;             // clear gap between the (tapped-aware) land ro
 // connected would be worse than a plate one row further in.
 const CHIP_ROOM = 22;
 
-export const NAMEPLATE = { w: 214, h: 63 } as const;   // h matches the held-fan (see OPP_HAND_SCALE)
+// h matches the held-fan (see OPP_HAND_SCALE). The width carries the mockup's
+// three-part plate — turn mark, the life total at glance size, and the player
+// over their commander — so it is set by the longest thing on it, a commander
+// name, not by the shortest.
+export const NAMEPLATE = { w: 250, h: 63 } as const;
 const PILE_W = CARD_TEX.w * PILE_SCALE;          // 84
 const PILE_GAP = 16;             // vertical gap between piles in the column
 const PILE_LABEL_GAP = 24;       // pile bottom → its count label baseline

@@ -104,6 +104,11 @@ export interface Permanent extends Card {
   attachments?: Id[];          // auras/equipment attached to this
   attachedTo?: Id;             // permanent or player this is attached to
   copy?: boolean;
+  // This permanent is its owner's commander (§6, added 2026-08-01). XMage marks
+  // it on permanents only, so there is no such flag on Card — but the command
+  // zone empties the moment the commander is cast, which makes this the only
+  // wire signal for "that is their commander" while it is in play.
+  commander?: boolean;
 }
 
 export interface StackItem {
