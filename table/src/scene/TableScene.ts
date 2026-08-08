@@ -1855,9 +1855,18 @@ export class TableScene implements DirectorSink {
       prompt === undefined ? new Set<Id>() : new Set(spreadBoardIds(prompt));
     if (want.size === this.spreadBoard.size && [...want].every(id => this.spreadBoard.has(id))) return;
     this.spreadBoard = want;
-    const presented = this.director?.presented;
-    if (presented !== undefined) {
-      this.applyTransition(presented, presented, [], HAND_RECENTRE_MS, this.stackLinks);
+    // Re-lay against AUTHORITATIVE state, not `presented`: a combat re-ask lands the
+    // just-declared attacker in `state.combat` (with its defender) and the director
+    // is still animating it out to its battle lane, so `presented` still shows it in
+    // the grid. Re-laying from `presented` here snapped the attacker back into its
+    // board slot until the next transition settled — visible in 4-player combat,
+    // where picking a defender empties `spreadBoard` and the re-ask re-fills it, so
+    // this runs mid-flight (heads-up auto-assigns the defender and never toggles the
+    // set, which is why it hid). Same rule the carousel learned: prompt surfaces read
+    // authoritative state, never `presented` (§6.4, Issues.txt #1).
+    const state = this.latestState ?? this.director?.presented;
+    if (state !== undefined) {
+      this.applyTransition(state, state, [], HAND_RECENTRE_MS, this.stackLinks);
     }
   }
 
