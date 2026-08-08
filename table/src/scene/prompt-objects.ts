@@ -25,7 +25,11 @@ export function promptObjectIds(prompt: PromptStoreState): Id[] {
   switch (p.kind) {
     case 'priority':
       // Only a combat declaration scopes the camera; a plain priority window does not.
-      return p.combat !== undefined ? [...p.combat.candidates, ...p.combat.declared] : [];
+      // `combatSelected` too: a toggled-in combatant leaves `candidates` before it
+      // reaches `declared` (empty till Done), so without it the pull-back could drop
+      // the very card you just declared out of shot.
+      return p.combat !== undefined
+        ? [...p.combat.candidates, ...p.combat.declared, ...prompt.combatSelected] : [];
     case 'chooseTargets':
       return [...p.candidates];
     case 'payMana':
@@ -58,7 +62,10 @@ export function spreadBoardIds(prompt: PromptStoreState): Id[] {
   if (p === undefined) return [];
   if (p.kind === 'chooseTargets') return p.max > 1 ? [...p.candidates] : [];
   if (p.kind === 'priority' && p.combat !== undefined) {
-    return [...p.combat.candidates, ...p.combat.declared];
+    // `combatSelected` keeps an optimistically-declared combatant spread even after
+    // it drops out of `candidates`, so a folded pile can't bury it before you toggle
+    // it back off (mirrors "already-declared ids spread" — `declared` is empty here).
+    return [...p.combat.candidates, ...p.combat.declared, ...prompt.combatSelected];
   }
   return [];
 }

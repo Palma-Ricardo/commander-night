@@ -18,7 +18,7 @@ import { fourSeats, mkCard } from './helpers';
 const VIEW = { w: 1600, h: 900 };
 
 function promptState(pending: Prompt | undefined, selected: string[] = []): PromptStoreState {
-  return { pending, selected, inflight: false, cantPay: [] };
+  return { pending, selected, combatSelected: [], inflight: false, cantPay: [] };
 }
 
 const targets = (over: Partial<Extract<Prompt, { kind: 'chooseTargets' }>>): Prompt => ({

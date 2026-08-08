@@ -150,6 +150,18 @@ describe('affordanceFor (§7)', () => {
     }
   });
 
+  it('combat: an optimistically-toggled candidate reads as declared before the echo', () => {
+    // The blocker-feedback fix: mid-selection XMage's `declared` is empty, so a
+    // just-clicked combatant only shows selected via `combatSelected`, and that
+    // wins over `candidates` (a toggled id may still be listed as one) so the tap
+    // toggles it back out.
+    const combat = sample<Prompt>('game.prompt.priority.combat.json');
+    if (combat.kind !== 'priority' || combat.combat === undefined) throw new Error('bad sample');
+    const cand = combat.combat.candidates[0]!;
+    const scratch = scratchWith({ pending: combat, combatSelected: [cand] });
+    expect(affordanceFor(scratch, cand)).toEqual({ kind: 'combatDeclared', role: combat.combat.role });
+  });
+
   it('chooseTargets: candidates carry selection state', () => {
     const targets = sample<Prompt>('game.prompt.chooseTargets.json');
     const scratch = scratchWith({ pending: targets, selected: ['aaa-1'] });

@@ -129,7 +129,17 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
           ? prev.cantPay
           : [...prev.cantPay, prev.manaProbe.sourceId];
       }
-      stores.prompt.setState({ pending: msg, ...emptyScratch(), cantPay });
+      // A combat toggle mints a fresh promptId every round trip, yet the seat is
+      // still declaring — carry the optimistic `combatSelected` set forward while
+      // the same declaration episode (priority+combat, same role) stays open, so a
+      // toggled combatant keeps its ring across the re-ask (prompt.ts). Any other
+      // prompt ends the episode and emptyScratch() clears it.
+      const combatSelected =
+        msg.kind === 'priority' && msg.combat !== undefined
+        && prev.pending?.kind === 'priority' && prev.pending.combat !== undefined
+        && prev.pending.combat.role === msg.combat.role
+          ? prev.combatSelected : [];
+      stores.prompt.setState({ pending: msg, ...emptyScratch(), cantPay, combatSelected });
       ctx.session.setResumeAnchor({ gameId: msg.gameId, lastSeq: msg.seq });
       return;
     }

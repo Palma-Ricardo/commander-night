@@ -83,6 +83,29 @@ describe('route', () => {
     expect(stores.prompt.getState().pending).toBeUndefined();
   });
 
+  it('optimistic combat selection survives a same-role re-ask, resets on any other prompt', () => {
+    const combat = sample<Prompt>('game.prompt.priority.combat.json');
+    if (combat.kind !== 'priority' || combat.combat === undefined) throw new Error('bad sample');
+    const attackers = { ...combat, combat: { ...combat.combat, role: 'attackers' as const } };
+    const blockers = { ...combat, combat: { ...combat.combat, role: 'blockers' as const } };
+
+    route(attackers, ctx);
+    stores.prompt.setState({ combatSelected: ['perm-x'] });   // a toggle-in this seat made
+
+    // the re-fired ask (fresh promptId) is the same declaration episode → carried
+    route({ ...attackers, promptId: attackers.promptId + 1, seq: attackers.seq + 1 }, ctx);
+    expect(stores.prompt.getState().combatSelected).toEqual(['perm-x']);
+
+    // switching to declare-blockers is a new episode → cleared
+    route({ ...blockers, promptId: attackers.promptId + 2, seq: attackers.seq + 2 }, ctx);
+    expect(stores.prompt.getState().combatSelected).toEqual([]);
+
+    // and a plain (non-combat) prompt clears it too
+    stores.prompt.setState({ combatSelected: ['perm-y'] });
+    route({ ...prompt, promptId: prompt.promptId + 9, seq: prompt.seq + 9 }, ctx);
+    expect(stores.prompt.getState().combatSelected).toEqual([]);
+  });
+
   it('log entries dedupe by seq, sort, and ring at 500', () => {
     const entry = (seq: number) => ({
       t: 'game.log' as const, seq, gameId: 'g1', ts: 0, kind: 'game' as const, text: `line ${seq}`,

@@ -245,6 +245,22 @@ export function createActions(
       stores.prompt.setState({ intent: { targetId } });
     },
 
+    /** Combat declaration toggle (§8): one `{object}` round trip per creature.
+     *  Records the optimistic pick in `combatSelected` *before* the answer so the
+     *  ring/badge lights up on the press — XMage won't reflect it in the re-ask's
+     *  `declared` until Done (route carries the set across the re-fire). Flipping an
+     *  already-selected id removes it, the toggle-out half of the same ask. */
+    toggleCombat(promptId: number, id: Id): void {
+      const { pending, inflight, combatSelected } = stores.prompt.getState();
+      if (pending?.kind !== 'priority' || pending.combat === undefined
+          || pending.promptId !== promptId || inflight) return;
+      const next = combatSelected.includes(id)
+        ? combatSelected.filter(s => s !== id)
+        : [...combatSelected, id];
+      stores.prompt.setState({ combatSelected: next });
+      void answerPrompt(promptId, { type: 'object', objectId: id });
+    },
+
     /** payMana source click: one round trip; records the no-progress probe (§7). */
     async clickManaSource(promptId: number, sourceId: Id): Promise<void> {
       const { pending, inflight } = stores.prompt.getState();

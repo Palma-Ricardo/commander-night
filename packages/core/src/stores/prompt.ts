@@ -14,6 +14,15 @@ export interface PromptStoreState {
   pending?: Prompt;
   /** chooseTargets accumulation; submitted whole as {objects} (§8). */
   selected: Id[];
+  /** Combat declaration optimism (§8): objects this seat has toggled into combat
+   *  locally, shown as declared *before* XMage's re-asked prompt reflects them.
+   *  XMage doesn't move a creature into `state.combat` until Done, so the re-ask's
+   *  `declared` stays empty all through selection — without this a toggled blocker
+   *  (or attacker) shows no ring/badge at all, the "selection works but nothing
+   *  lights up" bug. Toggle-driven like `selected`, but — like `cantPay` — carried
+   *  past the scratch reset while the *same* declaration episode (priority+combat,
+   *  same role) is still open, because each toggle mints a fresh promptId. */
+  combatSelected: Id[];
   /** Set on answer submit; cleared by promptDone or a superseding prompt (§7). */
   inflight: boolean;
   /** payMana: the source clicked on the current ask, to detect a no-progress re-ask. */
@@ -39,7 +48,7 @@ export interface PromptStoreState {
 }
 
 export const emptyScratch = (): Omit<PromptStoreState, 'pending'> =>
-  ({ selected: [], inflight: false, manaProbe: undefined, cantPay: [], actedOn: undefined,
-     autoPay: undefined });
+  ({ selected: [], combatSelected: [], inflight: false, manaProbe: undefined, cantPay: [],
+     actedOn: undefined, autoPay: undefined });
 
 export const createPromptStore = () => createStore<PromptStoreState>(() => emptyScratch());
