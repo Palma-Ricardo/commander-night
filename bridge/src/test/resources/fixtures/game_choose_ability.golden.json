@@ -603,7 +603,7 @@
   "seq" : 1,
   "gameId" : "g",
   "promptId" : 1,
-  "message" : "Choose spell or ability to play Miscalculation [e08]",
+  "message" : "Choose spell or ability to play Miscalculation",
   "kind" : "chooseAbility",
   "options" : [ {
     "id" : "eb952d95-4234-499a-8cb9-e6509d98fa7a",

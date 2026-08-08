@@ -27,6 +27,7 @@ import night.bridge.proto.state.GameState;
 import night.bridge.proto.state.Player;
 import night.bridge.sync.StateStore;
 import night.bridge.translate.EventDeriver;
+import night.bridge.translate.Html;
 import night.bridge.translate.LogTranslator;
 import night.bridge.translate.PromptNames;
 import night.bridge.translate.PromptTranslator;
@@ -813,7 +814,7 @@ public final class SeatPump implements AutoCloseable {
             fsm.clear();
         }
         gameOverMsg = new GameOver(store.nextSeq(), gameIdStr, winners(outcome),
-                rewriteNames(outcome.reason()), true);
+                rewriteNames(Html.strip(outcome.reason())), true);
         sink.send(gameOverMsg);
         log.info("game over for this seat: {}", outcome.reason());
         coordinator.seatFinished();

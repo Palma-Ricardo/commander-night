@@ -9,7 +9,7 @@
   "canCancel": false,
   "total": 2,
   "among": [
-    { "id": "0", "label": "Grizzly Bears [7d3], P/T: 2/2", "min": 0, "max": 2, "suggested": 2,
+    { "id": "0", "label": "Grizzly Bears, P/T: 2/2", "min": 0, "max": 2, "suggested": 2,
       "objectId": "7d3f9c21-4a8b-4e55-9f10-2c6d8b31e0a7" },
     { "id": "1", "label": "creature without name, P/T: 2/2", "min": 0, "max": 2, "suggested": 0 }
   ]

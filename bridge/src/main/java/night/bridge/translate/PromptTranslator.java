@@ -386,7 +386,7 @@ public final class PromptTranslator {
         addButton(options, msg.getButton2Text(), msg.getButton2Action());
         addButton(options, msg.getButton3Text(), msg.getButton3Action());
         return GamePrompt.playerRequest(promptId, Html.strip(msg.getMessage()),
-                msg.getTitle(), options);
+                Html.strip(msg.getTitle()), options);
     }
 
     private static void addButton(List<GamePrompt.Option> options, String text, PlayerAction action) {

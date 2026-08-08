@@ -243,11 +243,12 @@ class PromptTranslatorTest {
                 null);
         assertEquals(java.util.List.of(bear.toString(), elf.toString()),
                 p.among().stream().map(GamePrompt.Among::objectId).toList());
-        // The label is XMage's own presentation text — log names keep their "[7d3]"
-        // id fragment; only the font tags are stripped (protocol §8, Html.strip).
+        // The label is XMage's own presentation text; Html.strip removes both the
+        // font tags and the trailing "[7d3]" id fragment they carry — protocol §8
+        // is plain text, and the abbreviated id is not for the player to read.
         assertEquals(java.util.List.of(
-                        "Grizzly Bears [" + bear.toString().substring(0, 3) + "], P/T: 2/2",
-                        "Llanowar Elves [" + elf.toString().substring(0, 3) + "], P/T: 1/1"),
+                        "Grizzly Bears, P/T: 2/2",
+                        "Llanowar Elves, P/T: 1/1"),
                 p.among().stream().map(GamePrompt.Among::label).toList());
     }
 
