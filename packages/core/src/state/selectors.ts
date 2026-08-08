@@ -151,13 +151,7 @@ export function affordanceFor(prompt: PromptStoreState, objectId: Id): Affordanc
   switch (p.kind) {
     case 'priority': {
       if (p.combat !== undefined) {
-        // `combatSelected` is this seat's optimistic view (prompt.ts): mid-selection
-        // XMage's `declared` is empty, so a just-toggled combatant only reads as
-        // declared here. It wins over `candidates` too — a toggled-in id may still
-        // be listed as a candidate, and it must show declared so the tap toggles out.
-        if (p.combat.declared.includes(objectId) || prompt.combatSelected.includes(objectId)) {
-          return { kind: 'combatDeclared', role: p.combat.role };
-        }
+        if (p.combat.declared.includes(objectId)) return { kind: 'combatDeclared', role: p.combat.role };
         if (p.combat.candidates.includes(objectId)) return { kind: 'combatCandidate', role: p.combat.role };
         return undefined;
       }

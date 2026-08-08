@@ -39,10 +39,8 @@ export function objectClick(prompt: PromptStoreState, objectId: Id): boolean {
       return true;
     case 'combatCandidate':
     case 'combatDeclared':
-      // one toggle per round trip; the re-fired prompt re-renders the board (§8).
-      // toggleCombat records the optimistic pick so the ring lights up on this
-      // click instead of waiting for a `declared` echo that never comes mid-select.
-      appActions.toggleCombat(p.promptId, objectId);
+      // one toggle per round trip; the re-fired prompt re-renders the board (§8)
+      answerObject(p.promptId, objectId);
       return true;
   }
 }
