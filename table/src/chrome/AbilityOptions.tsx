@@ -10,6 +10,7 @@ import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import type { Id } from '@night/core/protocol/protocol';
 import { useLiveAnchor } from './use-live-anchor';
+import { ManaText } from './ManaSymbols';
 
 export function AbilityOptions() {
   const prompt = useStore(appStores.prompt);
@@ -39,7 +40,7 @@ function Panel({ promptId, busy, options, actedOn }: {
       {options.map(o => (
         <button key={o.id} data-option-id={o.id} disabled={busy}
           onClick={() => void appActions.answerPrompt(promptId, { type: 'object', objectId: o.id })}>
-          {o.text}
+          <ManaText text={o.text} />
         </button>
       ))}
     </div>

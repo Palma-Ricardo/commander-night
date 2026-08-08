@@ -14,7 +14,7 @@ import type { Card, Permanent } from '@night/core/protocol/protocol';
 import { affordanceFor } from '@night/core/state/selectors';
 import { answerObject, objectClick } from './interact';
 import { hoverCard, hideHover } from './hover';
-import { ManaSymbols } from './ManaSymbols';
+import { ManaSymbols, ManaText } from './ManaSymbols';
 
 export type CardSize = 'hand' | 'bf' | 'small' | 'grid' | 'preview';
 
@@ -115,7 +115,7 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
       {card.ability === true && card.text.length > 0 && (
         <div className="ability-plate">
           <span className="ability-plate-head">Ability</span>
-          {card.text.map((line, i) => <p key={i}>{line}</p>)}
+          {card.text.map((line, i) => <p key={i}><ManaText text={line} /></p>)}
         </div>
       )}
 
@@ -177,7 +177,7 @@ export function TextFrame({ card, size }: { card: Card; size: CardSize }) {
       </div>
       {big && <div className="tf-type">{[...card.supertypes, ...card.types].join(' ')}{card.subtypes.length > 0 ? ` — ${card.subtypes.join(' ')}` : ''}</div>}
       {big && card.text.length > 0 && (
-        <div className="tf-text">{card.text.map((line, i) => <p key={i}>{line}</p>)}</div>
+        <div className="tf-text">{card.text.map((line, i) => <p key={i}><ManaText text={line} /></p>)}</div>
       )}
       {card.power !== undefined && card.types.includes('CREATURE') && (
         <span className="tf-pt">{card.power}/{card.toughness}</span>

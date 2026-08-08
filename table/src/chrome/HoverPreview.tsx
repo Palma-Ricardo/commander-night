@@ -18,6 +18,7 @@ import { appScryfall } from '../app';
 import { hoverCard, hoverStore, setPreviewRect } from './hover';
 import { previewPosition } from './preview-position';
 import { TextFrame } from './CardView';
+import { ManaText } from './ManaSymbols';
 
 export function HoverPreview() {
   const card = useStore(hoverStore, s => s.card);
@@ -77,7 +78,7 @@ export function HoverPreview() {
         : <TextFrame card={card} size="preview" />}
       {image?.status === 'ok' && card.text.length > 0 && (
         <div className="hover-oracle">
-          {card.text.map((l, i) => <p key={i}>{l}</p>)}
+          {card.text.map((l, i) => <p key={i}><ManaText text={l} /></p>)}
         </div>
       )}
     </div>

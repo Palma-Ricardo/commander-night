@@ -23,7 +23,7 @@
 import { CanvasSource, Container, Graphics, type Renderer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
 import backArtUrl from '../assets/cards/Back.png';
-import { richText } from './richtext';
+import { manaCostRow, richText } from './richtext';
 
 export type Tier = 'table' | 'detail' | 'artbox';
 
@@ -138,10 +138,11 @@ function frameContainer(card: Card, tier: Tier): Container {
   root.addChild(name);
 
   if (card.manaCost !== undefined && card.manaCost !== '') {
-    const mc = new Text({ text: card.manaCost, style: new TextStyle({ fontFamily: 'monospace', fontSize: 12 * s, fill: ink }) });
-    mc.anchor.set(1, 0);
-    mc.position.set(w - 10 * s, 8 * s);
-    root.addChild(mc);
+    // Pips, not a raw "{2}{W}{W}" monospace string — the canvas mirror of the DOM
+    // ManaSymbols. Right-aligned against the name line, like a printed card.
+    const { node, w: rowW } = manaCostRow(card.manaCost, 12 * s, 'Georgia, serif', 2);
+    node.position.set(w - 10 * s - rowW, 8 * s);
+    root.addChild(node);
   }
 
   const typeLine = new Text({

@@ -1,15 +1,41 @@
-// Rules-text normalization for the table client's on-canvas panels. XMage sends
-// Swing-flavored HTML; the bridge strips the tags and the handful of entities it
-// emits (translate/Html.java), but the punctuation entities that ride through in
-// card rules survive — the em dash in "Choose one —" most visibly. Decode the
-// rest here, at the render seam, plus back out the chosen value of X for a spell
-// on the stack so its text reads "deals 3 damage", not "deals X damage".
+// Rules-text normalization for the table client, shared by both render seams —
+// the DOM chrome (ManaSymbols) and the on-canvas panels (render/richtext). XMage
+// sends Swing-flavored HTML; the bridge strips the tags and the handful of
+// entities it emits (translate/Html.java), but the punctuation entities that ride
+// through in card rules survive — the em dash in "Choose one —" most visibly.
+// Decode the rest here, at the render seam, split `{…}` mana/symbol tokens out for
+// pip rendering, and back out the chosen value of X for a spell on the stack so
+// its text reads "deals 3 damage", not "deals X damage".
 //
 // (Table-local rather than in @night/core because this worktree resolves the
 // shared package to the main checkout — only its committed API, e.g.
 // parseManaCost, is reachable from here.)
 
 import { parseManaCost } from '@night/core/state/mana';
+
+/** One piece of a decoded rules string: a run of plain text, or a single `{…}`
+ *  mana/symbol token (the brace content — "G", "2", "W/U", "T", "X", "S"). */
+export interface SymbolPart {
+  kind: 'text' | 'pip';
+  value: string;
+}
+
+/** Split a string on its `{…}` symbol tokens into text/pip parts — the pure core
+ *  shared by every pip renderer (the DOM `manaNodes` and the canvas `tokenize`),
+ *  so "{T}: Add {G}" reads as pips everywhere, never raw braces. A fresh regex per
+ *  call: a shared `/g` instance would carry `lastIndex` across calls. */
+export function splitSymbols(chunk: string): SymbolPart[] {
+  const re = /\{([^{}]+)\}/g;
+  const parts: SymbolPart[] = [];
+  let last = 0;
+  for (let m = re.exec(chunk); m !== null; m = re.exec(chunk)) {
+    if (m.index > last) parts.push({ kind: 'text', value: chunk.slice(last, m.index) });
+    parts.push({ kind: 'pip', value: m[1]! });
+    last = m.index + m[0].length;
+  }
+  if (last < chunk.length) parts.push({ kind: 'text', value: chunk.slice(last) });
+  return parts;
+}
 
 // The named entities XMage's card text actually carries past the bridge's strip —
 // mostly punctuation. Kept small and explicit (protocol §8: not a general parser),

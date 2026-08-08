@@ -10,8 +10,8 @@
 // rest of the render layer (exercised by `npm run shoot`, not the node tests).
 
 import { CanvasTextMetrics, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import { symbolColor } from '@night/core/state/mana';
-import { decodeEntities } from '../text';
+import { parseManaCost, symbolColor } from '@night/core/state/mana';
+import { decodeEntities, splitSymbols } from '../text';
 
 /** One drawable piece of a word: a run of plain text, or a single `{…}` mana pip
  *  (the brace content, e.g. "G", "2", "W/U", "T"). `w` is its measured width. */
@@ -27,26 +27,12 @@ export interface Word {
   w: number;
 }
 
-const PIP_RE = /\{([^{}]+)\}/g;
-
 /** Split one paragraph (no newlines) into words of raw parts — pure, no widths.
- *  A `{…}` token becomes its own pip part; the text around it stays text. */
+ *  A `{…}` token becomes its own pip part; the text around it stays text. Word
+ *  splitting is ours (wrapping needs it); the per-chunk `{…}` split is the shared
+ *  `splitSymbols`, so the DOM and canvas pip renderers tokenize identically. */
 export function tokenize(paragraph: string): { kind: 'text' | 'pip'; value: string }[][] {
-  const words: { kind: 'text' | 'pip'; value: string }[][] = [];
-  for (const chunk of paragraph.split(/\s+/)) {
-    if (chunk === '') continue;
-    const parts: { kind: 'text' | 'pip'; value: string }[] = [];
-    let last = 0;
-    PIP_RE.lastIndex = 0;
-    for (let m = PIP_RE.exec(chunk); m !== null; m = PIP_RE.exec(chunk)) {
-      if (m.index > last) parts.push({ kind: 'text', value: chunk.slice(last, m.index) });
-      parts.push({ kind: 'pip', value: m[1]! });
-      last = m.index + m[0].length;
-    }
-    if (last < chunk.length) parts.push({ kind: 'text', value: chunk.slice(last) });
-    words.push(parts);
-  }
-  return words;
+  return paragraph.split(/\s+/).filter(chunk => chunk !== '').map(splitSymbols);
 }
 
 /** Greedy word-wrap: pack words onto lines up to `maxW`, breaking before a word
@@ -101,6 +87,25 @@ function pipNode(sym: string, size: number, family: string, resolution: number):
   label.anchor.set(0.5);
   node.addChild(g, label);
   return { node, w };
+}
+
+/** A mana cost ("{2}{W}{W}") drawn as a horizontal row of pips — the canvas
+ *  equivalent of the DOM `ManaSymbols`, so a card face's cost reads as pips, not a
+ *  raw "{2}{W}{W}". Pips sit centred on `y = size/2`; the container's local origin
+ *  is the row's top-left and `w` is its full width (for right-aligning it). */
+export function manaCostRow(
+  cost: string, size: number, family: string, resolution: number,
+): { node: Container; w: number } {
+  const row = new Container();
+  const gap = size * 0.12;
+  let x = 0;
+  for (const sym of parseManaCost(cost)) {
+    const { node, w } = pipNode(sym, size, family, resolution);
+    node.position.set(x + w / 2, size / 2);
+    row.addChild(node);
+    x += w + gap;
+  }
+  return { node: row, w: Math.max(0, x - gap) };
 }
 
 export interface RichStyle {

@@ -8,6 +8,7 @@
 
 import type { ReactNode } from 'react';
 import { parseManaCost, symbolColor, type ManaSymbol } from '@night/core/state/mana';
+import { splitSymbols } from '../text';
 import wSym from '../assets/mana/W.svg';
 import uSym from '../assets/mana/U.svg';
 import bSym from '../assets/mana/B.svg';
@@ -38,19 +39,13 @@ export function ManaSymbols({ cost, symbols }: { cost?: string; symbols?: ManaSy
 }
 
 /** Split a string on its `{…}` mana tokens, rendering each as a pip and the rest
- *  as plain text. A fresh regex per call — the shared one would carry lastIndex. */
+ *  as plain text. Tokenized by the shared `splitSymbols` — the same split the
+ *  canvas pip renderer uses, so prose reads identically in DOM and on the felt. */
 export function manaNodes(text: string): ReactNode[] {
-  const re = /\{([^{}]+)\}/g;
-  const nodes: ReactNode[] = [];
-  let last = 0;
-  let key = 0;
-  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    nodes.push(<ManaPip key={`m${key++}`} sym={m[1]!} />);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
+  return splitSymbols(text).map((part, i) =>
+    part.kind === 'pip'
+      ? <ManaPip key={`m${i}`} sym={part.value} />
+      : part.value);
 }
 
 /** A string with its `{…}` mana tokens rendered as pips inline (prompt/log copy). */

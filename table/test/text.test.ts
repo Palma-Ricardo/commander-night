@@ -2,7 +2,7 @@
 // X back-out, X fill-in.
 
 import { describe, expect, it } from 'vitest';
-import { chosenX, decodeEntities, substituteX } from '../src/text';
+import { chosenX, decodeEntities, splitSymbols, substituteX } from '../src/text';
 
 describe('decodeEntities', () => {
   it('decodes named punctuation entities (the em dash that broke "Choose one —")', () => {
@@ -25,6 +25,43 @@ describe('decodeEntities', () => {
   it('leaves unknown entities and bare ampersands verbatim', () => {
     expect(decodeEntities('Fire & Ice')).toBe('Fire & Ice');
     expect(decodeEntities('&notareal;')).toBe('&notareal;');
+  });
+});
+
+describe('splitSymbols', () => {
+  it('splits a mana token out as a pip part, the surrounding text as text', () => {
+    expect(splitSymbols('Add {G}')).toEqual([
+      { kind: 'text', value: 'Add ' },
+      { kind: 'pip', value: 'G' },
+    ]);
+  });
+
+  it('handles adjacent pips and trailing text ({T}: draw)', () => {
+    expect(splitSymbols('{T}: draw')).toEqual([
+      { kind: 'pip', value: 'T' },
+      { kind: 'text', value: ': draw' },
+    ]);
+  });
+
+  it('runs a whole cost as consecutive pips', () => {
+    expect(splitSymbols('{2}{W}{W}')).toEqual([
+      { kind: 'pip', value: '2' },
+      { kind: 'pip', value: 'W' },
+      { kind: 'pip', value: 'W' },
+    ]);
+  });
+
+  it('keeps hybrid/Phyrexian/X brace contents intact', () => {
+    expect(splitSymbols('{2/W}{X}{B/P}')).toEqual([
+      { kind: 'pip', value: '2/W' },
+      { kind: 'pip', value: 'X' },
+      { kind: 'pip', value: 'B/P' },
+    ]);
+  });
+
+  it('is all text when there are no tokens', () => {
+    expect(splitSymbols('draw a card')).toEqual([{ kind: 'text', value: 'draw a card' }]);
+    expect(splitSymbols('')).toEqual([]);
   });
 });
 

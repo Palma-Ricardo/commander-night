@@ -10,6 +10,7 @@ import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import { findObject } from '@night/core/state/selectors';
 import { CardView } from './CardView';
+import { ManaText } from './ManaSymbols';
 
 export function OptionTiles() {
   const prompt = useStore(appStores.prompt);
@@ -32,7 +33,7 @@ export function OptionTiles() {
         {p.options.map(o => (
           <button key={o.key} className="option-tile" data-option-key={o.key} disabled={busy}
             onClick={() => void appActions.answerPrompt(p.promptId, { type: 'option', key: o.key })}>
-            {o.text}
+            <ManaText text={o.text} />
           </button>
         ))}
       </div>
