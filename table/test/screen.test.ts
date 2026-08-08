@@ -221,6 +221,26 @@ describe('stackEffectText (what to overlay on a stack card)', () => {
     expect(stackEffectText(modalSpell(['Counter target spell.', 'Draw a card.'])))
       .toEqual({ label: 'MODES', lines: ['Counter target spell.', 'Draw a card.'] });
   });
+
+  it('surfaces an X spell with the chosen X filled into its rules', () => {
+    const fireball: StackItem = {
+      id: cid('stk'), kind: 'spell', controllerId: 'p1',
+      text: ['Fireball deals X damage divided as you choose.'],
+      // {X}{R} paid for X=3 ⇒ mana value 4 on the stack (rule 202.3e).
+      card: mkCard('Fireball', ['SORCERY'], { manaCost: '{X}{R}', manaValue: 4 }),
+    };
+    expect(stackEffectText(fireball))
+      .toEqual({ label: 'SPELL', lines: ['Fireball deals 3 damage divided as you choose.'] });
+  });
+
+  it('fills the chosen X into a modal X spell\'s surfaced mode', () => {
+    const item: StackItem = {
+      id: cid('stk'), kind: 'spell', controllerId: 'p1',
+      card: mkCard('Modal', ['INSTANT'], { manaCost: '{X}{U}', manaValue: 3 }),
+      text: ['Choose one —', 'Chosen mode: Scry X.'],
+    };
+    expect(stackEffectText(item)).toEqual({ label: 'MODE', lines: ['Scry 2.'] });
+  });
 });
 
 describe('layoutScreen (the stack spread for stack-item targeting)', () => {

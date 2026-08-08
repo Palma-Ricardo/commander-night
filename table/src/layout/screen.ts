@@ -9,6 +9,7 @@
 // headless — no renderer, no camera, no time.
 
 import type { GameState, StackItem } from '@night/core';
+import { chosenX, substituteX } from '../text';
 import { HAND_PAGE_SIZE, HAND_PAGE_THRESHOLD } from '../tuning';
 import type { PlacedActor, Point, Size } from './types';
 
@@ -127,12 +128,24 @@ export function stackEffectText(item: StackItem): { label: string; lines: string
   if (item.kind === 'ability') {
     return { label: 'ABILITY', lines: item.text.map(l => l.trim()).filter(l => l !== '') };
   }
+  // A spell with an {X} in its cost has a chosen X on the stack (rule 202.3e leaves
+  // it in the reported mana value); its printed box still shows a literal "X", so
+  // fill the paid value into whatever text we surface for it.
+  const x = chosenX(item.card?.manaCost, item.card?.manaValue ?? 0);
+  const fill = (l: string) => (x !== undefined ? substituteX(l, x) : l);
   const chosen = item.text
     .filter(l => l.startsWith(CHOSEN_MODE_PREFIX))
-    .map(l => l.slice(CHOSEN_MODE_PREFIX.length).trim())
+    .map(l => fill(l.slice(CHOSEN_MODE_PREFIX.length).trim()))
     .filter(l => l !== '');
-  if (chosen.length === 0) return undefined;
-  return { label: chosen.length > 1 ? 'MODES' : 'MODE', lines: chosen };
+  if (chosen.length > 0) return { label: chosen.length > 1 ? 'MODES' : 'MODE', lines: chosen };
+  // A plain spell keeps its printed face — except an X spell, whose face lies about
+  // its cost: surface our own copy of the rules with X filled in so the table reads
+  // the real number (Issues.txt: substitute X for X spells on the stack).
+  if (x !== undefined) {
+    const lines = item.text.map(l => fill(l.trim())).filter(l => l !== '');
+    if (lines.length > 0) return { label: 'SPELL', lines };
+  }
+  return undefined;
 }
 
 const STACK_MARGIN = 30;             // right edge → front card

@@ -18,7 +18,8 @@
 
 import { Container, Graphics, GraphicsPath, PerspectiveMesh, Rectangle, Text, TextStyle, type Texture } from 'pixi.js';
 import type { Card } from '@night/core';
-import { fittedText, identityColor } from './textures';
+import { identityColor } from './textures';
+import { richText } from './richtext';
 import type { ActorPlacement, ActorSpace, Point, Transform } from '../layout/types';
 import type { HighlightSpec, Projector, ScreenAnchor } from '../scene/interaction';
 
@@ -646,23 +647,22 @@ function stackEffectPanel(w: number, h: number, label: string, lines: string[]):
 
   if (lines.length > 0) {
     const bodyTop = top + pad * 0.6 + header.height;
-    // Shrink one step for a long text, then trim to provably fit the panel —
-    // a wall-of-text trigger used to run straight off the card (#28).
-    const raw = lines.join('\n');
-    const small = raw.length > 260;
-    const size = Math.round(h * (small ? 0.036 : 0.043));
-    const body = fittedText(
-      raw,
-      bottom - bodyTop - pad * 0.5,
-      new TextStyle({
-        fontFamily: 'Georgia, serif', fontSize: size, fill: 0xe8e2cf,
-        wordWrap: true, wordWrapWidth: panelW - pad * 2, align: 'center',
-        lineHeight: Math.round(size * 1.33),
-      }),
-      STACK_TEXT_RES,
-    );
-    body.anchor.set(0.5, 0);
-    body.position.set(0, bodyTop);
+    // Mana pips, decoded entities, the chosen X, and a font scaled to fit — the
+    // panel used to show raw "{G}"/"&mdash;", a literal X, and run a wall of text
+    // straight off the card (Issues.txt #28). `richText` handles all four.
+    const bodyW = panelW - pad * 2;
+    const body = richText(lines.join('\n'), {
+      fontFamily: 'Georgia, serif',
+      fontSize: Math.round(h * 0.043),
+      minFontSize: Math.round(h * 0.03),
+      fill: 0xe8e2cf,
+      lineHeightMul: 1.33,
+      maxW: bodyW,
+      maxH: bottom - bodyTop - pad * 0.5,
+      align: 'center',
+      resolution: STACK_TEXT_RES,
+    });
+    body.position.set(-bodyW / 2, bodyTop);
     c.addChild(body);
   }
   return c;

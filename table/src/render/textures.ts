@@ -23,6 +23,7 @@
 import { CanvasSource, Container, Graphics, type Renderer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
 import backArtUrl from '../assets/cards/Back.png';
+import { richText } from './richtext';
 
 export type Tier = 'table' | 'detail' | 'artbox';
 
@@ -82,20 +83,6 @@ export function artCropUrl(url: string): string {
   );
 }
 
-/** A Text that provably fits `maxH`: built at `style`, then trimmed from the end
- *  with an ellipsis until its measured height fits. The loop is bounded (each pass
- *  removes real characters) — long ability descriptions can shrink, never overflow
- *  their plate (Issues.txt #28). */
-export function fittedText(raw: string, maxH: number, style: TextStyle, resolution?: number): Text {
-  const t = new Text({ text: raw, style, ...(resolution !== undefined ? { resolution } : {}) });
-  let s = raw;
-  while (t.height > maxH && s.length > 24) {
-    s = s.slice(0, Math.max(24, s.length - 48)).trimEnd() + ' …';
-    t.text = s;
-  }
-  return t;
-}
-
 /** The gilt ability plate over a trigger-order card's lower half (Issues.txt #27):
  *  the art above says *which* permanent fired; this says what the ability does —
  *  the canvas mirror of the DOM CardView's `.ability-plate`. */
@@ -114,15 +101,17 @@ function abilityPlate(card: Card, w: number, h: number): Container {
   header.position.set(pad, top + 7);
   plate.addChild(header);
   const bodyTop = top + 7 + header.height + 4;
-  const body = fittedText(
-    card.text.join('\n'),
-    h - bodyTop - 10,
-    new TextStyle({
-      fontFamily: 'Georgia, serif', fontSize: 11, fill: 0xe8e2cf,
-      wordWrap: true, wordWrapWidth: w - pad * 2, lineHeight: 14.5,
-    }),
-    2,
-  );
+  const body = richText(card.text.join('\n'), {
+    fontFamily: 'Georgia, serif',
+    fontSize: 11,
+    minFontSize: 8,
+    fill: 0xe8e2cf,
+    lineHeightMul: 14.5 / 11,
+    maxW: w - pad * 2,
+    maxH: h - bodyTop - 10,
+    align: 'left',
+    resolution: 2,
+  });
   body.position.set(pad, bodyTop);
   plate.addChild(body);
   return plate;
