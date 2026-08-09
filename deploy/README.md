@@ -92,10 +92,19 @@ rsync -a vendor/xmage-dist/ vps:/opt/commander-night/xmage-dist/
 # If the dist was ever run from a different path, also clear any stale
 # absolute paths it may have written into its config.
 
-# 4. build + ship the bridge (on the dev machine)
+# 4. build + ship the bridge (on the dev machine).
+#    NOTE ON OWNERSHIP: step 1 chowned /opt/commander-night to `commander`, but you
+#    rsync in as the `rocky` SSH user — so a plain `rsync` here fails with "mkstemp …
+#    Permission denied (13)". Land the files as root and set ownership in one shot with
+#    `--rsync-path="sudo rsync" --chown=commander:commander` (passwordless sudo is set up
+#    for `rocky`). The service only needs to *read* the jar, but keeping it commander-owned
+#    matches the rest of the tree. This applies to every rsync whose target dir is still
+#    commander-owned (see step 5).
 cd bridge && mvn -Pdist -DskipTests package
-rsync -a target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
-rsync -a target/lib/ vps:/opt/commander-night/bridge/lib/
+rsync -a --rsync-path="sudo rsync" --chown=commander:commander \
+    target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
+rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
+    target/lib/ vps:/opt/commander-night/bridge/lib/
 # target/lib/ is ~90 MB (measured 2026-07-20). mage-sets-1.4.60.jar alone is ~60 MB of
 # that — deck import's CardResolver needs per-card implementation classes, which
 # CardInfo#createCard() loads reflectively at runtime, not just the metadata jars the
@@ -106,10 +115,19 @@ rsync -a target/lib/ vps:/opt/commander-night/bridge/lib/
 #    design §2): the table client at /, the classic client under /classic —
 #    the latter needs its vite base to match, which is a build-time flag, not
 #    committed config (dev mode and the C5 test:preview tier assume root).
+#    Same ownership caveat as step 4: these dirs are commander-owned right after
+#    install, so the `--rsync-path="sudo rsync" --chown=…` form is needed. If you
+#    would rather redeploy clients friction-free (frequent, no service restart),
+#    hand the two SPA dirs to the deploy user once — `sudo chown -R rocky:rocky
+#    /opt/commander-night/table /opt/commander-night/classic` — and then a plain
+#    `rsync` works. Whichever you pick, keep the SELinux `httpd_sys_content_t`
+#    labels (see "The web client" below); chown does not touch the SELinux type.
 cd table && npm run build
-rsync -a --delete dist/ vps:/opt/commander-night/table/
+rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
+    dist/ vps:/opt/commander-night/table/
 cd ../client && npm run build -- --base=/classic/
-rsync -a --delete dist/ vps:/opt/commander-night/classic/
+rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
+    dist/ vps:/opt/commander-night/classic/
 
 # 6. config + units + caddy
 scp deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
@@ -242,7 +260,11 @@ always this.
 |---|---|
 | anything under `table/` or `packages/core/` | rebuild + rsync `dist/`; no service restart — caddy serves from disk |
 | anything under `client/` | rebuild **with `--base=/classic/`** + rsync `dist/`; no service restart |
-| anything under `bridge/` | rebuild + rsync the jar, then `systemctl restart night-bridge` (drops live seats) |
+| anything under `bridge/` | rebuild + rsync the jar **+ `lib/`**, then `systemctl restart night-bridge` (drops live seats) |
+
+All three rsyncs go into commander-owned dirs under `/opt/commander-night`, so each
+needs `--rsync-path="sudo rsync" --chown=commander:commander` as the `rocky` SSH user
+(see Install step 4) — unless you handed the SPA dirs to the deploy user per step 5.
 | `deploy/Caddyfile` | `systemctl reload caddy` |
 
 Because `index.html` is served `no-cache`, a client redeploy reaches players
@@ -293,7 +315,8 @@ Zurgo sample deck so combat still fires inside a short game.
 ## Upgrading
 
 - **Bridge only:** rebuild (`mvn -Pdist -DskipTests package`), rsync the jar +
-  `lib/`, `systemctl restart night-bridge` (between games).
+  `lib/` (both with the `--rsync-path="sudo rsync" --chown=commander:commander`
+  form from Install step 4), `systemctl restart night-bridge` (between games).
 - **XMage version:** version-pinned (design §1) — replace the whole
   `xmage-dist`, re-run `bridge/install-xmage-jars.sh`, bump `xmage.version`
   in `bridge/pom.xml`, regenerate golden fixtures
