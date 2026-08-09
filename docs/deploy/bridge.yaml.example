@@ -1,11 +1,11 @@
-# /etc/commander-night/bridge.yaml — production config (design §11).
+# /etc/commander-night/bridge.yaml — production config
 # Paths are resolved against the unit's WorkingDirectory
 # (/var/lib/commander-night) unless absolute.
 
 bind: 127.0.0.1:8484            # behind caddy; caddy owns TLS + the public name
 xmage: { host: 127.0.0.1, port: 17171 }
-keyframeEvery: 100              # patches between self-healing keyframes (protocol §7)
+keyframeEvery: 100              # patches between self-healing keyframes
 logBackfill: { buffer: 200, send: 50 }
-callbackTap: false              # true = per-seat callback capture under logs/tap/ (design §12)
-postGameGraceSecs: 900          # post-game chat/resume window before teardown (design §6)
+callbackTap: false              # true = per-seat callback capture under logs/tap/
+postGameGraceSecs: 900          # post-game chat/resume window before teardown
 sampleDecksDir: /opt/commander-night/xmage-dist/xmage/mage-client/sample-decks/Commander

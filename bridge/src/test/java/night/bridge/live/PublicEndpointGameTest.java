@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * The deploy runbook's last verify step (deploy/README.md): the same
+ * The deploy runbook's last verify step (docs/deploy/README.md): the same
  * full-game auto-player and invariant auditor as {@link LiveGameTest}, but
  * pointed at a deployed bridge's public endpoint — DNS, caddy's TLS and
  * WebSocket proxying, and the production units in the loop instead of an
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code mvn -Plive test -Dtest=PublicEndpointGameTest
  * -Dnight.publicEndpoint=wss://night.example.com/ws}
  *
- * <p>Restart xmage-server on the host afterwards (deploy/README.md): 1.4.60
+ * <p>Restart xmage-server on the host afterwards (docs/deploy/README.md): 1.4.60
  * leaks AI simulation threads from finished games.
  */
 @Tag("live")

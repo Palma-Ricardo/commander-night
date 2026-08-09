@@ -15,95 +15,6 @@ downstream, plus a TypeScript web client on top. A TS rules engine was evaluated
   replaces
 - `docs/plans/2026-07-15-xmage-bridge-spike.md` — XMage session API map, spike findings
 
-## Status
-
-**Phase 1 is closed** (2026-07-21): the React "classic" client shipped and a real 4-human night was
-played on the VPS. **Phase 2 is the PixiJS "table client"** — one felt, four place settings, a camera,
-animation — living in `table/` beside the classic client, which stays deployed at `/classic` as the
-fallback. Milestones and exit criteria: table-client design §13.
-
-- **M6 · T0–T2 done** (2026-07-22): bridge event derivation (`EventDeriver`, the additive
-  `events?` field, protocol §7.1); npm workspaces with `@night/core` extracted and shared by both
-  clients; quadrant world layout + camera rig; the `Director` two-clock animation queue.
-- **T3 done** (2026-07-22, exit criterion met 2026-07-23): the table client is fully interactive —
-  home → lobby → game, every prompt kind in a canvas-overlay dock, canvas hit-testing through the
-  shared `affordanceFor` model. Ricardo played a full game vs 3 AIs to `game.over` through it, which
-  cleared the switchable gate.
-- **T4 done** (2026-07-24): the juice — every §7.1 event kind emitted by the bridge, and the client's
-  §9 catalogue (tap/untap, three-lane combat with damage lunges, death, sacrifice, exile, counters,
-  triggers, particles, camera easing). Reviewed at the table, not by assertion; three passes.
-- **T5 done** (2026-07-24): resilience parity. The browser tier moved to a root `e2e/` workspace
-  (`@night/e2e`) that drives *either* client by baseURL, and the auto-player became semantic — it
-  reads the pending prompt off `window.__night.prompt()` and answers through `click`/`answer`/`pass`
-  instead of driving the dock's DOM, because a canvas board is opaque to CSS. Harness grew `prompt()`,
-  `highlights()`, `snapshot().seats` and `snapshot().socket`. **Exit criterion met: both specs green
-  against the table client** — auto-player 2.8 min to `game.over` with combat, and the 12.6-min
-  resilience run (reloads on both seats, chat, bumped round-trip, cleared-storage recovery join,
-  rematch into a second completed game). The **classic client is unregressed** — all three specs
-  green against it too (`npm run e2e:classic`, 13.9 min). Next is T6: a real four-human night on
-  the table client.
-- **M7 done** (2026-07-25): prompt anchoring for the prompts-on-the-table phase
-  (`docs/plans/2026-07-25-prompts-on-the-table.md` §7) — the additive `payMana.for` and
-  `distribute.among[].objectId`. The spike killed both planned derivations: the ask already
-  names its object, because 1.4.60 renders object names through `GameLog` and that HTML carries
-  the full UUID (`translate/ObjectLink`). Emit-only-when-confident; canary WARN on drift.
-
-Phase 1 history, still relevant below.
-
-**Client C5 engineering done 2026-07-19** — deck-text image warm-up (own deck only:
-opponents' lists are hidden info), large-screen layout pass (`--card-unit` scales cards and the
-sidebar with the viewport; the table is 1080p/1440p+, so the enemy was whitespace, not cramming),
-anchored hover previews, pile filter/sort/Escape, and a background-tab title-flash nudge (the
-chime was cut). The production bundle is now exercised for the first time: the auto-player runs
-against a `--mode harness` build, and caddy serves `dist/` at `/classic` with `/ws` proxied to the
-bridge (immutable assets, `no-cache` index.html). C5's and M5's shared exit — the real 4-human night
-on the deployed host — was **played 2026-07-21**, closing Phase 1.
-
-C4 detail, still relevant — multi-human resilience, **live-verified** end to end
-(`e2e/pw/resilience.spec.ts`, 10.2 min): two browsers, mid-game reload on *both* seats with the
-same `promptId` re-rendered after resume, chat both ways with the unread badge, a bumped
-round-trip (second tab steals the seat → takeover screen → *Use here* steals it back), a
-cleared-storage **recovery join** that reclaims a live seat by name and lands on that exact
-pending prompt, game 1 to `game.over` on every seat, then a **rematch into a second completed
-game**. `net/pending` is now §5-complete (retry-once-same-id on the 8 s timeout, park on drop,
-in-order flush on `welcome`); chat panel, toasts, fatal modal, reconnect/upstream banners, and
-the post-game banner all landed. The C3 auto-player loop moved to the shared `e2e/pw/driver.ts`.
-Three things this milestone learned the hard way, all now fixed + regression-tested:
-(1) **post-game chat does not relay at all** on 1.4.60 — XMage stops delivering `CHATMESSAGE`
-once `GAME_OVER` fires, so a line posted after the banner reaches nobody, *not even its sender*,
-though protocol §10/§14 and client §10 all promise otherwise (in-game chat is fine). The §10
-rematch announce is therefore best-effort (failure → toast naming the code) and the banner's
-rematch code is always typeable. **Open bridge-side fix:** fan post-game chat out to the seats'
-sinks instead of relying on XMage's echo.
-(2) **seat identity after a recovery join** — protocol §5 has the re-bound session adopt the
-seat's `userId`, but the bridge swaps it silently, so the client stayed on its stale welcome id
-and was invisible to itself in every *later* lobby (ready toggle dead forever). `net/route` now
-reconciles on each `lobby.state` by display name. The game screen masks this bug entirely — it
-renders from seat-scoped `state.me` and never reads `userId`.
-(3) **dead-end `chooseTargets`** — candidates in a pile zone (e.g. "Select a nonland card from
-<opponent> graveyard") highlighted nothing and exposed zero enabled controls; the dock now
-offers unreachable candidates itself (`selectors.isBoardReachable`).
-Auto-player policy notes: pay payMana before cancelling (cancel-first never resolves a spell),
-answer the "mana will be lost. Pass anyway?" confirm with Yes, and never re-click a pool
-colour/source that failed to shrink `remaining` — payMana re-asks mint a **fresh promptId** each
-time, so progress is fingerprinted on the remaining cost, not the prompt id. E2E phases are
-sequenced on *events*, never wall-clock: AI-pace games have ended in as little as 3 min.
-Bridge status: M5 engineering done 2026-07-18 — commander damage/tax scrape
-(`translate/CommanderDamage`, pinned to the 1.4.60 watcher strings, canary WARN on drift,
-fields land per protocol §6; watcher lines no longer leak into card text), callback tap
-productionized (`CallbackTap`: pre-decompress `.ser` + `.jsonl` index, config `callbackTap`,
-always on in the live tier), golden-fixture suite (`GoldenFixtureTest` + `FixtureSelectMain`
-curation; 10 live-captured fixtures incl. commander tax/damage and combat declaration; regen
-via `-Dgolden.regen=true` on upgrades), conformance corpus audited complete (48 samples, all
-asserted; grew by game.state.mulligan.json at client C1), design-§5 seat recovery **live-verified** (`SeatRecoveryLiveTest`: SIGSTOP server
-mid-prompt → detect ~6 s → non-fatal answer rejection → restore-session reconnect →
-same-promptId re-ground → full game green), and deploy artifacts (`deploy/`: systemd units,
-Caddyfile, prod bridge.yaml, runbook; build with `mvn -Pdist -DskipTests package`, launch
-smoke-tested). M5's exit criterion — a real 4-human night on the deployed host — is the
-remaining human step. M4 context: browser resume, chat, idempotency, recovery join, rematch,
-teardown grace (`MultiHumanLiveTest`). M3 context: lost-wakeup race guard (design §5), combat
-declaration (§8 `priority.combat`). Milestone table in design.md §14.
-
 ## Layout
 
 - `bridge/` — Maven project `night-bridge` (the daemon). Spike/capture tool under
@@ -114,6 +25,12 @@ declaration (§8 `priority.combat`). Milestone table in design.md §14.
   (`@night/e2e` — the live Playwright tier, one spec set for either client).
 - `vendor/` (gitignored) — `xmage-dist/` runnable server + client jars; `mage/` shallow source
   clone for reading XMage internals; `tools/`.
+- `docs/deploy/` — genericized, publishable deployment templates (systemd units, Caddyfile, prod
+  `bridge.yaml.example`) and a generic runbook. Build the dist artifacts with
+  `mvn -Pdist -DskipTests package`.
+- `deploy/` (gitignored, host-specific — not committed) — the live host's real units/config and
+  operational runbook; a local, un-genericized mirror of `docs/deploy/`. Deployment context for
+  working in it is in `deploy/CLAUDE.md`.
 - `docs/` — specs above; `docs/protocol/samples/` is the conformance corpus (bridge tests
   assert it via `ProtocolSamplesTest`; the TS client will assert the mirror direction).
 

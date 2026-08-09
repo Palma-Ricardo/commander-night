@@ -1,5 +1,5 @@
 # Dev-tier bridge config (repo root — picked up by `mvn -Prun` whose cwd is
-# the repo root; see deploy/bridge.yaml.example for the prod shape).
+# the repo root; see docs/deploy/bridge.yaml.example for the prod shape).
 #
 # callbackTap on: the 2026-07-18 turn-28 incident (seat drop mid-ask, contextless
 # re-fired prompt) could not be fully reconstructed because the dev run had no

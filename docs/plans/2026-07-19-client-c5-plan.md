@@ -1778,9 +1778,9 @@ Follow `deploy/README.md`:
 
 ```sh
 cd client && npm ci && npm run build
-rsync -a --delete dist/ rocky@<vps-ip>:/opt/commander-night/client/
+rsync -a --delete dist/ vps:/opt/commander-night/client/
 # merge the new deploy/Caddyfile handle blocks into /etc/caddy/Caddyfile
-ssh rocky@<vps-ip> 'sudo systemctl reload caddy'
+ssh vps 'sudo systemctl reload caddy'
 ```
 
 Then verify in a browser at `https://night.example.com`:

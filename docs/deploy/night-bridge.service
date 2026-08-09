@@ -1,8 +1,8 @@
 # /etc/systemd/system/night-bridge.service
 #
 # The Commander Night bridge daemon: protocol v1 (WS/JSON) downstream,
-# XMage's native protocol upstream (design §2). Needs JDK 26+ on the host;
-# the --add-opens flags are required by the XMage session layer (design §1).
+# XMage's native protocol upstream. Needs JDK 26+ on the host;
+# the --add-opens flags are required by the XMage session layer.
 # The bridge does not manage the XMage server — it retries the connection
 # with backoff — but ordering the units keeps startup quiet.
 
@@ -26,7 +26,7 @@ ExecStart=/usr/bin/java \
     night.bridge.Main /etc/commander-night/bridge.yaml
 Restart=on-failure
 RestartSec=3
-# Bridge death loses running games in v1 (protocol §14) — Restart= is for
+# Bridge death loses running games in v1 — Restart= is for
 # crash recovery between games, not mid-game resilience.
 
 NoNewPrivileges=true
@@ -34,7 +34,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 # Deck import opens XMage's card database through a `db` symlink under the cwd
-# (deploy/README.md, "Card database access"); the real files live under
+# (README.md, "Card database access"); the real files live under
 # /opt/commander-night. H2's AUTO_SERVER=TRUE mode writes a lock file there on
 # every open, even for read-only lookups, so that real path — not just the
 # symlink's parent — must be writable under ProtectSystem=strict.

@@ -1,9 +1,9 @@
 # /etc/caddy/Caddyfile
 #
-# The only publicly reachable process (design §2): caddy owns TLS and the
+# The only publicly reachable process: caddy owns TLS and the
 # public name; the bridge listens on loopback :8484. Caddy proxies WebSocket
 # upgrades transparently, and the bridge's permessage-deflate is negotiated
-# end-to-end with the browser (protocol §3) — no compression config needed
+# end-to-end with the browser — no compression config needed
 # here. Replace the host with your domain (its DNS A record must point at
 # this VPS; caddy then provisions the certificate automatically).
 
@@ -31,8 +31,8 @@ night.example.com {
 		reverse_proxy 127.0.0.1:8484
 	}
 
-	# The classic client stays as the fallback, served under /classic (table
-	# design §2). It is built with `--base=/classic/` so its asset URLs come
+	# The classic client stays as the fallback, served under /classic
+	# It is built with `--base=/classic/` so its asset URLs come
 	# back through this block; handle_path strips the prefix, so inside it
 	# paths look exactly like the root-served case. The bare /classic (no
 	# slash) must redirect or it falls through to the table client below.
@@ -58,11 +58,11 @@ night.example.com {
 		# Everything that is not a content-hashed asset must be no-cache.
 		# Matching the literal /index.html path is NOT enough: try_files
 		# rewrites to it only AFTER header runs, so `/` — the URL every
-		# player actually loads — went out with no cache directive at all
-		# (live-caught 2026-07-19), leaving browsers to cache the entry
-		# point heuristically. That is exactly the mid-night-stale-bundle
-		# failure this block exists to prevent. cardback.svg is not
-		# hash-named either, so it belongs on this side too.
+		# player actually loads — went out with no cache directive at all,
+		# leaving browsers to cache the entry point heuristically. That is
+		# exactly the mid-night-stale-bundle failure this block exists to
+		# prevent. cardback.svg is not hash-named either, so it belongs on
+		# this side too.
 		@nothashed not path /assets/*
 		header @nothashed Cache-Control "no-cache"
 		try_files {path} /index.html

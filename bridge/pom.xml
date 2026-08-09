@@ -235,7 +235,7 @@
       </build>
     </profile>
 
-    <!-- Deployable build (deploy/README.md): the bridge jar plus its runtime
+    <!-- Deployable build (docs/deploy/README.md): the bridge jar plus its runtime
          classpath in one directory —
            mvn -Pdist -DskipTests package
          → target/night-bridge-<version>.jar + target/lib/*.jar. The deploy

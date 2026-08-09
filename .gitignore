@@ -2,6 +2,11 @@ vendor/
 target/
 *.log
 
+# Deployment artifacts and runbook — host-specific, kept local (see deploy/CLAUDE.md).
+# Anchored to the repo root so it does NOT also match docs/deploy/ (the public,
+# genericized templates), which must stay committed.
+/deploy/
+
 # JS workspaces (npm hoists node_modules to the root; build output per package)
 node_modules/
 dist/

@@ -1,6 +1,10 @@
 # Deploying Commander Night
 
-One VPS, two JVMs, one reverse proxy (design.md §2):
+These are templates — substitute your own host name, VPS address, and SSH port.
+Deployment has only been tested on RHEL-based systems (Rocky Linux), other distros
+and operating systems may vary significantly.
+
+One VPS, two JVMs, one reverse proxy:
 
 ```
 browser ── wss:// ──► caddy (TLS, public) ── ws://127.0.0.1:8484 ──► night-bridge (JDK 26)
@@ -10,8 +14,8 @@ browser ── wss:// ──► caddy (TLS, public) ── ws://127.0.0.1:8484 �
                                                              loopback only)
 ```
 
-Only caddy is publicly reachable. The lobby code is the only shared secret
-(design §10): the perimeter is the host name plus a generated 6-char code.
+Only caddy is publicly reachable. The lobby code is the only shared secret: 
+the perimeter is the host name plus a generated 6-char code.
 
 ## Host prerequisites
 
@@ -23,7 +27,7 @@ Only caddy is publicly reachable. The lobby code is the only shared secret
 - Firewall: allow 80/443 (caddy) and the SSH port. Ports 8484 and 17171 stay
   loopback-bound — do not expose them. See "Firewall and SSH access" below.
 - An `ssh_config` entry named `vps` on the dev machine — every `rsync`/`scp`
-  below targets `vps:`, and it is what carries the non-default SSH port:
+  below targets `vps:`
 
   ```
   Host vps
@@ -43,9 +47,13 @@ first). The chain's policy is `drop`, so a port is closed by *deleting* its
 rule — there are no explicit deny rules. Open: 80/443 (+ UDP 443 for QUIC) and
 SSH.
 
-**SSH runs on <ssh-port>, not 22** (moved 2026-07-21: port 22 was drawing ~76 failed
-password attempts an hour). Three things must agree, and missing any one of
-them locks you out or silently fails:
+SSH access should be limited to your machine only. Use SSH keys and set a 
+non-standard port. Optionally, you can remove password-authentication entirely 
+from your VPS.
+
+**Moving SSH off port 22 to a non-default port** cuts the constant automated
+password-attempt noise. Three things must agree, and missing any one of them
+locks you out or silently fails (`<ssh-port>` is the port you chose):
 
 | Where | What |
 |---|---|
@@ -53,14 +61,14 @@ them locks you out or silently fails:
 | `/etc/nftables/commander-night.nft` | `tcp dport <ssh-port> accept` |
 | SELinux | `sudo semanage port -a -t ssh_port_t -p tcp <ssh-port>` |
 
-The SELinux label is not optional on Rocky/EL with SELinux enforcing —
+The SELinux label is not optional on Rocky/RHEL with SELinux enforcing —
 `ssh_port_t` is bound to 22 out of the box and sshd cannot bind any other port
 until the new one is labelled. It fails at *bind*, so sshd refuses to start
 rather than starting unreachable.
 
-When changing this port again, keep the old one open until the new one is
-verified from a *second, fresh* connection, and arm a rollback first — a
-config-only mistake is unrecoverable once the last session drops. Back up
+When changing this port, keep the old one open until the new one is verified
+from a *second, fresh* connection, and arm a rollback first — a config-only
+mistake is unrecoverable once the last session drops. Back up
 `/etc/ssh/sshd_config.d/` and the `.nft` file, write a throwaway script that
 copies them back and restarts `sshd` + `nftables`, then:
 
@@ -69,8 +77,7 @@ sudo systemd-run --on-active=15min --unit=ssh-rollback /root/ssh-rollback.sh <ba
 sudo systemctl stop ssh-rollback.timer   # cancel once verified, then delete the script
 ```
 
-Close the old port only from a session on the new one. Backups of the 2026-07-21
-move are at `/root/ssh-port-backup/`.
+Close the old port only from a session on the new one.
 
 ## Install
 
@@ -94,27 +101,27 @@ rsync -a vendor/xmage-dist/ vps:/opt/commander-night/xmage-dist/
 
 # 4. build + ship the bridge (on the dev machine).
 #    NOTE ON OWNERSHIP: step 1 chowned /opt/commander-night to `commander`, but you
-#    rsync in as the `rocky` SSH user — so a plain `rsync` here fails with "mkstemp …
+#    rsync in as the SSH user — so a plain `rsync` here fails with "mkstemp …
 #    Permission denied (13)". Land the files as root and set ownership in one shot with
-#    `--rsync-path="sudo rsync" --chown=commander:commander` (passwordless sudo is set up
-#    for `rocky`). The service only needs to *read* the jar, but keeping it commander-owned
-#    matches the rest of the tree. This applies to every rsync whose target dir is still
-#    commander-owned (see step 5).
+#    `--rsync-path="sudo rsync" --chown=commander:commander` (needs passwordless sudo
+#    for the SSH user). The service only needs to *read* the jar, but keeping it
+#    commander-owned matches the rest of the tree. This applies to every rsync whose
+#    target dir is still commander-owned (see step 5).
 cd bridge && mvn -Pdist -DskipTests package
 rsync -a --rsync-path="sudo rsync" --chown=commander:commander \
     target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
 rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
     target/lib/ vps:/opt/commander-night/bridge/lib/
-# target/lib/ is ~90 MB (measured 2026-07-20). mage-sets-1.4.60.jar alone is ~60 MB of
-# that — deck import's CardResolver needs per-card implementation classes, which
-# CardInfo#createCard() loads reflectively at runtime, not just the metadata jars the
-# bridge compiles against. Trivial next to the ~150 MB card database it sits beside and
-# the VPS's 8 GiB RAM / tens of GB disk; not worth trimming.
+# target/lib/ is ~90 MB. mage-sets-1.4.60.jar alone is ~60 MB of that — deck
+# import's CardResolver needs per-card implementation classes, which
+# CardInfo#createCard() loads reflectively at runtime, not just the metadata jars
+# the bridge compiles against. Trivial next to the ~150 MB card database it sits
+# beside; not worth trimming.
 
 # 5. build + ship the web clients (on the dev machine). Two SPAs (table
 #    design §2): the table client at /, the classic client under /classic —
 #    the latter needs its vite base to match, which is a build-time flag, not
-#    committed config (dev mode and the C5 test:preview tier assume root).
+#    committed config (dev mode and the test:preview tier assume root).
 #    Same ownership caveat as step 4: these dirs are commander-owned right after
 #    install, so the `--rsync-path="sudo rsync" --chown=…` form is needed. If you
 #    would rather redeploy clients friction-free (frequent, no service restart),
@@ -130,9 +137,9 @@ rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
     dist/ vps:/opt/commander-night/classic/
 
 # 6. config + units + caddy
-scp deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
-scp deploy/xmage-server.service deploy/night-bridge.service vps:/etc/systemd/system/
-# merge deploy/Caddyfile (with your real hostname) into /etc/caddy/Caddyfile
+scp docs/deploy/bridge.yaml.example vps:/etc/commander-night/bridge.yaml
+scp docs/deploy/xmage-server.service docs/deploy/night-bridge.service vps:/etc/systemd/system/
+# merge docs/deploy/Caddyfile (with your real hostname) into /etc/caddy/Caddyfile
 
 # 7. card database symlink — deck import resolves card names through XMage's own
 #    database, and night.bridge.Main hard-exits if it can't read one (see "Card
@@ -198,11 +205,12 @@ produce that guard:
 
 ## TLS via DNS-01 (Route 53)
 
-The committed Caddyfile solves ACME via DNS-01, so certificate issuance never
-depends on inbound port 80 (and works before the A record propagates). That
-needs a caddy binary containing the route53 plugin
-(`github.com/caddy-dns/route53` v1.6+ — older plugin versions predate caddy
-2.10's libdns 1.0 break) plus AWS credentials in caddy's environment.
+The Caddyfile solves ACME via DNS-01, so certificate issuance never depends on
+inbound port 80 (and works before the A record propagates). That needs a caddy
+binary containing the route53 plugin (`github.com/caddy-dns/route53` v1.6+ —
+older plugin versions predate caddy 2.10's libdns 1.0 break) plus AWS
+credentials in caddy's environment. Drop the `tls { dns route53 }` block to fall
+back to HTTP-01 on a plain caddy build.
 
 No distro ships the plugin compiled in, and Fedora/EPEL builds also strip
 caddy's self-service commands (`caddy add-package` — verified absent from
@@ -236,11 +244,11 @@ EnvironmentFile=/etc/caddy/route53.env
 ## The web client
 
 Caddy serves the built SPA at `/` and proxies only `/ws` to the bridge
-(`deploy/Caddyfile`). The browser derives its WebSocket URL from the page
+(`docs/deploy/Caddyfile`). The browser derives its WebSocket URL from the page
 origin, so there is no host baked into the bundle — the same `dist/` works on
 any hostname.
 
-**SELinux.** On Rocky/EL with SELinux enforcing, caddy cannot read a
+**SELinux.** On Rocky/RHEL with SELinux enforcing, caddy cannot read a
 `file_server` root under `/opt` until it is labelled, and the failure is a
 silent 403 rather than an error in caddy's log:
 
@@ -261,11 +269,11 @@ always this.
 | anything under `table/` or `packages/core/` | rebuild + rsync `dist/`; no service restart — caddy serves from disk |
 | anything under `client/` | rebuild **with `--base=/classic/`** + rsync `dist/`; no service restart |
 | anything under `bridge/` | rebuild + rsync the jar **+ `lib/`**, then `systemctl restart night-bridge` (drops live seats) |
+| `Caddyfile` | `systemctl reload caddy` |
 
 All three rsyncs go into commander-owned dirs under `/opt/commander-night`, so each
-needs `--rsync-path="sudo rsync" --chown=commander:commander` as the `rocky` SSH user
+needs `--rsync-path="sudo rsync" --chown=commander:commander` as the SSH user
 (see Install step 4) — unless you handed the SPA dirs to the deploy user per step 5.
-| `deploy/Caddyfile` | `systemctl reload caddy` |
 
 Because `index.html` is served `no-cache`, a client redeploy reaches players
 on their next page load. A hard refresh is never required — and if you find
@@ -301,9 +309,9 @@ Zurgo sample deck so combat still fires inside a short game.
   (grep `"AI player thinks too long"` when AI seats stall).
 - **Restart the XMage server between game nights.** 1.4.60 cannot cancel AI
   simulation threads of dead games; they accumulate, burn cores, and skew
-  timing (live-observed during M3 validation). `systemctl restart
-  xmage-server night-bridge` after everyone's done — never during a game:
-  either process dying loses running games (protocol §14).
+  timing. `systemctl restart xmage-server night-bridge` after everyone's
+  done — never during a game: either process dying loses running games
+  (protocol §14).
 - **Callback tap** (`callbackTap: true` in bridge.yaml): per-seat capture
   under `/var/lib/commander-night/logs/tap/` — the golden-fixture source and
   the debugging tool of first resort. Off by default in production; a full
