@@ -135,6 +135,14 @@ export function route(msg: ServerMsg, ctx: RouteCtx): void {
     }
 
     case 'game.promptDone': {
+      // `superseded` means a replacement prompt follows in the same breath (the
+      // bridge emits this done immediately before the new game.prompt — see
+      // SeatPump.present). Clearing `pending` here would flicker it to undefined
+      // between the two, which (a) resets the auto-mana solver's no-progress
+      // chain and (b) defeats the payMana cantPay carry-over below, since that
+      // reads `prev.pending?.kind === 'payMana'`. The following game.prompt
+      // overwrites pending and resets scratch anyway, so leave it alone.
+      if (msg.reason === 'superseded') return;
       const pending = stores.prompt.getState().pending;
       if (pending?.promptId === msg.promptId) {
         stores.prompt.setState({ pending: undefined, ...emptyScratch() });

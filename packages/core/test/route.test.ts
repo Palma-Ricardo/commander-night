@@ -83,6 +83,18 @@ describe('route', () => {
     expect(stores.prompt.getState().pending).toBeUndefined();
   });
 
+  it('a superseded done for the current prompt does not clear pending (the bridge sends it just before the replacement)', () => {
+    // SeatPump.present emits promptDone(superseded, old) then game.prompt(new) in
+    // one breath; clearing pending in between would flicker it to undefined and
+    // reset the auto-mana no-progress chain / cantPay carry-over.
+    route(prompt, ctx);
+    route({ t: 'game.promptDone', seq: 900, gameId: 'g1', promptId: prompt.promptId, reason: 'superseded' }, ctx);
+    expect(stores.prompt.getState().pending?.promptId).toBe(prompt.promptId);   // still up
+    const next = { ...prompt, promptId: prompt.promptId + 1, seq: prompt.seq + 1 };
+    route(next, ctx);
+    expect(stores.prompt.getState().pending?.promptId).toBe(next.promptId);
+  });
+
   it('log entries dedupe by seq, sort, and ring at 500', () => {
     const entry = (seq: number) => ({
       t: 'game.log' as const, seq, gameId: 'g1', ts: 0, kind: 'game' as const, text: `line ${seq}`,

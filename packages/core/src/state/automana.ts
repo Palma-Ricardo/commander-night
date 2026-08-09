@@ -18,10 +18,13 @@
 //
 // It stands down — leaving the §5.3 manual panel up — when any pip is not
 // plainly coverable (snow, unparseable symbols), when the readable sources +
-// pool can't cover `remaining` at all, or after a no-progress click (re-plan
-// once on the cantPay badge, then stop rather than loop). It never sends
-// Cancel, and it never answers the "mana will be lost" confirm — that renders
-// on the corner cluster and is the player's call.
+// pool can't cover `remaining` at all, or after two consecutive no-progress
+// clicks. A single no-progress click is recoverable: the wiring retires the
+// pool color or source that didn't apply and re-plans around it (restricted
+// mana — Troyan-style "spend only on…" — folds into the flat pool counts we
+// see and looks spendable, so a re-plan around it taps real lands instead).
+// It never sends Cancel, and it never answers the "mana will be lost" confirm
+// — that renders on the corner cluster and is the player's call.
 
 import type { Card, GameState, Id, Prompt } from '../protocol/protocol';
 import type { Stores } from '../stores';
@@ -265,11 +268,19 @@ export type AutoManaDecision =
   | { act: 'stand-down' };
 
 /** Decide the single next click for a pending payMana ask. Pure — the wiring
- *  below owns chain state (strikes, stand-down persistence). */
+ *  below owns chain state (strikes, stand-down persistence).
+ *
+ *  `deadPool` names pool colors a prior spend failed to apply to this ask —
+ *  restricted mana (e.g. Troyan's "spend only to cast spells with mana value 5
+ *  or greater or with {X}") that XMage folds into the flat pool counts we see
+ *  (ManaPoolView sums conditional mana into the color totals), so it looks
+ *  spendable but isn't. Zeroing those colors makes the planner tap real sources
+ *  instead of dead-ending on mana it can never spend here. */
 export function autoManaAction(
   p: Extract<Prompt, { kind: 'payMana' }>,
   state: GameState,
   cantPay: Id[],
+  deadPool: Iterable<PoolColor> = [],
 ): AutoManaDecision {
   const pips = parseRemaining(p.remaining);
   const my = me(state);
@@ -289,7 +300,9 @@ export function autoManaAction(
     }
   }
 
-  const plan = planPayment(pips, my.manaPool, sources);
+  const pool = { ...my.manaPool };
+  for (const c of deadPool) pool[c] = 0;
+  const plan = planPayment(pips, pool, sources);
   const first = plan?.[0];
   if (first === undefined) return { act: 'stand-down' };   // uncoverable, or nothing to pay
   return first.kind === 'pool' ? { act: 'pool', color: first.color } : { act: 'tap', sourceId: first.id };
@@ -305,34 +318,67 @@ export interface AutoManaActions {
 }
 
 /** Subscribe the solver to the stores. Chain state lives here: a chain is a
- *  consecutive run of payMana asks; any other prompt (or promptDone) ends it.
- *  One no-progress click re-plans (route's cantPay excludes the source); a
- *  second stands the solver down for the rest of the chain. Toggling auto-mana
+ *  consecutive run of payMana asks for one payment; a non-payMana prompt ends
+ *  it. Each accepted click makes the bridge emit promptDone(answered) and then
+ *  a fresh re-ask, so between re-asks `pending` briefly clears — the chain
+ *  survives that bare gap and owns its own no-progress bookkeeping (it can't
+ *  lean on route's cantPay/manaProbe, which that same promptDone wipes):
+ *
+ *   - a pool spend that doesn't shrink the cost retires that pool color
+ *     (restricted mana the flat pool counts hide — see autoManaAction), so the
+ *     re-plan taps a real source instead of dead-ending on it;
+ *   - a source tap that doesn't shrink the cost retires that source;
+ *   - two consecutive no-progress clicks stand the solver down for the chain.
+ *
+ *  Real progress (the cost shrank) forgets the strike count. Toggling auto-mana
  *  on mid-ask re-solves the current ask with a fresh chain — the player asked.
  *  Returns the unsubscribe. */
 export function wireAutoManaSolver(stores: Stores, actions: AutoManaActions): () => void {
   let lastPromptId: number | undefined = stores.prompt.getState().pending?.promptId;
-  let chain: { strikes: number; stood: boolean; lastRemaining?: string; acted: boolean } | undefined;
+  interface Chain {
+    strikes: number; stood: boolean; lastRemaining?: string; acted: boolean;
+    /** what our last click was, so a no-progress re-ask can retire it */
+    lastPool?: PoolColor;
+    lastSource?: Id;
+    /** pool colors / sources a click failed to apply — excluded from planning
+     *  for the rest of the chain (restricted pool mana; a source XMage won't tap) */
+    deadPool: Set<PoolColor>;
+    deadSources: Set<Id>;
+  }
+  let chain: Chain | undefined;
 
   const solve = (): void => {
     const s = stores.prompt.getState();
     const p = s.pending;
-    if (p?.kind !== 'payMana') { chain = undefined; return; }
+    // Between re-asks the bridge emits promptDone(answered) then the next ask,
+    // so pending clears for one tick. Keep the chain across that bare gap; only
+    // a real non-payMana prompt ends it.
+    if (p === undefined) return;
+    if (p.kind !== 'payMana') { chain = undefined; return; }
     if (!stores.game.getState().autoMana) return;   // manual flow; chain survives a quick off/on
     const state = stores.game.getState().state;
     if (state === undefined) return;
 
-    chain ??= { strikes: 0, stood: false, acted: false };
-    if (chain.acted && chain.lastRemaining === p.remaining) {
-      // our click didn't shrink the cost — re-plan once (cantPay now excludes
-      // a probed source), then stand down rather than loop
-      chain.strikes++;
-      if (chain.strikes >= 2) chain.stood = true;
+    chain ??= { strikes: 0, stood: false, acted: false, deadPool: new Set(), deadSources: new Set() };
+    if (chain.acted) {
+      if (chain.lastRemaining === p.remaining) {
+        // our click didn't shrink the cost — retire what we tried, then count a
+        // strike and, on the second, stand down rather than loop
+        if (chain.lastPool !== undefined) chain.deadPool.add(chain.lastPool);
+        if (chain.lastSource !== undefined) chain.deadSources.add(chain.lastSource);
+        chain.strikes++;
+        if (chain.strikes >= 2) chain.stood = true;
+      } else {
+        chain.strikes = 0;   // the cost shrank — real progress, forget past strikes
+      }
     }
     chain.acted = false;
+    chain.lastPool = undefined;
+    chain.lastSource = undefined;
     if (chain.stood) { stores.prompt.setState({ autoPay: 'stood-down' }); return; }
 
-    const decision = autoManaAction(p, state, s.cantPay);
+    const cantPay = chain.deadSources.size > 0 ? [...s.cantPay, ...chain.deadSources] : s.cantPay;
+    const decision = autoManaAction(p, state, cantPay, chain.deadPool);
     if (decision.act === 'stand-down') {
       chain.stood = true;
       stores.prompt.setState({ autoPay: 'stood-down' });
@@ -340,6 +386,8 @@ export function wireAutoManaSolver(stores: Stores, actions: AutoManaActions): ()
     }
     chain.acted = true;
     chain.lastRemaining = p.remaining;
+    if (decision.act === 'pool') chain.lastPool = decision.color;
+    else chain.lastSource = decision.sourceId;
     stores.prompt.setState({ autoPay: 'paying' });
     if (decision.act === 'pool') actions.answerPrompt(p.promptId, { type: 'mana', color: decision.color });
     else actions.clickManaSource(p.promptId, decision.sourceId);

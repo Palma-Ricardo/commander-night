@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { route, type RouteCtx } from '../src/net/route';
 import { PendingCommands } from '../src/net/pending';
 import { SessionWriter } from '../src/net/session';
-import type { Card, GameState, Id, Permanent, Prompt, StateKeyframe } from '../src/protocol/protocol';
+import type { Card, GameState, Id, Permanent, Prompt, ServerMsg, StateKeyframe } from '../src/protocol/protocol';
 import {
   autoManaAction, parseRemaining, planPayment, sourceProduction,
   wireAutoManaSolver, type PoolColor, type SourceInfo,
@@ -306,6 +306,70 @@ describe('wireAutoManaSolver', () => {
   });
 });
 
+describe('wireAutoManaSolver — restricted pool mana (the L3H22Y loop)', () => {
+  // Regression for the 2026-08-08 runaway: Troyan's restricted {U} ("spend only
+  // to cast spells with mana value 5+ or with {X}") folds into the flat pool
+  // count we see (ManaPoolView sums conditional mana in), so it looks spendable
+  // but XMage won't apply it — the re-ask returns the same `remaining` with the
+  // same floating U. Faithful to the bridge: each accepted click arrives as
+  // promptDone(answered) then the re-ask, so `pending` clears for a tick between
+  // asks — the very gap that used to reset the no-progress chain and loop.
+  const withPoolU1 = (seq: number, battlefield: Permanent[]): StateKeyframe => {
+    const k = keyframe(seq, battlefield);
+    k.state.players[0]!.manaPool.U = 1;
+    return k;
+  };
+  const reask = (donePromptId: number, next: Prompt, seq: number): void => {
+    route({ t: 'game.promptDone', seq, gameId: 'g1', promptId: donePromptId,
+      reason: 'answered' } as ServerMsg, ctx);
+    route(next, ctx);
+  };
+
+  it('retires the restricted pool color and pays by tapping, never looping', () => {
+    const reliquary = land('rel', 'Reliquary Tower', { text: ['{T}: Add {C}.'] });
+    const island1 = land('isl1', 'Island', { subtypes: ['Island'] });
+    const island2 = land('isl2', 'Island', { subtypes: ['Island'] });
+    route(withPoolU1(1, [reliquary, island1, island2]), ctx);
+
+    // ask 1: the pool-first plan spends the (restricted) floating U
+    route(ask(70, '{2}', ['rel', 'isl1', 'isl2'], 2), ctx);
+    expect(sent[0]).toEqual({ kind: 'pool', promptId: 70, what: 'U' });
+
+    // re-ask, same {2} and same floating U: the spend didn't apply → retire U,
+    // re-plan onto a real source (colorless-first: the Tower)
+    reask(70, ask(71, '{2}', ['rel', 'isl1', 'isl2'], 3), 4);
+    expect(sent[1]).toEqual({ kind: 'tap', promptId: 71, what: 'rel' });
+
+    // the tap made progress ({2}→{1}); the chain continues and taps a land
+    reask(71, ask(72, '{1}', ['isl1', 'isl2'], 5), 6);
+    expect(sent[2]).toEqual({ kind: 'tap', promptId: 72, what: 'isl1' });
+    expect(stores.prompt.getState().autoPay).toBe('paying');
+  });
+
+  it('stands down when only the restricted pool mana could pay', () => {
+    route(withPoolU1(1, []), ctx);
+    route(ask(70, '{U}', [], 2), ctx);
+    expect(sent[0]).toEqual({ kind: 'pool', promptId: 70, what: 'U' });
+    reask(70, ask(71, '{U}', [], 3), 4);              // U retired, nothing else covers {U}
+    expect(stores.prompt.getState().autoPay).toBe('stood-down');
+    expect(sent).toHaveLength(1);
+  });
+
+  it('bounds a true no-progress loop across the answered-done gaps', () => {
+    // both the pool spend and the fallback tap fail to apply (remaining never
+    // shrinks): two strikes stand it down instead of looping 269 times.
+    const island1 = land('isl1', 'Island', { subtypes: ['Island'] });
+    route(withPoolU1(1, [island1]), ctx);
+    route(ask(70, '{1}', ['isl1'], 2), ctx);
+    expect(sent[0]).toEqual({ kind: 'pool', promptId: 70, what: 'U' });   // strike 0
+    reask(70, ask(71, '{1}', ['isl1'], 3), 4);
+    expect(sent[1]).toEqual({ kind: 'tap', promptId: 71, what: 'isl1' }); // retire U, tap island — strike 1
+    reask(71, ask(72, '{1}', ['isl1'], 5), 6);                           // island didn't apply either
+    expect(stores.prompt.getState().autoPay).toBe('stood-down');         // strike 2 → stand down
+    expect(sent).toHaveLength(2);
+  });
+});
+
 describe('autoManaAction', () => {
   it('excludes cantPay sources from the plan', () => {
     const state = gameState([forest, anyColorLand]);
@@ -313,5 +377,16 @@ describe('autoManaAction', () => {
     expect(autoManaAction(p, state, [])).toEqual({ act: 'tap', sourceId: 'forest' });
     expect(autoManaAction(p, state, ['forest'])).toEqual({ act: 'tap', sourceId: 'any' });
     expect(autoManaAction(p, state, ['forest', 'any'])).toEqual({ act: 'stand-down' });
+  });
+
+  it('deadPool zeroes a floating color so the plan taps instead', () => {
+    const state = gameState([forest]);
+    state.players[0]!.manaPool.G = 1;
+    const p = ask(70, '{G}', ['forest'], 2) as Extract<Prompt, { kind: 'payMana' }>;
+    // with the floating G live, the plan spends it; retired, it taps the Forest
+    expect(autoManaAction(p, state, [])).toEqual({ act: 'pool', color: 'G' });
+    expect(autoManaAction(p, state, [], ['G'])).toEqual({ act: 'tap', sourceId: 'forest' });
+    // retired with nothing left to cover the pip → stand down
+    expect(autoManaAction(p, gameState([]), [], ['G'])).toEqual({ act: 'stand-down' });
   });
 });
