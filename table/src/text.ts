@@ -30,7 +30,9 @@ export function splitSymbols(chunk: string): SymbolPart[] {
   let last = 0;
   for (let m = re.exec(chunk); m !== null; m = re.exec(chunk)) {
     if (m.index > last) parts.push({ kind: 'text', value: chunk.slice(last, m.index) });
-    parts.push({ kind: 'pip', value: m[1]! });
+    const sym = m[1]!;
+    // {this} in oracle text is a card-name placeholder, not a mana symbol — strip braces.
+    parts.push(sym === 'this' ? { kind: 'text', value: sym } : { kind: 'pip', value: sym });
     last = m.index + m[0].length;
   }
   if (last < chunk.length) parts.push({ kind: 'text', value: chunk.slice(last) });

@@ -9,9 +9,10 @@
 // PIXI glue below measures with `CanvasTextMetrics` and needs a canvas, like the
 // rest of the render layer (exercised by `npm run shoot`, not the node tests).
 
-import { CanvasTextMetrics, Container, Graphics, Text, TextStyle } from 'pixi.js';
+import { CanvasTextMetrics, Container, Graphics, Sprite, Text, TextStyle } from 'pixi.js';
 import { parseManaCost, symbolColor } from '@night/core/state/mana';
 import { decodeEntities, splitSymbols } from '../text';
+import { manaPipTexture } from './manaPips';
 
 /** One drawable piece of a word: a run of plain text, or a single `{…}` mana pip
  *  (the brace content, e.g. "G", "2", "W/U", "T"). `w` is its measured width. */
@@ -70,10 +71,23 @@ function pipFill(sym: string): number {
   }
 }
 
-/** A mana pip drawn as a filled disc/stadium with its symbol centred — origin at
- *  the pip's centre. Widens to a pill for a multi-character symbol (a hybrid). */
+/** A mana pip — origin at the pip's centre. Uses the bundled SVG texture (the
+ *  felt mirror of the DOM ManaSymbols) when one exists, a square `h×h` sprite with
+ *  the disc and glyph already baked in. Falls back to a procedural filled
+ *  disc/stadium for any unbundled symbol, widening to a pill for a multi-character
+ *  one (a hybrid without an SVG). */
 function pipNode(sym: string, size: number, family: string, resolution: number): { node: Container; w: number } {
   const h = size * 1.12;
+  const tex = manaPipTexture(sym);
+  if (tex !== undefined) {
+    const sprite = new Sprite(tex);
+    sprite.anchor.set(0.5);
+    sprite.width = h;
+    sprite.height = h;
+    const node = new Container();
+    node.addChild(sprite);
+    return { node, w: h };
+  }
   const label = new Text({
     text: sym, resolution,
     style: new TextStyle({ fontFamily: family, fontSize: Math.max(6, Math.round(size * 0.72)), fill: 0x1a1a1a, fontWeight: '700' }),
@@ -135,6 +149,9 @@ export function richText(raw: string, style: RichStyle): Container {
     const spaceW = Math.max(CanvasTextMetrics.measureText(' ', bodyStyle).width, size * 0.24);
     const measure = (p: { kind: 'text' | 'pip'; value: string }): Part => {
       if (p.kind === 'pip') {
+        // Match pipNode: an SVG-backed pip is a square h×h sprite; only the
+        // procedural fallback widens to a pill for its glyph text.
+        if (manaPipTexture(p.value) !== undefined) return { kind: 'pip', value: p.value, w: pipH };
         const lw = CanvasTextMetrics.measureText(p.value, labelStyle).width;
         return { kind: 'pip', value: p.value, w: Math.max(pipH, lw + pipH * 0.5) };
       }

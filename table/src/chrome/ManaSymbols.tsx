@@ -1,30 +1,26 @@
-// Mana symbols as coloured pips. The WUBRG(C) symbols are the bundled SVGs
-// (src/assets/mana/{W,U,B,R,G,C}.svg) — complete pips with the coloured disc and
-// glyph baked in, so we just drop them in as <img>. Everything without a dedicated
-// symbol — generic {2}, {X}, hybrids, {T}/{S} — falls back to the text pip it
-// always was (a tinted disc with the value). `ManaText`/`manaNodes` render a plain
-// string with its `{…}` tokens turned into pips, for the prompt message and log
-// lines (which arrive as text, §8) — so "{G}" reads as a pip, not braces.
+// Mana symbols as coloured pips. Every symbol that has a bundled SVG in
+// src/assets/mana/ or src/assets/misc/ renders as <img>; anything else (a
+// genuinely unknown token) falls back to a tinted disc with the value as text.
+// The SVG filename is derived from the brace content by stripping slashes:
+// "W/U" → WU.svg, "2/W" → 2W.svg, "B/P" → BP.svg, "W/U/P" → WUP.svg.
+// `ManaText`/`manaNodes` render a plain string with its `{…}` tokens turned
+// into pips, for prompt messages and log lines (§8) — "{G}" reads as a pip.
 
 import type { ReactNode } from 'react';
 import { parseManaCost, symbolColor, type ManaSymbol } from '@night/core/state/mana';
 import { splitSymbols } from '../text';
-import wSym from '../assets/mana/W.svg';
-import uSym from '../assets/mana/U.svg';
-import bSym from '../assets/mana/B.svg';
-import rSym from '../assets/mana/R.svg';
-import gSym from '../assets/mana/G.svg';
-import cSym from '../assets/mana/C.svg';
+import tSym from '../assets/misc/T.svg';
 
-// The pure single-mana symbols that own a real pip (WUBRG + colourless C).
-const SYMBOL: Partial<Record<ManaSymbol, string>> =
-  { W: wSym, U: uSym, B: bSym, R: rSym, G: gSym, C: cSym };
+// Eagerly load every SVG in assets/mana/; key = filename without extension.
+const _manaGlob = import.meta.glob<string>('../assets/mana/*.svg', { eager: true, import: 'default' });
+const MANA_SVG: Record<string, string> = Object.fromEntries(
+  Object.entries(_manaGlob).map(([p, url]) => [p.slice(p.lastIndexOf('/') + 1, -4), url])
+);
 
 function ManaPip({ sym }: { sym: ManaSymbol }) {
-  const src = SYMBOL[sym];
+  const key = sym.replace(/\//g, '');
+  const src = key === 'T' ? tSym : MANA_SVG[key];
   if (src !== undefined) return <img className="mana-img" src={src} alt={sym} draggable={false} />;
-  // generic / X / hybrid / tap / snow — the disc tints to the first colour, the
-  // text carries the value (a two-colour hybrid disc is not worth the complexity).
   return <span className={`mana mana-${symbolColor(sym) ?? 'X'}`}>{sym}</span>;
 }
 

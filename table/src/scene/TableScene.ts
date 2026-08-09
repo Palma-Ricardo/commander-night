@@ -25,6 +25,7 @@ import { affordanceFor, commanderDamageRows, commanderNames } from '@night/core/
 import type { PromptStoreState } from '@night/core/stores/prompt';
 import { CardActor, LUNGE_IMPACT_AT } from '../render/CardActor';
 import { CardTextures, identityColor, type Tier } from '../render/textures';
+import { loadManaPips } from '../render/manaPips';
 import { Effects } from '../render/Effects';
 import {
   NAMEPLATE, OPP_HAND_MAX, OPP_HAND_SCALE, PILE_FOOTPRINT, PILE_LABEL, RAIL,
@@ -360,6 +361,10 @@ export class TableScene implements DirectorSink {
     // real card back (§7.2): preload it so `faceDown()` returns the art from first
     // paint rather than the procedural back that would pop a frame later.
     await this.textures.loadCardBack();
+    // Mana pips on the felt (stack/ability panels, card faces) draw from the same
+    // bundled SVGs as the DOM chrome — rasterize them once before first paint so
+    // "{G}"/"{W/U}"/"{T}" read as real symbols, not the procedural fallback discs.
+    await loadManaPips();
 
     // The felt is a PerspectiveMesh: a baked felt texture mapped onto the four
     // projected world corners each frame, so the whole surface keystones (T4). A

@@ -611,7 +611,10 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
   width: calc(clamp(16rem, calc(var(--card-unit) * 2.6), 26rem) * var(--preview-zoom, 1));
   display: flex; flex-direction: column; gap: 0.4rem;
 }
-.hover-preview img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 10px; box-shadow: 0 8px 30px #000d; }
+/* Direct child only — the card art. A bare `.hover-preview img` also catches the
+   inline .mana-img pips in .hover-oracle and (out-specifying .mana-img) stretches
+   them to full box width. */
+.hover-preview > img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 10px; box-shadow: 0 8px 30px #000d; }
 .hover-preview .text-frame { aspect-ratio: 63 / 88; font-size: 0.8rem; }
 .hover-oracle {
   /* fully click-through, like the rest of the preview: the scene owns the hover

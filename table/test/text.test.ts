@@ -63,6 +63,13 @@ describe('splitSymbols', () => {
     expect(splitSymbols('draw a card')).toEqual([{ kind: 'text', value: 'draw a card' }]);
     expect(splitSymbols('')).toEqual([]);
   });
+
+  it('strips {this} to plain text — it is a card-name placeholder, not a pip', () => {
+    expect(splitSymbols('{this} enters the battlefield')).toEqual([
+      { kind: 'text', value: 'this' },
+      { kind: 'text', value: ' enters the battlefield' },
+    ]);
+  });
 });
 
 describe('chosenX', () => {
