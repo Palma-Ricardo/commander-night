@@ -7,7 +7,7 @@
 // the banner. Reconnects and bridge-side upstream trouble surface as a banner
 // over the board (§11).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../../app';
 import { combatLines, me, opponents, playerName, statusLine } from '@night/core/state/selectors';
@@ -27,14 +27,11 @@ import { useShortcuts } from '../shortcuts';
 export function Game() {
   const game = useStore(appStores.game);
   const pendingMessage = useStore(appStores.prompt, s => s.pending?.message);
-  const conn = useStore(appStores.connection);
   const [browse, setBrowse] = useState<BrowseRequest | null>(null);
   useShortcuts();
 
   const state = game.state;
   if (state === undefined) return null;
-
-  const reconnecting = conn.status === 'dropped' || conn.status === 'connecting' || conn.status === 'helloSent';
 
   const myPlayer = me(state);
   const opps = opponents(state);
@@ -49,13 +46,7 @@ export function Game() {
   return (
     <div className="game">
       <div className="board">
-        {(reconnecting || game.upstreamNotice !== undefined) && (
-          <div className="board-banner">
-            {reconnecting
-              ? `reconnecting…${conn.attempt > 0 ? ` (attempt ${conn.attempt})` : ''}`
-              : game.upstreamNotice}
-          </div>
-        )}
+        <BoardBanner />
 
         {game.over !== undefined && (
           <div className="over-banner">
@@ -120,6 +111,48 @@ export function Game() {
         </Modal>
       )}
       <HoverPreview />
+    </div>
+  );
+}
+
+/** How long a bridge-side upstream notice lingers before it clears itself (§11).
+ *  The notice used to hang around until the next status line or keyframe — minutes
+ *  in a quiet game — so it now auto-expires and can be dismissed by hand. */
+const UPSTREAM_NOTICE_MS = 30_000;
+
+/** §11 board banner: reconnect status and bridge-side upstream-trouble notices,
+ *  both over the board. The reconnect variant mirrors live connection state, so it
+ *  self-clears and carries no controls. The upstream notice is advisory and
+ *  otherwise sticky, so it auto-expires after UPSTREAM_NOTICE_MS and shows a
+ *  dismiss control. */
+function BoardBanner() {
+  const conn = useStore(appStores.connection);
+  const notice = useStore(appStores.game, s => s.upstreamNotice);
+  const reconnecting = conn.status === 'dropped' || conn.status === 'connecting' || conn.status === 'helloSent';
+
+  useEffect(() => {
+    if (notice === undefined) return;
+    const t = setTimeout(() => appStores.game.setState({ upstreamNotice: undefined }), UPSTREAM_NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  if (!reconnecting && notice === undefined) return null;
+
+  return (
+    <div className="board-banner">
+      {reconnecting
+        ? `reconnecting…${conn.attempt > 0 ? ` (attempt ${conn.attempt})` : ''}`
+        : notice}
+      {!reconnecting && (
+        <button
+          className="banner-dismiss"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={() => appStores.game.setState({ upstreamNotice: undefined })}
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }

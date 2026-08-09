@@ -38,7 +38,6 @@ import { startNudge } from './nudge';
 
 export function GameOverlay() {
   const game = useStore(appStores.game);
-  const conn = useStore(appStores.connection);
   useShortcuts();
 
   useEffect(() => {
@@ -49,8 +48,6 @@ export function GameOverlay() {
   const state = game.state;
   if (state === undefined) return null;
 
-  const reconnecting = conn.status === 'dropped' || conn.status === 'connecting' || conn.status === 'helloSent';
-
   // XMage's reason usually already names the winner — only append winners the
   // reason doesn't mention.
   const winners = game.over === undefined ? [] : game.over.winnerPlayerIds
@@ -59,13 +56,7 @@ export function GameOverlay() {
 
   return (
     <div className="table-overlay">
-      {(reconnecting || game.upstreamNotice !== undefined) && (
-        <div className="board-banner">
-          {reconnecting
-            ? `reconnecting…${conn.attempt > 0 ? ` (attempt ${conn.attempt})` : ''}`
-            : game.upstreamNotice}
-        </div>
-      )}
+      <BoardBanner />
 
       {game.over !== undefined && (
         <div className="over-banner">
@@ -106,6 +97,48 @@ export function GameOverlay() {
       </div>
 
       <HoverPreview />
+    </div>
+  );
+}
+
+/** How long a bridge-side upstream notice lingers before it clears itself (§11).
+ *  The notice used to hang around until the next status line or keyframe — minutes
+ *  in a quiet game — so it now auto-expires and can be dismissed by hand. */
+const UPSTREAM_NOTICE_MS = 30_000;
+
+/** §11 board banner: reconnect status and bridge-side upstream-trouble notices,
+ *  both pinned top-centre over the felt. The reconnect variant mirrors live
+ *  connection state, so it self-clears and carries no controls. The upstream
+ *  notice is advisory and otherwise sticky, so it auto-expires after
+ *  UPSTREAM_NOTICE_MS and shows a dismiss control. */
+function BoardBanner() {
+  const conn = useStore(appStores.connection);
+  const notice = useStore(appStores.game, s => s.upstreamNotice);
+  const reconnecting = conn.status === 'dropped' || conn.status === 'connecting' || conn.status === 'helloSent';
+
+  useEffect(() => {
+    if (notice === undefined) return;
+    const t = setTimeout(() => appStores.game.setState({ upstreamNotice: undefined }), UPSTREAM_NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  if (!reconnecting && notice === undefined) return null;
+
+  return (
+    <div className="board-banner">
+      {reconnecting
+        ? `reconnecting…${conn.attempt > 0 ? ` (attempt ${conn.attempt})` : ''}`
+        : notice}
+      {!reconnecting && (
+        <button
+          className="banner-dismiss"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={() => appStores.game.setState({ upstreamNotice: undefined })}
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }
