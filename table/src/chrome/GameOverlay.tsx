@@ -28,7 +28,6 @@ import { DistributePanel } from './DistributePanel';
 import { PayPanel } from './PayPanel';
 import { RequestPanel } from './RequestPanel';
 import { CarouselBar } from './CarouselBar';
-import { HandPager } from './HandPager';
 import { TurnControls } from './TurnControls';
 import { LogPanel, useRematchCode } from './LogPanel';
 import { HoverPreview } from './HoverPreview';
@@ -80,14 +79,14 @@ export function GameOverlay() {
 
       {/* Screen-space prompt surfaces (prompts-on-the-table §5) — each gates on
           its own kind, so at most one is up. The carousel's cards are canvas
-          (TableScene); its bar and the hand pager are the only DOM the fan has. */}
+          (TableScene); its bar is the only DOM the fan has (the hand scrolls on
+          the canvas itself now, #8). */}
       <AmountSelector />
       <AbilityOptions />
       <OptionTiles />
       <PileChoice />
       <DistributePanel />
       <CarouselBar />
-      <HandPager />
 
       <div className="dock-corner">
         <TurnControls />

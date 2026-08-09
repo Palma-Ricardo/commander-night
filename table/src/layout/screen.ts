@@ -10,10 +10,29 @@
 
 import type { GameState, StackItem } from '@night/core';
 import { chosenX, substituteX } from '../text';
-import { HAND_PAGE_SIZE, HAND_PAGE_THRESHOLD } from '../tuning';
-import type { PlacedActor, Point, Size } from './types';
+import type { ActorPlacement, PlacedActor, Point, Size } from './types';
 
 const CARD_TEX = { w: 200, h: 280 } as const;
+
+// The hand fan's feel. Cards overlap so a crowded hand still reads (the left
+// ~62% of each shows — the name, the cost, most of the art), the same reading the
+// carousel strip relies on. Past what fits, the fan *scrolls* rather than
+// cramming or paging (modelled on the carousel, Issues.txt #8).
+const HAND_STEP_RATIO = 0.62;   // centre-to-centre spacing, as a fraction of a card
+const HAND_MARGIN = 48;         // clear space kept at both ends of the run
+// The reading window, in cards. The fan scrolls once it outgrows this many even
+// when the felt could hold more — a fan wider than this stops being a hand you can
+// take in at a glance, and a wide display would otherwise never scroll at all. The
+// carousel strip caps itself the same way (STRIP_VISIBLE); a hand can hold a few
+// more before it reads as a wall.
+const HAND_VISIBLE = 12;
+const HAND_MAX_ROT = 0.1;       // per-card fan rotation at the run's edge (radians)
+const HAND_ARC = 0.10;          // downward arc at the run's edge, as a fraction of the band
+// Width of the dissolve at each end of the run, in cards: the fan thins into the
+// felt rather than stopping at a hard edge, so it reads as a longer hand passing
+// through a window and the fade itself says "there is more this way" — exactly the
+// carousel strip's ends (stripAlphaAt), kept in step deliberately.
+const HAND_FADE_CARDS = 0.7;
 
 /** Height of the bottom band reserved for the hand. The camera fits the world
  *  into the viewport *above* this band, so every seat stays clear of the hand
@@ -25,81 +44,133 @@ export function handBandHeight(viewport: Size): number {
 /** The hand fan + the stack pile, in screen (CSS-pixel) coordinates. `rightInset`
  *  is the width the open log sidebar steals from the right (§8): the hand centres
  *  in the felt *left* of it and the stack pins to that inset right edge, so nothing
- *  ever tucks under the panel. 0 ⇒ the whole viewport. `handPage` is the §4.4
- *  hand-mode page (clamped here; only read when the hand is oversized). */
+ *  ever tucks under the panel. 0 ⇒ the whole viewport. `handOffset` is the hand
+ *  fan's horizontal scroll in px (clamped here; ignored once the hand fits). */
 export function layoutScreen(
-  state: GameState, viewport: Size, rightInset = 0, spreadStack = false, handPage = 0,
+  state: GameState, viewport: Size, rightInset = 0, spreadStack = false, handOffset = 0,
 ): PlacedActor[] {
   const out: PlacedActor[] = [];
-  layoutHand(state, viewport, rightInset, handPage, out);
+  layoutHand(state, viewport, rightInset, handOffset, out);
   if (spreadStack) layoutStackSpread(state, viewport, rightInset, out);
   else layoutStack(state, viewport, rightInset, out);
   return out;
 }
 
-/** Pages an oversized hand fans through (1 ⇒ the whole hand fits one fan). */
-export function handPageCount(handSize: number): number {
-  if (handSize <= HAND_PAGE_THRESHOLD) return 1;
-  return Math.max(1, Math.ceil(handSize / HAND_PAGE_SIZE));
+/** The hand fan's geometry — the scrollable-window numbers, with no cards in
+ *  them. Pure and shared: `layoutHand` derives every card's placement from this,
+ *  the scene clamps its wheel/arrow scroll against `maxOffset`/`step`, and the
+ *  per-frame end-fade (`handFanAlphaAt`) reads `run`/`cardW`/`fadeLeft`/`fadeRight`
+ *  — so all three agree by construction. Mirrors the carousel's `CarouselStrip`;
+ *  the one difference is the hand keeps its fan curve (see `layoutHand`). */
+export interface HandFan {
+  /** Clamped scroll offset actually used, px from the fan's start. */
+  offset: number;
+  /** Largest useful offset. 0 ⇒ the whole hand fits and never scrolls. */
+  maxOffset: number;
+  /** Centre-to-centre spacing — one "card" of scroll, for the wheel and keys. */
+  step: number;
+  /** The reading window in screen px: at most HAND_VISIBLE cards wide, centred on
+   *  the felt midline (the felt left of the log gutter, less a margin at each end
+   *  when that is narrower). A hand longer than the window scrolls through it. */
+  run: { left: number; width: number };
+  /** One card's drawn width — the fade ramp measures itself in these. */
+  cardW: number;
+  /** Whether the fan continues past each end of the run right now (⇒ that edge
+   *  dissolves). Both false when the whole hand fits. */
+  fadeLeft: boolean;
+  fadeRight: boolean;
 }
 
-/** Your hand, fanned and centred along the bottom edge. Past
- *  HAND_PAGE_THRESHOLD it pages instead of cramming (§4.4 hand mode): only the
- *  current page fans in the band; off-page cards are placed just below the
- *  bottom edge on their page's side, so a page turn slides them in and out as
- *  ordinary actor tweens and drag-to-cast never sees anything unusual. */
+/** The hand fan's window for `count` cards scrolled by `offset` px in `viewport`
+ *  (with the log gutter `rightInset` reserved). */
+export function layoutHandFan(
+  count: number, offset: number, viewport: Size, rightInset = 0,
+): HandFan {
+  const band = handBandHeight(viewport);
+  const scale = (band * 0.9) / CARD_TEX.h;          // card height ≈ 90% of the band
+  const cardW = CARD_TEX.w * scale;
+  const step = cardW * HAND_STEP_RATIO;
+  const availW = Math.max(cardW + 2 * HAND_MARGIN, viewport.w - Math.max(0, rightInset));
+  // Whatever the felt can spare, but never more than HAND_VISIBLE cards — a longer
+  // hand scrolls *through* this run rather than stretching across the whole felt.
+  const runW = Math.min(availW - 2 * HAND_MARGIN, step * (HAND_VISIBLE - 1) + cardW);
+  const run = { left: (availW - runW) / 2, width: runW };
+  if (count <= 0) {
+    return { offset: 0, maxOffset: 0, step, run, cardW, fadeLeft: false, fadeRight: false };
+  }
+  const spanW = step * (count - 1) + cardW;
+  const maxOffset = Math.max(0, spanW - runW);
+  const o = Math.min(Math.max(0, offset), maxOffset);
+  // An edge dissolves only while there is fan beyond it; the half-pixel guard keeps
+  // a fully-scrolled fan from flickering its trailing edge on rounding.
+  return {
+    offset: o, maxOffset, step, run, cardW,
+    fadeLeft: o > 0.5,
+    fadeRight: o < maxOffset - 0.5,
+  };
+}
+
+/** How opaque a hand card at screen-x `x` (its centre) should be: 1 well inside
+ *  the run, ramping to 0 across HAND_FADE_CARDS at whichever end still has more
+ *  fan behind it. Like `stripAlphaAt`, a function of the card's *live* x rather
+ *  than a placement field — a card slides into the window over a scroll tween, and
+ *  a placement alpha would light it up before it arrived. The scene calls this per
+ *  frame from the actor's animated position. Pure, so the ramp is unit-testable. */
+export function handFanAlphaAt(fan: HandFan, x: number): number {
+  const fade = fan.cardW * HAND_FADE_CARDS;
+  if (fade <= 0) return 1;
+  const right = fan.run.left + fan.run.width;
+  let a = 1;
+  if (fan.fadeLeft) a = Math.min(a, (x - fan.run.left) / fade);
+  if (fan.fadeRight) a = Math.min(a, (right - x) / fade);
+  return a < 0 ? 0 : a > 1 ? 1 : a;
+}
+
+/** Your hand, fanned and centred along the bottom edge. Once it outgrows the run
+ *  window it *scrolls* rather than cramming or paging (Issues.txt #8, modelled on
+ *  the carousel strip): every card keeps a placement along one line — none is
+ *  tucked away or culled, so drag-to-cast never sees anything unusual — and the
+ *  ends of the run dissolve (`handFanAlphaAt`, applied per frame from the live x).
+ *
+ *  The fan curve stays: rotation and a downward arc grow with distance from the
+ *  window centre (always the felt midline), so the middle card reads upright and
+ *  the fan tilts toward both ends. Bounded by the run's half-width when the hand
+ *  overflows, so a long hand never rotates its edge cards absurdly; the actual
+ *  span when it fits, so a small hand still fans fully. */
 function layoutHand(
-  state: GameState, viewport: Size, rightInset: number, handPage: number, out: PlacedActor[],
+  state: GameState, viewport: Size, rightInset: number, handOffset: number, out: PlacedActor[],
 ): void {
   const hand = state.me.hand;
-  const total = hand.length;
-  if (total === 0) return;
+  const n = hand.length;
+  if (n === 0) return;
 
-  const pages = handPageCount(total);
-  const page = Math.min(Math.max(0, handPage), pages - 1);
-  const start = pages > 1 ? page * HAND_PAGE_SIZE : 0;
-  const end = pages > 1 ? Math.min(total, start + HAND_PAGE_SIZE) : total;
-  const n = end - start;
-
+  const fan = layoutHandFan(n, handOffset, viewport, rightInset);
   const band = handBandHeight(viewport);
-  const scale = (band * 0.9) / CARD_TEX.h;         // card height ≈ 90% of the band
-  const cardW = CARD_TEX.w * scale;
-  const overlap = 0.62;                            // fan cards overlap when crowded
-  const availW = Math.max(cardW + 48, viewport.w - Math.max(0, rightInset));
-  const step = Math.min(cardW * overlap, (availW - cardW - 48) / Math.max(1, n - 1));
-  const spanW = step * (n - 1);
-  const startX = availW / 2 - spanW / 2;
+  const scale = (band * 0.9) / CARD_TEX.h;
+  const availW = 2 * fan.run.left + fan.run.width;   // the felt width left of the gutter
+  const spanW = fan.step * (n - 1) + fan.cardW;
+  // Fits ⇒ centre it and never scroll; longer ⇒ pin to the run's left and slide by
+  // the clamped offset, so the first card sits where the eye already is.
+  const x0 = fan.maxOffset === 0
+    ? (availW - spanW) / 2 + fan.cardW / 2
+    : fan.run.left + fan.cardW / 2 - fan.offset;
+  const centreX = availW / 2;
+  const halfExtent = Math.max(1, Math.min(spanW, fan.run.width) / 2);
   const baseY = viewport.h - band / 2;
-  const hiddenY = viewport.h + (band * 0.9) / 2 + 8;   // fully below the bottom edge
 
   hand.forEach((card, i) => {
-    const onPage = i >= start && i < end;
-    const j = i - start;
-    const t = onPage && n > 1 ? j / (n - 1) - 0.5 : 0;   // -0.5 … 0.5 across the fan
-    out.push({
-      key: card.id, card, objectId: card.id, space: 'screen',
-      placement: onPage
-        ? {
-            x: startX + j * step,
-            y: baseY + Math.abs(t) * band * 0.10,        // slight downward arc at the ends
-            rotation: t * 0.1,
-            scale,
-            zone: 'hand',
-            ownerId: state.me.playerId,
-            faceUp: true,
-          }
-        : {
-            // Tucked out of sight on its page's side: earlier pages exit left,
-            // later ones right, so a turn reads as the fan sliding through.
-            x: i < start ? startX - cardW : startX + spanW + cardW,
-            y: hiddenY,
-            rotation: 0,
-            scale,
-            zone: 'hand',
-            ownerId: state.me.playerId,
-            faceUp: true,
-          },
-    });
+    const x = x0 + i * fan.step;
+    const t = Math.max(-1, Math.min(1, (x - centreX) / halfExtent));   // -1 … 1 across the fan
+    const placement: ActorPlacement = {
+      x,
+      y: baseY + Math.abs(t) * band * HAND_ARC,      // slight downward arc at the ends
+      rotation: t * HAND_MAX_ROT,
+      scale,
+      zone: 'hand',
+      ownerId: state.me.playerId,
+      faceUp: true,
+    };
+    out.push({ key: card.id, card, objectId: card.id, space: 'screen', placement });
   });
 }
 

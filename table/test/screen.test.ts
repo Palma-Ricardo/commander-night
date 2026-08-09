@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { StackItem } from '@night/core';
-import { handBandHeight, layoutScreen, stackEffectText, stackGutterWidth } from '../src/layout/screen';
+import {
+  handBandHeight, handFanAlphaAt, layoutHandFan, layoutScreen, stackEffectText, stackGutterWidth,
+} from '../src/layout/screen';
 import { cid, fourSeats, mkCard, mkPlayer, mkState, SUPPORTED_VIEWPORTS } from './helpers';
 
 const spell = (name: string): StackItem =>
@@ -61,13 +63,20 @@ describe('layoutScreen (the hand)', () => {
     }
   });
 
-  it('does not overflow the window width with a very large hand', () => {
-    const big = mkPlayer('p1', 'You', { human: true, handSize: 18 });
+  it('a very large hand scrolls: every lit card stays inside the felt', () => {
+    // Past what fits, the fan no longer crams — it scrolls, and cards beyond the
+    // run dissolve to nothing (they may sit past the edge, but invisibly). So the
+    // invariant is on the *lit* cards, not every placement (#8).
+    const big = mkPlayer('p1', 'You', { human: true, handSize: 24 });
     const state = mkState([big], 'p1');
     const vp = { w: 1280, h: 720 };
-    const xs = layoutScreen(state, vp).map(p => p.placement.x);
-    expect(Math.min(...xs)).toBeGreaterThanOrEqual(0);
-    expect(Math.max(...xs)).toBeLessThanOrEqual(vp.w);
+    const fan = layoutHandFan(24, 0, vp);
+    expect(fan.maxOffset).toBeGreaterThan(0);           // it overflows ⇒ it scrolls
+    const lit = layoutScreen(state, vp)
+      .filter(p => p.placement.zone === 'hand' && handFanAlphaAt(fan, p.placement.x) > 0);
+    expect(lit.length).toBeGreaterThan(0);
+    expect(Math.min(...lit.map(p => p.placement.x))).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...lit.map(p => p.placement.x))).toBeLessThanOrEqual(vp.w);
   });
 
   it('re-centres the fan in the felt left of the log gutter', () => {
@@ -95,49 +104,112 @@ describe('layoutScreen (the hand)', () => {
   });
 });
 
-describe('layoutScreen (paged hand, §4.4 hand mode)', () => {
+describe('layoutScreen (scrollable hand fan, §4.4 / #8)', () => {
   const vp = { w: 1600, h: 900 };
-  const oversized = () => mkState([mkPlayer('p1', 'You', { human: true, handSize: 12 })], 'p1');
+  const oversized = () => mkState([mkPlayer('p1', 'You', { human: true, handSize: 24 })], 'p1');
 
-  it('a hand at the threshold still fans whole', () => {
+  it('a hand that fits stays one centred fan and never scrolls, fully lit', () => {
     const state = mkState([mkPlayer('p1', 'You', { human: true, handSize: 10 })], 'p1');
-    const band = handBandHeight(vp);
+    const fan = layoutHandFan(10, 0, vp);
+    expect(fan.maxOffset).toBe(0);
+    expect(fan.fadeLeft).toBe(false);
+    expect(fan.fadeRight).toBe(false);
     const placed = hand(layoutScreen(state, vp));
     expect(placed.length).toBe(10);
-    expect(placed.every(p => p.placement.y <= vp.h && p.placement.y >= vp.h - band)).toBe(true);
+    // a fan that fits hides nothing — every card is opaque end to end
+    expect(placed.every(p => handFanAlphaAt(fan, p.placement.x) === 1)).toBe(true);
   });
 
-  it('an oversized hand fans one page in the band, tucks the rest below the edge', () => {
+  it('an oversized hand keeps every card a placed actor, in order, all in the band', () => {
     const state = oversized();
     const band = handBandHeight(vp);
     const placed = hand(layoutScreen(state, vp, 0, false, 0));
-    expect(placed.length).toBe(12);                       // every card stays a placed actor
-    const inBand = placed.filter(p => p.placement.y <= vp.h);
-    const tucked = placed.filter(p => p.placement.y > vp.h);
-    expect(inBand.length).toBe(8);                        // HAND_PAGE_SIZE
-    expect(tucked.length).toBe(4);
-    expect(inBand.every(p => p.placement.y >= vp.h - band)).toBe(true);
-    // page 0 shows the first cards, in order
-    expect(inBand.map(p => p.key)).toEqual(state.me.hand.slice(0, 8).map(c => c.id));
+    expect(placed.length).toBe(24);                          // nothing is culled…
+    expect(placed.map(p => p.key)).toEqual(state.me.hand.map(c => c.id));   // …or reordered
+    // it scrolls horizontally — cards never drop below the edge as the old paging
+    // tucked them; they all stay in the reserved band.
+    expect(placed.every(p => p.placement.y >= vp.h - band && p.placement.y <= vp.h)).toBe(true);
   });
 
-  it('page 1 fans the remainder; the page argument clamps', () => {
-    const state = oversized();
-    const page1 = hand(layoutScreen(state, vp, 0, false, 1));
-    const shown = page1.filter(p => p.placement.y <= vp.h);
-    expect(shown.map(p => p.key)).toEqual(state.me.hand.slice(8).map(c => c.id));
-    const clamped = hand(layoutScreen(state, vp, 0, false, 99));
-    expect(clamped.filter(p => p.placement.y <= vp.h).map(p => p.key))
-      .toEqual(state.me.hand.slice(8).map(c => c.id));
-  });
-
-  it('off-page cards keep the hand zone and stay inside the viewport width', () => {
+  it('pins to the start at offset 0: only the far end fades', () => {
+    const fan = layoutHandFan(24, 0, vp);
+    expect(fan.maxOffset).toBeGreaterThan(0);
+    expect(fan.fadeLeft).toBe(false);
+    expect(fan.fadeRight).toBe(true);
+    // the first card sits at the run's left shoulder, fully inside the felt
     const placed = hand(layoutScreen(oversized(), vp, 0, false, 0));
-    for (const p of placed) {
-      expect(p.placement.zone).toBe('hand');
-      expect(p.placement.x).toBeGreaterThanOrEqual(0);
-      expect(p.placement.x).toBeLessThanOrEqual(vp.w);
+    expect(placed[0]!.placement.x).toBeGreaterThanOrEqual(0);
+  });
+
+  it('scrolling slides the fan left and swaps which end fades', () => {
+    const state = oversized();
+    const fan0 = layoutHandFan(24, 0, vp);
+    const at0 = hand(layoutScreen(state, vp, 0, false, 0));
+    const atEnd = hand(layoutScreen(state, vp, 0, false, fan0.maxOffset));
+    const fanEnd = layoutHandFan(24, fan0.maxOffset, vp);
+    expect(fanEnd.fadeLeft).toBe(true);       // scrolled to the end: only the left runs on
+    expect(fanEnd.fadeRight).toBe(false);
+    // the same card sits further left once scrolled
+    expect(atEnd[0]!.placement.x).toBeLessThan(at0[0]!.placement.x);
+  });
+
+  it('the offset argument clamps past the end', () => {
+    const state = oversized();
+    const end = hand(layoutScreen(state, vp, 0, false, layoutHandFan(24, 0, vp).maxOffset));
+    const clamped = hand(layoutScreen(state, vp, 0, false, 1e6));
+    expect(clamped.map(p => p.placement.x)).toEqual(end.map(p => p.placement.x));
+  });
+
+  it('the run re-centres in the felt left of the log gutter', () => {
+    const inset = 400;
+    const fan = layoutHandFan(24, 0, vp, inset);
+    const runMid = fan.run.left + fan.run.width / 2;
+    expect(runMid).toBeCloseTo((vp.w - inset) / 2, 1);
+  });
+});
+
+describe('layoutHandFan + handFanAlphaAt (#8: the scrollable fan window)', () => {
+  const vp = { w: 1600, h: 900 };
+
+  it('scrolls past ~12 cards even when the felt has room to spare', () => {
+    // The window is capped at HAND_VISIBLE cards, so the fan scrolls at the same
+    // hand size on a phone-narrow felt and a 4K one — extra width does not defer it.
+    for (const view of [{ w: 1280, h: 720 }, { w: 1600, h: 900 }, { w: 2560, h: 1440 }, { w: 3840, h: 2160 }]) {
+      expect(layoutHandFan(12, 0, view).maxOffset, `12 fits @ ${view.w}`).toBe(0);
+      expect(layoutHandFan(13, 0, view).maxOffset, `13 scrolls @ ${view.w}`).toBeGreaterThan(0);
     }
+  });
+
+  it('clamps the offset to [0, maxOffset]', () => {
+    expect(layoutHandFan(24, -500, vp).offset).toBe(0);
+    const end = layoutHandFan(24, 1e6, vp);
+    expect(end.offset).toBe(end.maxOffset);
+  });
+
+  it('a fitting hand is opaque everywhere (no end runs on)', () => {
+    const fan = layoutHandFan(6, 0, vp);
+    expect(fan.maxOffset).toBe(0);
+    for (const x of [fan.run.left, fan.run.left + fan.run.width / 2, fan.run.left + fan.run.width]) {
+      expect(handFanAlphaAt(fan, x)).toBe(1);
+    }
+  });
+
+  it('an overflowing fan dissolves to 0 at a running end and is opaque mid-run', () => {
+    const fan = layoutHandFan(24, 200, vp);      // scrolled a little: both ends run on
+    expect(fan.fadeLeft).toBe(true);
+    expect(fan.fadeRight).toBe(true);
+    const right = fan.run.left + fan.run.width;
+    expect(handFanAlphaAt(fan, (fan.run.left + right) / 2)).toBe(1);
+    expect(handFanAlphaAt(fan, fan.run.left)).toBe(0);
+    expect(handFanAlphaAt(fan, right)).toBe(0);
+    expect(handFanAlphaAt(fan, fan.run.left - 200)).toBe(0);   // never negative
+  });
+
+  it('an empty hand has no fan', () => {
+    const fan = layoutHandFan(0, 0, vp);
+    expect(fan.maxOffset).toBe(0);
+    expect(fan.fadeLeft).toBe(false);
+    expect(fan.fadeRight).toBe(false);
   });
 });
 

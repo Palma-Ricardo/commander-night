@@ -60,7 +60,7 @@ export function canonicalKey(rawKey: string, links: StackLinks): string {
  *  source stays put — the scene flies an ephemeral ghost toward the stack instead. */
 export function layoutKeyed(
   state: GameState, viewport: Size, links: StackLinks, rightInset = 0, spreadStack = false,
-  handPage = 0, spreadBoard: ReadonlySet<string> = EMPTY_SPREAD,
+  handOffset = 0, spreadBoard: ReadonlySet<string> = EMPTY_SPREAD,
 ): Map<string, PlacedActor> {
   // World felt + the screen-space layer (hand + stack). The stack now lives in the
   // screen layer, so adoption must span both: a cast lifts a hand actor (screen)
@@ -68,7 +68,7 @@ export function layoutKeyed(
   // continuous actor across the fan → pile → resolve chain.
   const all = [
     ...layoutWorld(state, spreadBoard),
-    ...layoutScreen(state, viewport, rightInset, spreadStack, handPage),
+    ...layoutScreen(state, viewport, rightInset, spreadStack, handOffset),
   ];
   const offStack = new Set<string>();
   for (const p of all) {

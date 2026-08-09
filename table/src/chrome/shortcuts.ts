@@ -2,10 +2,10 @@
 // suspended while a text input (chat, the carousel filter, concede) has focus
 // — since T9 deleted the modals, focus is the *only* suspension (§8).
 //
-//  • Carousel seek / hand paging — ArrowLeft/Right push the open carousel strip
-//    by one card (#8: it scrolls continuously, it does not page), else they turn
-//    the paged hand; Esc closes an open *browse* fan (a prompt-mode fan is the
-//    prompt UI and lives exactly as long as its ask).
+//  • Carousel / hand seek — ArrowLeft/Right push the open carousel strip by one
+//    card, else the hand fan (#8: both scroll continuously, neither pages); Esc
+//    closes an open *browse* fan (a prompt-mode fan is the prompt UI and lives
+//    exactly as long as its ask).
 //  • Game shortcuts — the shared pure resolver (state/shortcuts.ts): Space pass,
 //    Enter primary, F4/F6 skips, A all-attack, Esc decline a declinable prompt.
 //  • Camera — table-client-only: 1–4 pin a seat, ` (or 0) frames the whole table,
@@ -21,8 +21,7 @@ import { appActions, appStores } from '../app';
 import { resolveShortcut } from '@night/core/state/shortcuts';
 import { getActiveScene } from '../scene/TableScene';
 import { carouselContent } from '../layout/carousel';
-import { carouselStore, closeBrowse, setHandPage } from '../scene/carousel-store';
-import { handPageCount } from '../layout/screen';
+import { carouselStore, closeBrowse } from '../scene/carousel-store';
 
 export function isTextInput(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -46,10 +45,9 @@ export function useShortcuts(): void {
       if (e.key >= '1' && e.key <= '4') { e.preventDefault(); scene?.focusSeat(Number(e.key) - 1); return; }
       if (e.key === '`' || e.key === '0') { e.preventDefault(); scene?.showTable(); return; }
 
-      // Seeking (§4.4): arrows push the open carousel's strip by one card (#8 —
-      // the scene owns the clamp, since only it knows the viewport), else they
-      // turn the paged hand. The hand still pages: its fan is a held hand, not a
-      // strip, and that distinction is the point of #8's second half.
+      // Seeking (§4.4): arrows push the open carousel's strip by one card, else the
+      // hand fan (#8 — both scroll now; the scene owns the clamp, since only it
+      // knows the viewport). A hand that fits swallows nothing.
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const delta = e.key === 'ArrowRight' ? 1 : -1;
         const ui = carouselStore.getState();
@@ -60,12 +58,7 @@ export function useShortcuts(): void {
           scene?.scrollCarouselBy(delta);
           return;
         }
-        const pages = handPageCount(game.state.me.hand.length);
-        if (pages > 1) {
-          e.preventDefault();
-          setHandPage(Math.min(Math.max(0, Math.min(ui.handPage, pages - 1) + delta), pages - 1));
-          return;
-        }
+        if (scene?.scrollHandBy(delta) === true) e.preventDefault();
         return;
       }
 

@@ -13,12 +13,5 @@ export const DRAG_SLOP_PX = 6;
 /** How long a not-cast card takes to slide back into the fan (ms). */
 export const DRAG_HOME_MS = 180;
 
-/** Hand mode (§4.4): a hand larger than this pages through the same fan
- *  geometry instead of cramming (the fan overlap stops being readable). */
-export const HAND_PAGE_THRESHOLD = 10;
-
-/** Cards per page of a paged hand. */
-export const HAND_PAGE_SIZE = 8;
-
-/** How long a carousel/hand page turn takes (ms). */
+/** How long a carousel scroll or a hand-fan scroll settles (ms). */
 export const PAGE_TURN_MS = 160;

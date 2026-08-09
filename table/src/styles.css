@@ -601,14 +601,6 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 }
 .carousel-seek:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-/* the hand pager (§4.4 hand mode): over the hand band's right shoulder */
-.hand-pager {
-  position: fixed; right: calc(var(--rail-w) + 12px); bottom: calc(min(300px, max(150px, 22vh)) + 8px); z-index: 16;
-  display: inline-flex; align-items: center; gap: 0.4rem; font-variant-numeric: tabular-nums;
-  background: color-mix(in srgb, var(--panel) 88%, #000 12%);
-  border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.6rem;
-}
-
 .hover-preview {
   position: fixed; left: 0.8rem; bottom: 0.8rem; z-index: 200;
   /* --preview-zoom (default 1) is the wheel zoom (#13), set inline by HoverPreview.

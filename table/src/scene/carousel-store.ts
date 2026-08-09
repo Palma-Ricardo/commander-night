@@ -1,9 +1,9 @@
-// Carousel + hand-fan paging UI state (prompts-on-the-table §4.4) — vanilla
+// Carousel + hand-fan scroll UI state (prompts-on-the-table §4.4) — vanilla
 // zustand, shared by the scene (which renders the fan) and the DOM chrome
-// (CarouselBar / HandPager, which render the buttons). What the carousel
-// *shows* is derived (layout/carousel.ts carouselContent), never stored: this
-// holds only the player's view-local choices — the open browse ref, the name
-// filter, and the page positions.
+// (CarouselBar, which renders the seek). What the carousel *shows* is derived
+// (layout/carousel.ts carouselContent), never stored: this holds only the
+// player's view-local choices — the open browse ref, the name filter, and the
+// scroll positions (the carousel strip's, and the hand fan's).
 //
 // The scroll offset and the name needle are both keyed by the content's identity
 // (`viewKey`): reading either for a different key yields its default, so a new
@@ -26,11 +26,14 @@ export interface CarouselUiState {
    *  A measurement cache, not a player choice — the layout is the authority and
    *  re-clamps every sync. */
   maxOffset: number;
-  handPage: number;
+  /** Hand fan scroll, px from its start (Issues.txt #8 — the hand scrolls, it no
+   *  longer pages). Clamped by the layout, which knows the viewport and hand size;
+   *  the scene writes the clamped value back so an over-scroll self-corrects. */
+  handOffset: number;
 }
 
 export const carouselStore = createStore<CarouselUiState>(() => ({
-  filter: '', offset: 0, viewKey: '', maxOffset: 0, handPage: 0,
+  filter: '', offset: 0, viewKey: '', maxOffset: 0, handOffset: 0,
 }));
 
 /** The stored scroll offset for this content identity (0 for any other). */
@@ -82,6 +85,10 @@ export function setFilter(key: string, filter: string): void {
   carouselStore.setState({ viewKey: key, filter, offset: 0 });
 }
 
-export function setHandPage(page: number): void {
-  carouselStore.setState({ handPage: Math.max(0, page) });
+/** Seek the hand fan to an absolute offset (px). Clamped ≥ 0 here; the scene
+ *  re-clamps to the fan's `maxOffset`, which needs the viewport. */
+export function setHandOffset(offset: number): void {
+  const next = Math.max(0, offset);
+  if (carouselStore.getState().handOffset === next) return;
+  carouselStore.setState({ handOffset: next });
 }

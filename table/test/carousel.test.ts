@@ -1,7 +1,7 @@
 // The carousel browser (prompts-on-the-table §4.4), headless: what the fan
-// shows (content model), where the current page's cards sit (fan layout), and
-// the paging store. The scene and the DOM bar both consume these — asserting
-// them here pins the one contract they share.
+// shows (content model), where the strip's cards sit (fan layout), and the
+// scroll store (the carousel's offset and the hand fan's). The scene and the DOM
+// bar both consume these — asserting them here pins the one contract they share.
 
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { Prompt } from '@night/core';
@@ -10,9 +10,9 @@ import {
   CAROUSEL_FILTER_MIN, carouselBarBottom, carouselContent, layoutCarouselStrip, stripAlphaAt,
 } from '../src/layout/carousel';
 import {
-  carouselStore, filterFor, offsetFor, scrollCarousel, setFilter, setHandPage, setOffset, toggleBrowse,
+  carouselStore, filterFor, offsetFor, scrollCarousel, setFilter, setHandOffset, setOffset, toggleBrowse,
 } from '../src/scene/carousel-store';
-import { handBandHeight, handPageCount } from '../src/layout/screen';
+import { handBandHeight } from '../src/layout/screen';
 import { fourSeats, mkCard } from './helpers';
 
 const VIEW = { w: 1600, h: 900 };
@@ -357,7 +357,7 @@ describe('stripAlphaAt (#8 amendment: the window dissolves at the ends)', () => 
 
 describe('carousel-store scrolling', () => {
   beforeEach(() => carouselStore.setState(
-    { browse: undefined, filter: '', offset: 0, viewKey: '', maxOffset: 0, handPage: 0 }));
+    { browse: undefined, filter: '', offset: 0, viewKey: '', maxOffset: 0, handOffset: 0 }));
 
   it('offset and needle are 0/empty for any other content identity', () => {
     setFilter('prompt:7', 'bolt');
@@ -412,21 +412,13 @@ describe('carousel-store scrolling', () => {
     expect(carouselStore.getState().browse).toBeUndefined();
   });
 
-  it('setHandPage never goes negative', () => {
-    setHandPage(-2);
-    expect(carouselStore.getState().handPage).toBe(0);
-  });
-});
-
-describe('hand paging (§4.4 hand mode)', () => {
-  it('a hand at the threshold stays one fan', () => {
-    expect(handPageCount(10)).toBe(1);
-    expect(handPageCount(0)).toBe(1);
+  it('setHandOffset never goes negative', () => {
+    setHandOffset(-2);
+    expect(carouselStore.getState().handOffset).toBe(0);
   });
 
-  it('an oversized hand pages', () => {
-    expect(handPageCount(11)).toBe(2);
-    expect(handPageCount(16)).toBe(2);
-    expect(handPageCount(17)).toBe(3);
+  it('setHandOffset stores the seek (the scene clamps to maxOffset)', () => {
+    setHandOffset(240);
+    expect(carouselStore.getState().handOffset).toBe(240);
   });
 });

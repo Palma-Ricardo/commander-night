@@ -40,12 +40,14 @@ import {
 import { Director, type DirectorSink } from './Director';
 import { layoutKeyed, type StackLinks } from './keys';
 import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX, PAGE_TURN_MS } from '../tuning';
-import { handPageCount, stackAnchor } from '../layout/screen';
+import { handFanAlphaAt, layoutHandFan, stackAnchor, type HandFan } from '../layout/screen';
 import {
   carouselContent, layoutCarouselStrip, stripAlphaAt,
   type BrowseZone, type CarouselContent, type CarouselEntry, type CarouselStrip,
 } from '../layout/carousel';
-import { carouselStore, offsetFor, scrollCarousel, setOffset } from './carousel-store';
+import {
+  carouselStore, offsetFor, scrollCarousel, setHandOffset, setOffset,
+} from './carousel-store';
 import { promptObjectIds, spreadBoardIds, stackTargetIds } from './prompt-objects';
 import {
   highlightForAffordance, HL_COMBAT, HL_TARGET, isClickable, rectContains,
@@ -246,8 +248,11 @@ export class TableScene implements DirectorSink {
   /** The last laid-out strip, kept so `paint` can dissolve each card against the
    *  reading window from its *live* x every frame (#8 amendment). */
   private carouselStrip: CarouselStrip | undefined;
+  /** The last laid-out hand fan, kept so `paint` can dissolve each hand card
+   *  against the run's ends from its *live* x every frame (Issues.txt #8). */
+  private handFan: HandFan | undefined;
   private unsubCarousel?: () => void;
-  private lastHandPage = -1;
+  private lastHandOffset = -1;
   // Stack tethers (T4 §9): the source + target arrows of the top-of-stack item.
   // A screen-space overlay under the cards, redrawn every frame so the arrows
   // track the camera as their felt endpoints keystone across the seam. The links
@@ -419,8 +424,8 @@ export class TableScene implements DirectorSink {
     // the viewport edge must still cast or come home, never strand mid-air.
     const onUp = (e: PointerEvent): void => this.endDrag(e);
     const onCancel = (): void => this.cancelDrag();
-    // Wheel scrolls the open carousel (§4.4); Alt+wheel zooms. Carousel closed and
-    // no Alt ⇒ the wheel does nothing, as before.
+    // Wheel scrolls the open carousel, else the hand fan (§4.4, #8); Alt+wheel
+    // zooms. Carousel closed and a hand that fits ⇒ the wheel does nothing.
     const onWheel = (e: WheelEvent): void => this.handleWheel(e);
     // Alt is the magnifier (#13, amended): it gates the preview panel and owns the
     // zoom wheel. Tracked on window rather than read off each event, because
@@ -450,11 +455,12 @@ export class TableScene implements DirectorSink {
       window.removeEventListener('blur', onBlur);
     };
 
-    // The fan re-syncs on any UI-store change (browse open/close, filter, page);
-    // a hand-page change re-lays the screen layer like a log-inset move (§4.4).
+    // The fan re-syncs on any UI-store change (browse open/close, filter, scroll);
+    // a hand-scroll re-lays the screen layer like a log-inset move (§4.4), easing
+    // the fan to the new offset (#8 — the hand scrolls, it no longer pages).
     this.unsubCarousel = carouselStore.subscribe(s => {
-      if (s.handPage !== this.lastHandPage) {
-        this.lastHandPage = s.handPage;
+      if (s.handOffset !== this.lastHandOffset) {
+        this.lastHandOffset = s.handOffset;
         this.relayScreen(PAGE_TURN_MS);
       }
       this.syncCarousel();
@@ -484,7 +490,8 @@ export class TableScene implements DirectorSink {
     links: StackLinks,
   ): void {
     const size = this.size;
-    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack, this.handPageNow(to),
+    this.handFan = layoutHandFan(to.me.hand.length, this.handOffsetNow(), size, this.rightInset);
+    const placed = layoutKeyed(to, size, links, this.rightInset, this.spreadStack, this.handFan.offset,
       this.spreadBoard);
     const preset = this.director.cameraPreset();          // §6.2: camera at start
     const moveByObj = new Map<Id, Extract<GameEvent, { k: 'move' }>>();
@@ -611,10 +618,31 @@ export class TableScene implements DirectorSink {
     this.updateFeltMesh(preset);
     this.projectFurniture(preset);
     for (const a of this.actors.values()) a.render(a.space === 'screen' ? screen : world);
+    this.paintHandFade();
     this.paintCarousel(screen);
     this.drawStackTethers(preset);   // arrows read the actors' fresh projected bounds
     this.drawDragLine();             // the §4.2 chalk line tracks the same fresh bounds
     this.effects.render(world);   // effects live in world space (they self-project)
+  }
+
+  /** Dissolve the hand fan's ends (#8), the same treatment the carousel strip's
+   *  ends get. The alpha comes from each card's *live* x, not its placement, so a
+   *  card scrolling in from beyond the run fades up as it travels rather than
+   *  arriving already lit. A card faded past legibility also stops taking clicks and
+   *  drags — it is outside the reading window. The card being dragged is exempt: it
+   *  is pinned under the pointer, wherever that is, and must stay solid. */
+  private paintHandFade(): void {
+    const fan = this.handFan;
+    if (fan === undefined) return;
+    const dragKey = this.drag?.key;
+    for (const a of this.actors.values()) {
+      if (a.space !== 'screen' || a.placement.zone !== 'hand') continue;
+      if (a.key === dragKey) { a.view.alpha = 1; a.view.eventMode = 'static'; continue; }
+      const alpha = handFanAlphaAt(fan, a.pos.x);
+      a.view.alpha = alpha;
+      const mode = alpha > CAROUSEL_LIVE_ALPHA ? 'static' : 'none';
+      if (a.view.eventMode !== mode) a.view.eventMode = mode;
+    }
   }
 
   /** Paint the strip and dissolve its ends (#8 amendment). The alpha comes from
@@ -1260,10 +1288,24 @@ export class TableScene implements DirectorSink {
 
   // ── the carousel browser (prompts-on-the-table §4.4) ─────────────────────────
 
-  /** The clamped §4.4 hand page for the current hand size. */
-  private handPageNow(state: GameState | undefined): number {
-    const n = state?.me.hand.length ?? 0;
-    return Math.min(carouselStore.getState().handPage, handPageCount(n) - 1);
+  /** The stored hand-fan scroll offset (px). The layout re-clamps it to the fan's
+   *  maxOffset, so a stale over-scroll renders clamped and self-corrects on the
+   *  next `scrollHandBy`; no need to clamp here. */
+  private handOffsetNow(): number {
+    return carouselStore.getState().handOffset;
+  }
+
+  /** Scroll the hand fan by one card, in `dir`'s direction — the wheel (carousel
+   *  closed) and the ←/→ arrows share this, so they and the layout agree on the
+   *  clamp (#8). Returns false when the whole hand already fits, so the caller can
+   *  let the gesture fall through. */
+  scrollHandBy(dir: number): boolean {
+    const n = this.director?.presented?.me.hand.length ?? 0;
+    const fan = layoutHandFan(n, this.handOffsetNow(), this.size, this.rightInset);
+    if (fan.maxOffset === 0) return false;   // the whole hand is already in view
+    const next = Math.min(Math.max(0, fan.offset + Math.sign(dir) * fan.step), fan.maxOffset);
+    setHandOffset(next);
+    return true;
   }
 
   /** Reconcile the fan with what should be showing: derive the content
@@ -1365,16 +1407,17 @@ export class TableScene implements DirectorSink {
     return carouselContent(this.currentPrompt, state, ui.browse, ui.filter, ui.viewKey);
   }
 
-  /** Wheel over the canvas scrolls the open carousel (§4.4); **Alt**+wheel zooms
-   *  whatever the pointer is on (#13).
+  /** Wheel over the canvas scrolls the open carousel, else the hand fan (§4.4,
+   *  #8); **Alt**+wheel zooms whatever the pointer is on (#13).
    *
    *  The bare wheel used to zoom and only paged the carousel as a fallback, which
    *  worked while the carousel turned in discrete pages. A continuous strip (#8)
    *  wants the wheel outright — scrolling a strip *is* the wheel gesture, and its
    *  cards pop previews constantly, so a zoom-first rule left the strip barely
-   *  scrollable. Magnification moved to a held modifier rather than keep fighting
-   *  the scroll for one gesture. Alt applies everywhere, carousel open or not, so
-   *  the rule needs no thought about what happens to be under the pointer:
+   *  scrollable. Now the hand scrolls the same way, so the wheel drives whichever
+   *  row is on screen. Magnification moved to a held modifier rather than keep
+   *  fighting the scroll for one gesture. Alt applies everywhere, so the rule needs
+   *  no thought about what happens to be under the pointer:
    *  **wheel scrolls, Alt+wheel zooms.** */
   private handleWheel(e: WheelEvent): void {
     const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
@@ -1392,8 +1435,13 @@ export class TableScene implements DirectorSink {
       }
       return;
     }
-    if (this.carouselKey === undefined) return;
-    if (this.scrollCarouselBy(delta)) e.preventDefault();
+    // Bare wheel: scroll the open carousel, else scroll the hand fan (#8). Both are
+    // the same push-the-row gesture; only one is ever open at a time.
+    if (this.carouselKey !== undefined) {
+      if (this.scrollCarouselBy(delta)) e.preventDefault();
+      return;
+    }
+    if (this.scrollHandBy(delta)) e.preventDefault();
   }
 
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
@@ -1647,7 +1695,7 @@ export class TableScene implements DirectorSink {
     const state = this.director.presented;
     if (state === undefined) return;
     const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
-      this.handPageNow(state), this.spreadBoard);
+      this.handOffsetNow(), this.spreadBoard);
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
@@ -1821,8 +1869,10 @@ export class TableScene implements DirectorSink {
   private relayScreen(durationMs: number): void {
     const state = this.director?.presented;
     if (state === undefined) return;
+    // Refresh the cached fan so the per-frame end-fade tracks the new offset/inset.
+    this.handFan = layoutHandFan(state.me.hand.length, this.handOffsetNow(), this.size, this.rightInset);
     const placed = layoutKeyed(state, this.size, this.stackLinks, this.rightInset, this.spreadStack,
-      this.handPageNow(state), this.spreadBoard);
+      this.handFan.offset, this.spreadBoard);
     for (const [key, p] of placed) {
       if (p.space !== 'screen') continue;
       const actor = this.actors.get(key);
