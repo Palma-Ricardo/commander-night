@@ -40,9 +40,12 @@ browser ── wss:// ──► reverse proxy (caddy, TLS) ── ws://127.0.0.1
 - Only the reverse proxy is publicly reachable. XMage's port stays loopback-only — the bridge is
   the sole client, which is also our auth boundary (XMage's own accounts stay disabled/unused;
   bridge usernames like `seat_<code>_<n>` are internal).
-- One XMage client session **per human seat** (protocol §2 — privacy is inherited from the
-  server's per-seat filtering). A 4-human game = 4 `SessionImpl`s in the bridge; AI seats are
-  server-side and need no session.
+- One XMage client session **per seat** (protocol §2 — privacy is inherited from the
+  server's per-seat filtering). A 4-human game = 4 `SessionImpl`s in the bridge. AI-fill seats are
+  **bridge-hosted** (§9): each is an ordinary `PlayerType.HUMAN` `SessionImpl` too, whose prompts an
+  in-JVM brain answers — XMage's own `COMPUTER_MAD` is no longer used, so there is no server-side AI
+  simulation (its per-node `Game` clones were the AI-game GC/leak source and its per-decision
+  minimax the "AI thinks too long" cause).
 
 ## 3. Repo & module layout
 
@@ -317,18 +320,24 @@ at most one pending prompt; bridge-monotonic `promptId`; answers fenced by `prom
   main+SB = 100 and commander-in-sideboard for friendlier errors than XMage's joinTable rejection.
   Implementation: `night.bridge.lobby.deck`, spec
   `docs/superpowers/specs/2026-07-20-deck-import-formats-design.md`.
-- **AI fill**: host may fill empty seats with `COMPUTER_MAD` + a sample deck (dev/testing and
-  odd-numbered nights; the spike recipe unchanged).
+- **AI fill**: host may fill empty seats with **bridge-hosted AI** — each fill seat is its own
+  `PlayerType.HUMAN` `SessionImpl` + `SeatPump` (like a human seat) with a drop `ClientSink` and an
+  `AiSeatDriver`; on each presented prompt an in-JVM `Brain` (`night.bridge.ai`) decides an answer
+  and submits it through the *same* `SeatPump.answer` path a browser uses, so all FSM
+  validation, promptId fencing, the ≥150 ms `XmageAnswers` pacing, and the nudge watchdog apply
+  unchanged (the AI is just another answer *source*). v1 `FirstLegalMoveBrain` is the productionized
+  live-tier auto-player (`LiveHarness.autoAnswer`); stronger play slots in behind `Brain`. AI decks
+  come from `config.sampleDecksDir` (any supported format, auto-detected). XMage's `COMPUTER_MAD` is
+  no longer used at all.
 - `lobby.start`: runs `TableRecipe` — `getMainRoomId` → `createTable(MatchOptions)` (game type
   `Commander Free For All`, deck type `Variant Magic - Commander`, range ALL, attack MULTIPLE,
-  `winsNeeded 1`, time limit untouched = `NONE`, `rollbackTurnsAllowed` = **true iff no AI
-  seats** — the MatchOptions default is `false`, which had left §9 `requestRollback` dead
-  until 2026-07-18. All-human tables get the undo; AI tables stay at the
-  milestone-validated `false` because rollback buys them nothing (auto-players never roll
-  back) while its per-turn `state.copy()` loads the AI-simulation server — suspected,
-  unproven, of shortening AI games in 2026-07-18 live runs. Protocol §6
-  `rollbackTurnsAllowed` tells the client which one it got) → `joinTable` per AI → per human seat (each
-  through its own `SeatSession`) → `startMatch`. Any step failing → `error LOBBY_STATE` with the
+  `winsNeeded 1`, time limit untouched = `NONE`, `rollbackTurnsAllowed` = **true** — every table is
+  all-human to XMage now that AI-fill seats are HUMAN sessions, so the undo friends' night wants is
+  always available; there is no `COMPUTER_MAD` simulation whose per-turn `state.copy()` it would
+  burden, and the brain answers any rollback-approval `playerRequest` with its first-option rule.
+  The MatchOptions default is `false`, which had left §9 `requestRollback` dead until 2026-07-18;
+  protocol §6 `rollbackTurnsAllowed` tells the client it is on) → `joinTable` per seat (each through
+  its own `SeatSession`, HUMAN) → `startMatch`. Any step failing → `error LOBBY_STATE` with the
   step name; lobby stays joinable.
 
 ## 10. Browser sessions, resume, idempotency

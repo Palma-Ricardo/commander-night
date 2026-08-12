@@ -10,4 +10,12 @@ import night.bridge.proto.ServerMsg;
 public interface ClientSink {
 
     void send(ServerMsg msg);
+
+    /**
+     * A sink that drops everything — used by bridge-hosted AI seats, which have
+     * no downstream connection (their prompts are answered in-JVM by an
+     * {@code AiSeatDriver}, so state/log/prompt emission has no consumer).
+     */
+    ClientSink NONE = msg -> {
+    };
 }

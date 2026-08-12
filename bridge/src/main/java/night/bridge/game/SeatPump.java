@@ -12,6 +12,7 @@ import mage.view.TableClientMessage;
 import mage.view.UserRequestMessage;
 import night.bridge.net.ClientSink;
 import night.bridge.proto.Ack;
+import night.bridge.proto.Answer;
 import night.bridge.proto.Err;
 import night.bridge.proto.ErrorCode;
 import night.bridge.proto.GameAction;
@@ -97,6 +98,14 @@ public final class SeatPump implements AutoCloseable {
     private final int logRingCapacity;
     private final int backfillSend;
 
+    /**
+     * Answers this seat's prompts in-JVM for a bridge-hosted AI seat; {@link
+     * SeatDriver#NONE} for a browser seat (the browser answers over the wire).
+     * Set from the lobby thread before the game starts, read on the pump thread
+     * in {@link #present} — volatile for safe publication across that boundary.
+     */
+    private volatile SeatDriver driver = SeatDriver.NONE;
+
     /** When the seat last heard from XMage — written on callback threads, read by answer pacing. */
     private volatile long lastCallbackNanos = System.nanoTime();
 
@@ -141,6 +150,30 @@ public final class SeatPump implements AutoCloseable {
         this.backfillSend = backfillSend;
         this.store = new StateStore(keyframeEvery);
         this.keyframesOnly = keyframesOnly;
+    }
+
+    /** Attach a bridge-hosted AI driver; browser seats keep {@link SeatDriver#NONE}. */
+    public void driver(SeatDriver driver) {
+        this.driver = driver;
+    }
+
+    /**
+     * Off-pump entry for a bridge-hosted AI seat's brain: submit an answer to the
+     * pending prompt through the identical path a browser answer takes ({@link
+     * #answer}). Enqueues onto the pump executor, so it is safe to call from the
+     * driver's decision thread. A stale promptId is rejected as {@code
+     * PROMPT_STALE}, exactly as a late browser answer would be.
+     */
+    public void submitAnswer(long promptId, Answer answer) {
+        if (gameIdStr == null) {
+            return;
+        }
+        answer(new GameAnswer("ai-" + gameIdStr + "-" + promptId, gameIdStr, promptId, answer),
+                msg -> {
+                    if (msg instanceof Err) {
+                        log.debug("ai seat answer to prompt {} rejected: {}", promptId, msg);
+                    }
+                });
     }
 
     /** Enqueue a command handler; a torn-down pump answers UNKNOWN_GAME (§14 teardown). */
@@ -657,6 +690,12 @@ public final class SeatPump implements AutoCloseable {
         GamePrompt emitted = prompt.emitted(store.nextSeq(), gameIdStr);
         fsm.present(emitted, requestData);
         sink.send(emitted);
+        // Bridge-hosted AI seats decide here (design: the AI is another answer
+        // source); NONE for browser seats, which answer over the wire. This is the
+        // single choke point for every real presentation — regroundBrowser() and
+        // replayForResume() re-emit via sink.send directly, so a resume never
+        // re-triggers a decision.
+        driver.onPrompt(emitted, lastState);
     }
 
     /**
@@ -835,6 +874,7 @@ public final class SeatPump implements AutoCloseable {
 
     @Override
     public void close() {
+        driver.close();
         exec.close();
     }
 }

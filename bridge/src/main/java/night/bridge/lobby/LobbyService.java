@@ -1,12 +1,16 @@
 package night.bridge.lobby;
 
 import mage.cards.decks.DeckCardLists;
+import night.bridge.ai.Brain;
+import night.bridge.ai.FirstLegalMoveBrain;
 import night.bridge.config.Config;
+import night.bridge.game.AiSeatDriver;
 import night.bridge.game.GameCoordinator;
 import night.bridge.game.Games;
 import night.bridge.game.SeatPump;
 import night.bridge.lobby.deck.DeckImport;
 import night.bridge.lobby.deck.DeckImporter;
+import night.bridge.net.ClientSink;
 import night.bridge.net.SessionRegistry;
 import night.bridge.proto.Ack;
 import night.bridge.proto.ClientMsg;
@@ -37,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -300,9 +305,9 @@ public final class LobbyService implements AutoCloseable {
      * this serialization).
      */
     private void launch(Lobby lobby, int aiSeats, LobbyStart cmd, Consumer<ServerMsg> reply) {
-        List<DeckCardLists> aiDecks;
+        List<DeckCardLists> aiDeckList;
         try {
-            aiDecks = sampleDecks(aiSeats);
+            aiDeckList = aiDecks(aiSeats);
         } catch (IllegalStateException e) {
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE, e.getMessage()));
             return;
@@ -321,11 +326,7 @@ public final class LobbyService implements AutoCloseable {
                         "cannot reach the game server — try again in a moment"));
                 return;
             }
-            if (config.callbackTap()) {
-                session.tap(night.bridge.xmage.CallbackTap.open(
-                        Path.of("logs", "tap"),
-                        lobby.code + "-" + launchMillis + "-" + session.username()));
-            }
+            tap(session, config, lobby.code, launchMillis);
             String userId = seat.userId;
             coordinator.addSeat(userId, seat.name, session,
                     registry.sinkFor(userId), config.logBackfill().buffer(),
@@ -333,8 +334,29 @@ public final class LobbyService implements AutoCloseable {
                     () -> registry.keyframesOnly(userId));
             recipeSeats.add(new TableRecipe.HumanSeat(session, seat.deck.deck()));
         }
+        // Fill remaining seats with bridge-hosted AI: an ordinary HUMAN XMage
+        // session whose prompts a Brain answers in-JVM. No server-side COMPUTER_MAD,
+        // so no AI-simulation think-time and no per-node Game-clone GC (the two
+        // long-standing AI pains). Humans seat first, so a human stays the recipe host.
+        Brain brain = new FirstLegalMoveBrain();
+        for (int k = 1; k <= aiSeats; k++) {
+            String label = "cn_" + lobby.code + "_ai" + k;
+            SeatSession session = gateway.connectSeat(label);
+            if (session == null) {
+                coordinator.close();
+                reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
+                        "cannot reach the game server — try again in a moment"));
+                return;
+            }
+            tap(session, config, lobby.code, launchMillis);
+            SeatPump pump = coordinator.addSeat("ai:" + lobby.code + ":" + k, "AI " + k, session,
+                    ClientSink.NONE, config.logBackfill().buffer(),
+                    config.logBackfill().send(), config.keyframeEvery(), () -> true);
+            pump.driver(new AiSeatDriver(label, brain, pump));
+            recipeSeats.add(new TableRecipe.HumanSeat(session, aiDeckList.get(k - 1)));
+        }
         try {
-            TableRecipe.createAndStart("Commander Night " + lobby.code, recipeSeats, aiDecks);
+            TableRecipe.createAndStart("Commander Night " + lobby.code, recipeSeats);
         } catch (TableRecipe.RecipeException e) {
             coordinator.close();
             reply.accept(Err.re(cmd.id(), ErrorCode.LOBBY_STATE,
@@ -348,27 +370,44 @@ public final class LobbyService implements AutoCloseable {
         broadcast(lobby);
     }
 
-    /** AI decks come from the dist's sample Commander decks (spike-proven legal). */
-    private List<DeckCardLists> sampleDecks(int n) {
+    /** Attach the per-seat callback tap when enabled (design §12). */
+    private static void tap(SeatSession session, Config config, String code, long launchMillis) {
+        if (config.callbackTap()) {
+            session.tap(night.bridge.xmage.CallbackTap.open(
+                    Path.of("logs", "tap"),
+                    code + "-" + launchMillis + "-" + session.username()));
+        }
+    }
+
+    /** Deck-format file extensions the AI deck loader reads (auto-detected content). */
+    private static final Set<String> DECK_SUFFIXES =
+            Set.of(".dck", ".moxfield", ".mox", ".mtgo", ".txt", ".dec");
+
+    /**
+     * Decks for the bridge-AI fill seats, loaded from {@code sampleDecksDir} (any
+     * supported deck format, auto-detected). Cycled if there are more seats than
+     * decks; the pool is shuffled so repeated games vary.
+     */
+    private List<DeckCardLists> aiDecks(int n) {
         if (n == 0) {
             return List.of();
         }
         List<DeckCardLists> pool = new ArrayList<>();
         Path dir = Path.of(config.sampleDecksDir());
         try (Stream<Path> files = Files.list(dir)) {
-            for (Path file : files.filter(f -> f.toString().endsWith(".dck")).toList()) {
-                DeckImport parsed = DeckImporter.parse(LobbyDeck.FORMAT_DCK, Files.readString(file));
+            for (Path file : files.filter(LobbyService::looksLikeDeck).toList()) {
+                DeckImport parsed = DeckImporter.parse(LobbyDeck.FORMAT_AUTO, Files.readString(file));
                 if (parsed.valid()) {
                     pool.add(parsed.deck());
                 } else {
-                    log.warn("sample deck {} skipped: {}", file.getFileName(), parsed.problems());
+                    log.warn("AI deck {} skipped: {}", file.getFileName(), parsed.problems());
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException("cannot read sample decks from " + dir, e);
+            throw new IllegalStateException("cannot read AI decks from " + dir, e);
         }
         if (pool.isEmpty()) {
-            throw new IllegalStateException("no usable sample decks in " + dir + " for AI seats");
+            throw new IllegalStateException("no usable decks in " + dir + " for AI seats");
         }
         Collections.shuffle(pool, random);
         List<DeckCardLists> picked = new ArrayList<>(n);
@@ -376,6 +415,11 @@ public final class LobbyService implements AutoCloseable {
             picked.add(pool.get(i % pool.size()));
         }
         return picked;
+    }
+
+    private static boolean looksLikeDeck(Path file) {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        return DECK_SUFFIXES.stream().anyMatch(name::endsWith);
     }
 
     private SeatEntry seatOf(String userId) {
