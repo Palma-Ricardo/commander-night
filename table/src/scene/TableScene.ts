@@ -1263,24 +1263,34 @@ export class TableScene implements DirectorSink {
   private handleActorTap(actor: CardActor): void {
     if (this.dragSwallowsTap) { this.dragSwallowsTap = false; return; }
     if (actor.objectId === undefined) return;
-    // A graveyard/exile pile top that no prompt affordance claims opens the §4.4
-    // browse fan instead of clicking into the void. Candidate cards in a pile
-    // keep their prompt meaning — the affordance wins.
     const zone = actor.placement.zone;
+    const aff = this.currentPrompt !== undefined
+      ? affordanceFor(this.currentPrompt, actor.objectId) : undefined;
+    // A graveyard/exile pile top opens the §4.4 browse fan rather than acting on
+    // the top card in place — *including* when that top card is itself playable
+    // (a "play from your graveyard/exile" permission lists it in `playable`, so
+    // it wears a play `action`). Casting it then happens deliberately from inside
+    // the fan, where the same action ring shows on the card; a bare tap on the
+    // pile can no longer fire it, so you can always look before you leap. Only a
+    // `target`/`source`/combat affordance (the top card is a pick, not a play)
+    // keeps its click meaning and falls through. Cards buried in the pile are
+    // unaffected — they only ever render inside the fan.
     if (actor.space === 'world' && (zone === 'graveyard' || zone === 'exile')
       && actor.placement.ownerId !== undefined
-      && (this.currentPrompt === undefined || affordanceFor(this.currentPrompt, actor.objectId) === undefined)) {
+      && (aff === undefined || aff.kind === 'action')) {
       this.onPileOpen?.(actor.placement.ownerId, zone);
       return;
     }
-    // A bare tap on a hand card never casts (Issues.txt #10, amends the T7
-    // "click-without-drag keeps working" decision): with auto-mana paying the
-    // instant the ask lands, a stray click was a finished cast — no cancel
-    // window ever existed. Casting is the deliberate gesture (drag past
-    // CAST_THRESHOLD, §9); a tap still answers everything else a hand card can
-    // be — a discard pick's target, a payMana source.
-    if (zone === 'hand' && actor.space === 'screen' && this.currentPrompt !== undefined
-      && affordanceFor(this.currentPrompt, actor.objectId)?.kind === 'action') {
+    // A bare tap on a playable hand *or* command-zone card never casts (Issues.txt
+    // #10, amends the T7 "click-without-drag keeps working" decision): with
+    // auto-mana paying the instant the ask lands, a stray click was a finished
+    // cast — no cancel window ever existed. Casting is the deliberate gesture (drag
+    // onto the board past CAST_THRESHOLD, §9 — the same drag now lifts the
+    // commander out of the command zone). A tap still answers everything else the
+    // card can be — a discard pick's target, a payMana source.
+    if (aff?.kind === 'action'
+      && ((zone === 'hand' && actor.space === 'screen')
+        || (zone === 'command' && actor.space === 'world'))) {
       return;
     }
     this.onObjectClick?.(actor.objectId);
@@ -1482,8 +1492,16 @@ export class TableScene implements DirectorSink {
       this.armDrag('point', HL_TARGET, actor);
       return;
     }
-    if (actor.space !== 'screen' || actor.placement.zone !== 'hand') return;
-    if (aff?.kind !== 'action') return;
+    // Drag-to-cast, from two homes: a castable hand card (screen space, §9) and the
+    // commander in the command zone (world space). A play `action` is the gate for
+    // both — manaOnly never lifts (§7), and target/source affordances keep their
+    // click-select meaning. updateDrag pins each in its own space (a hand card at
+    // the pointer, the commander unprojected onto the felt), and the release side
+    // of CAST_THRESHOLD decides; a tap alone never casts either (handleActorTap).
+    const castable = aff?.kind === 'action'
+      && ((actor.space === 'screen' && actor.placement.zone === 'hand')
+        || (actor.space === 'world' && actor.placement.zone === 'command'));
+    if (!castable) return;
     this.armDrag('cast', 0, actor);   // cast mode draws no line — color unused
   }
 
@@ -1510,13 +1528,23 @@ export class TableScene implements DirectorSink {
       d.moved = true;
       this.hidePreview();
       if (d.mode === 'cast') {
-        this.lowerHand();
-        this.screenActors.addChild(actor.view);   // reads above the fan while dragged
+        if (actor.space === 'screen') {
+          this.lowerHand();
+          this.screenActors.addChild(actor.view);   // reads above the fan while dragged
+        } else {
+          this.worldActors.addChild(actor.view);     // a lifted commander reads above the felt
+        }
       }
     }
     // Only the cast lift pins the card to the pointer; a point drag leaves the
-    // subject where it stands and speaks through the chalk line (§4.2).
-    if (d.mode === 'cast') actor.seedCurrent({ x: p.x, y: p.y, rotation: 0, scale: actor.placement.scale });
+    // subject where it stands and speaks through the chalk line (§4.2). A hand card
+    // lives in screen space and pins at the pointer directly; a command-zone
+    // commander lives on the felt, so the pointer is unprojected into world space
+    // first — it stays glued under the finger while keystoning with the felt.
+    if (d.mode === 'cast') {
+      const at = actor.space === 'screen' ? p : screenToWorld(this.director.cameraPreset(), p);
+      actor.seedCurrent({ x: at.x, y: at.y, rotation: 0, scale: actor.placement.scale });
+    }
   }
 
   /** The §4.2 chalk line, redrawn each frame of a moved point drag: subject's
