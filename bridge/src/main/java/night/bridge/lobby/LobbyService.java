@@ -2,7 +2,7 @@ package night.bridge.lobby;
 
 import mage.cards.decks.DeckCardLists;
 import night.bridge.ai.Brain;
-import night.bridge.ai.FirstLegalMoveBrain;
+import night.bridge.ai.HeuristicBrain;
 import night.bridge.config.Config;
 import night.bridge.game.AiSeatDriver;
 import night.bridge.game.GameCoordinator;
@@ -338,7 +338,7 @@ public final class LobbyService implements AutoCloseable {
         // session whose prompts a Brain answers in-JVM. No server-side COMPUTER_MAD,
         // so no AI-simulation think-time and no per-node Game-clone GC (the two
         // long-standing AI pains). Humans seat first, so a human stays the recipe host.
-        Brain brain = new FirstLegalMoveBrain();
+        Brain brain = new HeuristicBrain();
         for (int k = 1; k <= aiSeats; k++) {
             String label = "cn_" + lobby.code + "_ai" + k;
             SeatSession session = gateway.connectSeat(label);

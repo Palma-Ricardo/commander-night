@@ -1,14 +1,13 @@
 package night.bridge.game;
 
 import night.bridge.ai.Brain;
+import night.bridge.ai.BrainContext;
 import night.bridge.proto.Answer;
 import night.bridge.proto.GamePrompt;
 import night.bridge.proto.state.GameState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -26,7 +25,7 @@ import java.util.concurrent.RejectedExecutionException;
  * answer re-enters the pump via {@link SeatPump#submitAnswer}, which enqueues
  * onto the pump executor. No brain compute ever runs on the pump thread, and the
  * two hand-offs cannot deadlock. XMage serializes asks per seat, so at most one
- * decision is ever in flight and the per-seat {@code memo} needs no lock.
+ * decision is ever in flight and the per-seat {@link BrainContext} needs no lock.
  */
 public final class AiSeatDriver implements SeatDriver {
 
@@ -34,7 +33,7 @@ public final class AiSeatDriver implements SeatDriver {
 
     private final Brain brain;
     private final SeatPump pump;
-    private final Map<String, Integer> memo = new HashMap<>();
+    private final BrainContext ctx = new BrainContext();
     private final ExecutorService think;
 
     public AiSeatDriver(String label, Brain brain, SeatPump pump) {
@@ -50,7 +49,7 @@ public final class AiSeatDriver implements SeatDriver {
         try {
             think.execute(() -> {
                 try {
-                    Answer answer = brain.decide(state, prompt, memo);
+                    Answer answer = brain.decide(state, prompt, ctx);
                     pump.submitAnswer(promptId, answer);
                 } catch (RuntimeException e) {
                     // A brain failure leaves the prompt pending; the seat's nudge

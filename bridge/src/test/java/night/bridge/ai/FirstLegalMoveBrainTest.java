@@ -33,14 +33,14 @@ class FirstLegalMoveBrainTest {
     private static final String ME = "p1";
 
     private final FirstLegalMoveBrain brain = new FirstLegalMoveBrain();
-    private final Map<String, Integer> memo = new HashMap<>();
+    private final BrainContext ctx = new BrainContext();
 
     private Answer decide(GamePrompt prompt) {
-        return brain.decide(state(0), prompt, memo);
+        return brain.decide(state(0), prompt, ctx);
     }
 
     private Answer decide(GameState state, GamePrompt prompt) {
-        return brain.decide(state, prompt, memo);
+        return brain.decide(state, prompt, ctx);
     }
 
     @Test
