@@ -13,9 +13,11 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The spike-proven table setup (design §9): create a Commander FFA table,
- * seat the AIs through the host's session, seat each human through their own
- * session, start the match. Time limit is left untouched — the default is
+ * The table setup (design §9): create a Commander FFA table, seat every player
+ * through their own session as {@link PlayerType#HUMAN}, start the match. Both
+ * real humans and bridge-hosted AI seats are ordinary HUMAN sessions here — the
+ * AI's decisions are made in-JVM by an {@code AiSeatDriver}, not by XMage's
+ * server-side {@code COMPUTER_MAD}. Time limit is left untouched — the default is
  * {@code MatchTimeLimit.NONE}, i.e. untimed (design §1).
  *
  * <p>Failures throw {@link RecipeException} carrying the step name; the
@@ -37,8 +39,8 @@ public final class TableRecipe {
         }
     }
 
-    /** Runs the whole recipe; returns the table id. Humans seat in list order, AIs after. */
-    public static UUID createAndStart(String tableName, List<HumanSeat> humans, List<DeckCardLists> aiDecks) {
+    /** Runs the whole recipe; returns the table id. Every seat joins as HUMAN, in list order. */
+    public static UUID createAndStart(String tableName, List<HumanSeat> humans) {
         SeatSession host = humans.getFirst().session();
 
         UUID roomId = host.session().getMainRoomId();
@@ -50,22 +52,17 @@ public final class TableRecipe {
         for (int i = 0; i < humans.size(); i++) {
             options.getPlayerTypes().add(PlayerType.HUMAN);
         }
-        for (int i = 0; i < aiDecks.size(); i++) {
-            options.getPlayerTypes().add(PlayerType.COMPUTER_MAD);
-        }
         options.setDeckType(DECK_TYPE);
         options.setLimited(false);
         options.setAttackOption(MultiplayerAttackOption.MULTIPLE);
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
-        // MatchOptions defaults this to false, which left protocol §9 requestRollback
-        // dead on every table until 2026-07-18. Friends' night wants the undo — but only
-        // all-human tables get it: with AI seats, rollback buys nothing (auto-players
-        // never roll back) while its per-turn full-state copy
-        // (GameImpl.saveRollBackGameState) adds load to the fragile AI-simulation server
-        // (suspected, unproven, of shortening AI games — 2026-07-18 live runs). The
-        // client hides the rollback control via GameState.rollbackTurnsAllowed either way.
-        options.setRollbackTurnsAllowed(aiDecks.isEmpty());
+        // Every table is all-human to XMage now (bridge-hosted AI seats are HUMAN
+        // sessions), so the rollback (protocol §9 requestRollback) that friends'
+        // night wants is always available: there is no COMPUTER_MAD simulation whose
+        // per-turn state copy (GameImpl.saveRollBackGameState) it would burden. The
+        // brain answers any rollback-approval playerRequest with its first-option rule.
+        options.setRollbackTurnsAllowed(true);
 
         TableView table = host.session().createTable(roomId, options);
         if (table == null) {
@@ -74,13 +71,6 @@ public final class TableRecipe {
         UUID tableId = table.getTableId();
         log.info("table {} created in room {}", tableId, roomId);
 
-        int ai = 0;
-        for (DeckCardLists deck : aiDecks) {
-            ai++;
-            if (!host.session().joinTable(roomId, tableId, "ai_" + ai, PlayerType.COMPUTER_MAD, 5, deck, "")) {
-                throw new RecipeException("joinTable ai_" + ai);
-            }
-        }
         for (HumanSeat seat : humans) {
             if (!seat.session().session().joinTable(roomId, tableId, seat.session().username(),
                     PlayerType.HUMAN, 1, seat.deck(), "")) {

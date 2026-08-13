@@ -6,3 +6,10 @@
 # tap. Dev games are rare and taps are cheap (~30 MB/seat/game under
 # bridge/logs/tap/) — capture always.
 callbackTap: true
+
+# AI-fill seats are bridge-hosted (an in-JVM Brain answering a HUMAN seat — no
+# server-side COMPUTER_MAD, so no simulation think-time and no per-node Game-clone
+# GC). Their decks are loaded from here (any supported format, auto-detected).
+# Path is repo-root-relative (mvn -Prun cwd). Drop low-interaction .dck/.moxfield
+# decks in to keep the bots moving toward game.over.
+sampleDecksDir: bridge/decks/ai
