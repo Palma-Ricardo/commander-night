@@ -29,6 +29,8 @@ public final class BrainContext {
     private int combatDeclared;
     private int combatTries;
 
+    private String intendedBlockAttacker;
+
     /** How many times this exact confirm message has been seen, counting now. */
     public int confirmsSeen(String message) {
         return confirmSeen.merge(message, 1, Integer::sum);
@@ -80,5 +82,22 @@ public final class BrainContext {
     /** How many times this exact remaining-cost message has been paid against. */
     public int payAttempt(String message) {
         return payAttempts.merge(message, 1, Integer::sum);
+    }
+
+    /**
+     * Remember which attacker the just-declared blocker is meant to block. XMage
+     * splits a block into two asks — pick the blocker, then (only when it could
+     * block more than one attacker) pick which attacker — so the pairing chosen at
+     * the first ask has to survive to the second.
+     */
+    public void intendBlock(String attackerId) {
+        this.intendedBlockAttacker = attackerId;
+    }
+
+    /** The attacker intended for the last-declared blocker; clears on read. */
+    public String takeIntendedBlock() {
+        String attackerId = intendedBlockAttacker;
+        intendedBlockAttacker = null;
+        return attackerId;
     }
 }

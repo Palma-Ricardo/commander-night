@@ -108,6 +108,27 @@ final class BrainSupport {
         return null;
     }
 
+    /**
+     * Any permanent on any player's battlefield with this id, or null. Used to
+     * resolve an attacker (an opponent's creature) by the id combat hands us.
+     */
+    static Permanent findPermanent(GameState state, String objectId) {
+        if (state == null || state.players() == null) {
+            return null;
+        }
+        for (Player p : state.players()) {
+            if (p.battlefield() == null) {
+                continue;
+            }
+            for (Permanent perm : p.battlefield()) {
+                if (objectId.equals(perm.id())) {
+                    return perm;
+                }
+            }
+        }
+        return null;
+    }
+
     /** The hand card with this id, or null. */
     static Card handCard(GameState state, String objectId) {
         if (state == null || state.me() == null || state.me().hand() == null) {
