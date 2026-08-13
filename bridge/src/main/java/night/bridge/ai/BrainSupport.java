@@ -48,6 +48,19 @@ final class BrainSupport {
         return null;
     }
 
+    /** The player with this id, or null if the id isn't a player (e.g. a permanent). */
+    static Player playerById(GameState state, String id) {
+        if (state == null || state.players() == null || id == null) {
+            return null;
+        }
+        for (Player p : state.players()) {
+            if (id.equals(p.id())) {
+                return p;
+            }
+        }
+        return null;
+    }
+
     /** Every player other than the seat's own. */
     static List<Player> opponents(GameState state) {
         List<Player> others = new ArrayList<>();

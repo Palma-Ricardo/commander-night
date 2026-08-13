@@ -31,6 +31,9 @@ import java.util.Map;
  *       XMage splits a block into two asks (pick blocker, then pick which attacker
  *       — the latter only when the blocker could block more than one), so the
  *       chosen pairing is remembered on the {@link BrainContext} across the two.</li>
+ *   <li><b>defender choice</b> — when an attacker can be sent at more than one
+ *       opponent, it attacks the weakest (lowest life), so a multiplayer table's
+ *       damage concentrates on the player closest to death.</li>
  * </ul>
  * Every other prompt kind (mulligan/confirm, targets, mana, amounts, options,
  * distribute, player-request) is delegated to {@link FirstLegalMoveBrain}, whose
@@ -47,19 +50,40 @@ public final class HeuristicBrain implements Brain {
     /** The exact message XMage fires for the block's second ask (HumanPlayer). */
     private static final String SELECT_ATTACKER_TO_BLOCK = "Select attacker to block";
 
+    /**
+     * Substring marking the "which defender?" ask XMage fires after an attacker is
+     * declared with more than one legal defender ({@code TargetDefender}'s filter
+     * reads "…player, planeswalker, or battle <b>to attack</b>"). It never collides
+     * with {@link #SELECT_ATTACKER_TO_BLOCK}, which reads "…to block".
+     */
+    private static final String ATTACK_DEFENDER_MARKER = "to attack";
+
     private final FirstLegalMoveBrain baseline = new FirstLegalMoveBrain();
 
     @Override
     public Answer decide(GameState state, GamePrompt prompt, BrainContext ctx) {
         return switch (prompt.kind()) {
             case PRIORITY -> priority(state, prompt, ctx);
-            // The block's "which attacker?" follow-up is an ordinary target ask; we
-            // recognize it by message and honor the pairing chosen at the blocker ask.
-            case CHOOSE_TARGETS -> SELECT_ATTACKER_TO_BLOCK.equals(prompt.message())
-                    ? chooseAttackerToBlock(state, prompt, ctx)
-                    : baseline.decide(state, prompt, ctx);
+            case CHOOSE_TARGETS -> chooseTargets(state, prompt, ctx);
             default -> baseline.decide(state, prompt, ctx);
         };
+    }
+
+    /**
+     * Two of XMage's combat follow-ups arrive as ordinary target asks, told apart
+     * by message: the block's "which attacker?" pairing and the attack's "which
+     * defender?" choice. Anything else is a real spell/ability target, delegated to
+     * the tested baseline.
+     */
+    private Answer chooseTargets(GameState state, GamePrompt prompt, BrainContext ctx) {
+        String message = prompt.message() == null ? "" : prompt.message();
+        if (SELECT_ATTACKER_TO_BLOCK.equals(message)) {
+            return chooseAttackerToBlock(state, prompt, ctx);
+        }
+        if (message.contains(ATTACK_DEFENDER_MARKER)) {
+            return chooseAttackDefender(state, prompt);
+        }
+        return baseline.decide(state, prompt, ctx);
     }
 
     private static Answer priority(GameState state, GamePrompt prompt, BrainContext ctx) {
@@ -226,6 +250,49 @@ public final class HeuristicBrain implements Brain {
         }
         log.debug("block assign: intended gone, blocking scariest attacker {}", scariest);
         return new Answer.Pick(scariest);
+    }
+
+    /**
+     * The "which defender?" ask fired after an attacker is declared with more than
+     * one legal defender (a lone defender auto-assigns server-side, no ask). Hit the
+     * weakest opponent — lowest life, breaking ties toward the one with the fewest
+     * untapped creatures to block with — so a multiplayer table's beats concentrate
+     * on the player closest to death instead of spraying at whoever's listed first.
+     * Planeswalker / battle candidates aren't players, so they don't win the choice;
+     * if no player is offered at all we take the first candidate (baseline behavior).
+     */
+    private static Answer chooseAttackDefender(GameState state, GamePrompt prompt) {
+        List<String> candidates = prompt.candidates() == null ? List.of() : prompt.candidates();
+        if (candidates.isEmpty()) {
+            return new Answer.Cancel();       // unreachable (fired only with >1 defender)
+        }
+        Player me = BrainSupport.me(state);
+        String meId = me == null ? null : me.id();
+
+        String weakest = null;
+        int weakestLife = Integer.MAX_VALUE;
+        int weakestBlockers = Integer.MAX_VALUE;
+        for (String id : candidates) {
+            if (id.equals(meId)) {
+                continue;                     // can't attack yourself
+            }
+            Player p = BrainSupport.playerById(state, id);
+            if (p == null) {
+                continue;                     // a planeswalker / battle, not a player
+            }
+            int life = p.life();
+            int blockers = BrainSupport.untappedCreatures(p).size();
+            if (life < weakestLife || (life == weakestLife && blockers < weakestBlockers)) {
+                weakest = id;
+                weakestLife = life;
+                weakestBlockers = blockers;
+            }
+        }
+        if (weakest != null) {
+            log.debug("attack defender: hitting weakest player {} (life {})", weakest, weakestLife);
+            return new Answer.Pick(weakest);
+        }
+        return new Answer.Pick(candidates.getFirst());   // only planeswalkers/battles offered
     }
 
     /** A chosen defensive assignment: one of my creatures blocking one attacker. */

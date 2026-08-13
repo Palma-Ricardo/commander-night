@@ -22,9 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The first heuristic pass over {@link FirstLegalMoveBrain}: it ranks priority
- * plays by impact and declares attacks by combat math (all other prompt kinds are
- * delegated to the baseline). Tests cover ranked play, the attack model
- * (safe/dying/even-trade/evasion), defensive parsing, and delegation.
+ * plays by impact, declares attacks and blocks by combat math, and aims attacks at
+ * the weakest opponent (all other prompt kinds are delegated to the baseline).
+ * Tests cover ranked play, the attack/block model, the defender choice, defensive
+ * parsing, and delegation.
  */
 class HeuristicBrainTest {
 
@@ -191,6 +192,48 @@ class HeuristicBrainTest {
                 brain.decide(state, selectAttackerToBlock(List.of("a1", "a2")), ctx));
     }
 
+    // ---- defender choice (hit the weakest player) ----
+
+    @Test
+    void attacksTheLowestLifeOpponent() {
+        GameState state = tableState(List.of(
+                seat(ME, 40, List.of()),
+                seat("high", 30, List.of()),
+                seat("low", 12, List.of()),
+                seat("mid", 25, List.of())));
+        assertEquals(new Answer.Pick("low"),
+                brain.decide(state, selectDefender(List.of("high", "low", "mid")), ctx));
+    }
+
+    @Test
+    void breaksLifeTiesTowardTheLeastDefendedPlayer() {
+        // both at 15; the "open" seat has no untapped blockers, the "guarded" seat has two.
+        GameState state = tableState(List.of(
+                seat(ME, 40, List.of()),
+                seat("guarded", 15, List.of(creature("g1", 2, 2), creature("g2", 2, 2))),
+                seat("open", 15, List.of())));
+        assertEquals(new Answer.Pick("open"),
+                brain.decide(state, selectDefender(List.of("guarded", "open")), ctx));
+    }
+
+    @Test
+    void skipsNonPlayerDefenderCandidates() {
+        // a planeswalker permanent id sits among the candidates; the player still wins.
+        GameState state = tableState(List.of(
+                seat(ME, 40, List.of()),
+                seat("opp", 22, List.of())));
+        assertEquals(new Answer.Pick("opp"),
+                brain.decide(state, selectDefender(List.of("some-planeswalker", "opp")), ctx));
+    }
+
+    @Test
+    void fallsBackToTheFirstCandidateWhenNoPlayerIsADefender() {
+        // only planeswalkers/battles are legal defenders — take the first, like the baseline.
+        GameState state = tableState(List.of(seat(ME, 40, List.of())));
+        assertEquals(new Answer.Pick("pw1"),
+                brain.decide(state, selectDefender(List.of("pw1", "pw2")), ctx));
+    }
+
     @Test
     void delegatesAnOrdinaryTargetPromptToTheBaseline() {
         GamePrompt p = GamePrompt.chooseTargets(1, "Choose up to 2", List.of("t1", "t2"),
@@ -238,6 +281,24 @@ class HeuristicBrainTest {
     private static GamePrompt selectAttackerToBlock(List<String> attackerIds) {
         return GamePrompt.chooseTargets(1, "Select attacker to block", attackerIds,
                 0, 1, false, null, null, List.of());
+    }
+
+    private static GamePrompt selectDefender(List<String> candidates) {
+        return GamePrompt.chooseTargets(1, "Select a player, planeswalker, or battle to attack",
+                candidates, 1, 1, true, null, null, List.of());
+    }
+
+    /** A table of seats (ME plus opponents) in the declare-attackers step. */
+    private static GameState tableState(List<Player> players) {
+        return new GameState("g", GameState.Status.ACTIVE, true,
+                new GameState.Turn(1, Phase.COMBAT, Step.DECLARE_ATTACKERS, ME, ME),
+                players, List.of(), null, null, null,
+                new GameState.Me(ME, List.of(), null));
+    }
+
+    private static Player seat(String id, int life, List<Permanent> board) {
+        return new Player(id, id, true, life, null, new Player.ManaPool(0, 0, 0, 0, 0, 0),
+                90, 0, board, List.of(), List.of(), List.of(), null, null, null, null);
     }
 
     /** My {@code blockers} at {@code myLife}; each of {@code attackers} in its own group hitting me. */
