@@ -19,7 +19,10 @@
 // It stands down — leaving the §5.3 manual panel up — when any pip is not
 // plainly coverable (snow, unparseable symbols), when the readable sources +
 // pool can't cover `remaining` at all, or after two consecutive no-progress
-// clicks. A single no-progress click is recoverable: the wiring retires the
+// clicks. Sources whose tap would forfeit a non-mana ability (Ebony Fly's
+// {4} animate, Shifting Woodland's become-a-copy — see hasReservedAbility) are
+// held out of the plan, so a cost only they could pay stands down rather than
+// silently spending that ability. A single no-progress click is recoverable: the wiring retires the
 // pool color or source that didn't apply and re-plans around it (restricted
 // mana — Troyan-style "spend only on…" — folds into the flat pool counts we
 // see and looks spendable, so a re-plan around it taps real lands instead).
@@ -133,6 +136,45 @@ function parseAddClause(clause: string, commanderColors: PoolColor[]): Productio
   }
   return out;
 }
+
+/** True when tapping `card` for mana would throw away a distinct, non-mana
+ *  ability the player likely wanted — so the solver holds it out of the plan and
+ *  stands down when it is the only cover (the trade is the player's call, not
+ *  ours). We look at each activated ability (a "cost: effect" line whose cost
+ *  bears a {…} symbol, so triggered abilities and prose don't count) that isn't
+ *  itself a mana line, and flag the source when a tap forecloses it two ways:
+ *    (a) the cost taps the permanent ({T}) or needs it untapped ({Q}) — a
+ *        Shifting Woodland tapped for {G} can't then pay the {T} to animate;
+ *    (b) the ability turns the permanent into a creature or a copy — an Ebony
+ *        Fly ("{4}: … become an X/X … creature"), a Shifting Woodland
+ *        ("{2}{G}{G}: … becomes a copy of target permanent card …"), or a manland
+ *        tapped for mana is tapped, so it can't attack even after it animates.
+ *  A second *mana* ability ("{T}, Pay 1 life: Add {U} or {B}") never counts —
+ *  swapping one mana source for another is low-stakes, and flagging it would
+ *  strand every Talisman and filter land on manual pay. Value a tap does not
+ *  foreclose (a "{3}: Draw a card", a battlefield-dead Cycling line) is left
+ *  alone too. */
+export function hasReservedAbility(card: Card): boolean {
+  for (const line of card.text) {
+    const t = line.trim();
+    if (TAP_ADD.test(t)) continue;               // the plain mana ability itself
+    const colon = t.indexOf(':');
+    if (colon < 0) continue;                      // not "cost: effect"
+    const cost = t.slice(0, colon);
+    if (!/\{[^}]+\}/.test(cost)) continue;        // no cost symbol → a trigger or prose, not an activation
+    const effect = t.slice(colon + 1);
+    if (isManaEffect(effect)) continue;           // another mana line — low-stakes
+    if (/\{T\}|\{Q\}/i.test(cost)) return true;                          // (a) the cost spends/needs the tap
+    if (/becomes?\b[^:]*\b(creature|copy)\b/i.test(effect)) return true; // (b) animates into an attacker
+  }
+  return false;
+}
+
+/** An ability effect that produces mana — "Add" plus a mana symbol or the word
+ *  "mana" (so "Add {U} or {B}" and "Add one mana of any color" read as mana, but
+ *  "Add a +1/+1 counter" does not). */
+const isManaEffect = (effect: string): boolean =>
+  /\bAdd\b/i.test(effect) && (/\{[WUBRGC]\}/.test(effect) || /\bmana\b/i.test(effect));
 
 // ── the planner ──────────────────────────────────────────────────────────────
 
@@ -293,11 +335,12 @@ export function autoManaAction(
   for (const id of p.sources ?? []) {
     if (cantPay.includes(id)) continue;
     const card = findObject(state, id);
-    const alts = card !== undefined ? sourceProduction(card, commanderColors) : undefined;
-    if (alts !== undefined) {
-      const creature = card!.types.some(t => t.toLowerCase() === 'creature');
-      sources.push(creature ? { id, alts, creature } : { id, alts });
-    }
+    if (card === undefined) continue;
+    const alts = sourceProduction(card, commanderColors);
+    if (alts === undefined) continue;
+    if (hasReservedAbility(card)) continue;   // don't tap a source whose tap forecloses a reserved ability
+    const creature = card.types.some(t => t.toLowerCase() === 'creature');
+    sources.push(creature ? { id, alts, creature } : { id, alts });
   }
 
   const pool = { ...my.manaPool };

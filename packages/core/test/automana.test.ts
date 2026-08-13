@@ -11,7 +11,7 @@ import { PendingCommands } from '../src/net/pending';
 import { SessionWriter } from '../src/net/session';
 import type { Card, GameState, Id, Permanent, Prompt, ServerMsg, StateKeyframe } from '../src/protocol/protocol';
 import {
-  autoManaAction, parseRemaining, planPayment, sourceProduction,
+  autoManaAction, hasReservedAbility, parseRemaining, planPayment, sourceProduction,
   wireAutoManaSolver, type PoolColor, type SourceInfo,
 } from '../src/state/automana';
 import { createStores, type Stores } from '../src/stores';
@@ -91,6 +91,58 @@ describe('sourceProduction', () => {
       .toBeUndefined();
     expect(sourceProduction(land('s', 'Sac rock', { text: ['{T}, Sacrifice Sac rock: Add {B}{B}.'] })))
       .toBeUndefined();
+  });
+});
+
+// ── hasReservedAbility ───────────────────────────────────────────────────────
+
+// The real XMage text for the two cards that motivated this (both animate off a
+// cost with no {T}, so the tap they forfeit is the one that would attack).
+const ebonyFly = card('fly', 'Ebony Fly', { types: ['Artifact'], text: [
+  'Ebony Fly enters tapped.',
+  '{T}: Add {C}.',
+  '{4}: Roll a d6. Until end of turn, you may have this artifact become an X/X Insect'
+    + ' artifact creature with flying, where X is the result.',
+  'Whenever Ebony Fly attacks, another target attacking creature gains flying until end of turn.',
+] });
+const shiftingWoodland = card('wood', 'Shifting Woodland', { text: [
+  'This land enters tapped unless you control a Forest.',
+  '{T}: Add {G}.',
+  'DELIRIUM - {2}{G}{G}: This land becomes a copy of target permanent card in your graveyard'
+    + ' until end of turn. Activate only if there are four or more card types among cards in your graveyard.',
+] });
+
+describe('hasReservedAbility', () => {
+  it('flags a non-mana ability that animates the source into an attacker', () => {
+    expect(hasReservedAbility(ebonyFly)).toBe(true);        // {4}: … become an X/X … creature
+    expect(hasReservedAbility(shiftingWoodland)).toBe(true); // {2}{G}{G}: … becomes a copy …
+  });
+
+  it('flags a non-mana ability whose cost spends the tap', () => {
+    const rockHatchery = card('hatch', 'Pentavus-ish', { types: ['Artifact'],
+      text: ['{T}: Add {C}.', '{1}, {T}: Put a +1/+1 counter on target creature.'] });
+    expect(hasReservedAbility(rockHatchery)).toBe(true);
+  });
+
+  it('does not flag plain mana sources', () => {
+    expect(hasReservedAbility(forest)).toBe(false);
+    expect(hasReservedAbility(solRing)).toBe(false);
+    expect(hasReservedAbility(anyColorLand)).toBe(false);
+  });
+
+  it('does not flag a second *mana* line (Talisman, filter land)', () => {
+    const talisman = card('tal', 'Talisman of Dominance',
+      { types: ['Artifact'], text: ['{T}: Add {C}.', '{T}, Pay 1 life: Add {U} or {B}.'] });
+    expect(hasReservedAbility(talisman)).toBe(false);
+  });
+
+  it('does not flag value a tap cannot foreclose (utility draw, battlefield-dead cycling)', () => {
+    const drawRock = card('dr', 'Draw rock', { types: ['Artifact'],
+      text: ['{T}: Add {C}.', '{3}: Draw a card.'] });
+    expect(hasReservedAbility(drawRock)).toBe(false);   // {3} needs no tap and animates nothing
+    const sandbar = land('sb', 'Lonely Sandbar', { subtypes: ['Island'],
+      text: ['{T}: Add {U}.', 'Cycling {U} ({U}, Discard this card: Draw a card.)'] });
+    expect(hasReservedAbility(sandbar)).toBe(false);     // cycling is dead once on the battlefield
   });
 });
 
@@ -388,5 +440,21 @@ describe('autoManaAction', () => {
     expect(autoManaAction(p, state, [], ['G'])).toEqual({ act: 'tap', sourceId: 'forest' });
     // retired with nothing left to cover the pip → stand down
     expect(autoManaAction(p, gameState([]), [], ['G'])).toEqual({ act: 'stand-down' });
+  });
+
+  // Shifting Woodland taps for {G}, but tapping it forfeits the animate that
+  // would let it attack — so the solver holds it out of the plan.
+  const woodland = land('wood', 'Shifting Woodland', { text: shiftingWoodland.text });
+
+  it('holds out a reserved source, tapping a plain one instead', () => {
+    const state = gameState([woodland, forest]);
+    const p = ask(70, '{G}', ['wood', 'forest'], 2) as Extract<Prompt, { kind: 'payMana' }>;
+    expect(autoManaAction(p, state, [])).toEqual({ act: 'tap', sourceId: 'forest' });
+  });
+
+  it('stands down when only a reserved source could pay', () => {
+    const state = gameState([woodland]);
+    const p = ask(70, '{G}', ['wood'], 2) as Extract<Prompt, { kind: 'payMana' }>;
+    expect(autoManaAction(p, state, [])).toEqual({ act: 'stand-down' });
   });
 });
