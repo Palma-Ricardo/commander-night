@@ -2,6 +2,8 @@ package night.bridge.lobby;
 
 import mage.cards.decks.DeckCardLists;
 import night.bridge.ai.Brain;
+import night.bridge.ai.BudgetedBrain;
+import night.bridge.ai.FirstLegalMoveBrain;
 import night.bridge.ai.HeuristicBrain;
 import night.bridge.config.Config;
 import night.bridge.game.AiSeatDriver;
@@ -338,7 +340,11 @@ public final class LobbyService implements AutoCloseable {
         // session whose prompts a Brain answers in-JVM. No server-side COMPUTER_MAD,
         // so no AI-simulation think-time and no per-node Game-clone GC (the two
         // long-standing AI pains). Humans seat first, so a human stays the recipe host.
-        Brain brain = new HeuristicBrain();
+        // A per-decision time budget guards against a heavier future brain hanging
+        // on a pathological board: if HeuristicBrain overruns, the seat degrades to
+        // the tested first-legal play for that one decision instead of freezing.
+        Brain brain = new BudgetedBrain(
+                new HeuristicBrain(), new FirstLegalMoveBrain(), BudgetedBrain.DEFAULT_BUDGET);
         for (int k = 1; k <= aiSeats; k++) {
             String label = "cn_" + lobby.code + "_ai" + k;
             SeatSession session = gateway.connectSeat(label);
