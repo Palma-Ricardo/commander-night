@@ -26,6 +26,11 @@ import java.util.function.LongSupplier;
  * 2026-07-17). Note the server re-aligns early answers into the window
  * itself, so no arrival-time discipline can fully close the race.
  *
+ * <p><b>1.4.63:</b> fixed upstream — {@code waitForResponse} now re-checks
+ * {@code response.hasAnswer()} under the monitor before {@code wait()}. The
+ * guard below stays as a safety net (costs ≤150 ms per answer); retire it only
+ * after the nudge watchdog has been observed never firing on 1.4.63.
+ *
  * <p>Two-part guard: every positional send here waits until
  * ≥{@link #PACE_MILLIS} after the last callback arrived — the human timing
  * profile, which usually lands after the flag is open and the game thread is

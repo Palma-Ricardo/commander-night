@@ -186,7 +186,7 @@ class SeatRecoveryLiveTest {
         // wrapper freezes nothing)
         return ProcessHandle.allProcesses()
                 .filter(p -> p.info().command().orElse("").endsWith("java"))
-                .filter(p -> p.info().commandLine().orElse("").contains("mage-server-1.4.60.jar"))
+                .filter(p -> p.info().commandLine().orElse("").contains("lib/mage-server-"))
                 .map(ProcessHandle::pid)
                 .findFirst();
     }

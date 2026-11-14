@@ -122,7 +122,10 @@ Per-seat `SeatSession implements MageClient`, connected via `new SessionImpl(thi
 - Keepalive `ping()` on the scheduler; JBoss lease handles transport-level liveness.
 - `GameView.canPlayObjects` is the playable list; mana abilities are *not* priority actions
   (the floating-mana ask-loop lesson — encoded in `PromptTranslator`, protocol §8 `priority`).
-- **The lost-wakeup race** (discovered M3, 2026-07-17). 1.4.60's `HumanPlayer.waitForResponse`
+- **The lost-wakeup race** (discovered M3, 2026-07-17; **source-fixed upstream in 1.4.63** —
+  `waitForResponse` now checks `!response.hasAnswer()` inside the `synchronized (response)` block
+  before `wait()`, so an early notify can no longer be lost. The guard below is kept as a cheap
+  safety net; the 1.4.63 live tier passed with it in place, 2026-11-14). 1.4.60's `HumanPlayer.waitForResponse`
   sets `responseOpenedForAnswer = true` *before* entering a predicate-less `response.wait()`;
   an answer whose `notifyAll` lands in that gap is lost, and the game thread waits forever —
   the whole game freezes until the seat disconnects. Jstack-verified live

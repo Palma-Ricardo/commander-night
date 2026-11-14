@@ -17,7 +17,7 @@ Browser (TS client)  ──JSON/WebSocket (protocol v1)──►  JVM bridge  �
 ```
 
 - **XMage server** — the authoritative Magic rules engine. Self-hosted and **pinned to version
-  1.4.60**; the bridge compiles against the dist's own jars because the server rejects any non-exact
+  1.4.63**; the bridge compiles against the dist's own jars because the server rejects any non-exact
   version handshake. XMage jars are vendored locally (gitignored), not pulled from Central.
 - **The bridge** (`bridge/`) — a Maven daemon (`night-bridge`) written in modern Java (records,
   sealed interfaces, virtual threads). It speaks XMage's serialized protocol upstream and our own
@@ -52,7 +52,7 @@ The design is spec-first. Start with these:
 
 ## Getting started
 
-You need **JDK 26**, **Node.js** (with npm workspaces), and a local copy of the pinned **XMage 1.4.60**
+You need **JDK 26**, **Node.js** (with npm workspaces), and a local copy of the pinned **XMage 1.4.63**
 distribution under `vendor/`.
 
 ### One-time setup
@@ -74,7 +74,7 @@ npm install
 ```sh
 # 1. Start the local XMage server (2048m matches prod).
 (cd vendor/xmage-dist/xmage/mage-server && \
-  ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.60.jar)
+  ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.63.jar)
 
 # 2. Start the bridge daemon (repo-root cwd, JDK-26 flags).
 cd bridge && mvn -Prun compile exec:exec

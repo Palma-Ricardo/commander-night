@@ -44,7 +44,7 @@ ln -sfn vendor/xmage-dist/xmage/mage-server/db db   # one-time: deck import read
 cd bridge && mvn test             # build + unit tests (live tier excluded)
 
 # local XMage server — startServer.sh may lack +x; equivalent. 2048m matches prod (8 GiB host):
-(cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.60.jar)
+(cd vendor/xmage-dist/xmage/mage-server && ../../java/jre1.8.0_201/bin/java -Xmx2048m -jar lib/mage-server-1.4.63.jar)
 
 cd bridge && mvn -Plive test                   # live tier: full game vs 3 AIs through the bridge
 cd bridge && mvn -Prun compile exec:exec       # the bridge daemon (repo-root cwd, JDK-26 flags)
@@ -63,18 +63,20 @@ npx playwright test -c e2e/playwright.config.ts two-browser   # one spec (12 s s
 
 ## Hard constraints
 
-- **XMage version is pinned (1.4.60)** and the bridge must compile against the dist's own jars —
+- **XMage version is pinned (1.4.63, upgraded from 1.4.60 on 2026-11-14)** and the bridge must compile against the dist's own jars —
   the server rejects any non-exact `MageVersion` handshake. On upgrade: replace
   `vendor/xmage-dist`, re-run the install script, bump `xmage.version` in `bridge/pom.xml`,
-  regenerate golden fixtures.
+  regenerate golden fixtures. XMage serialization is *not* stable across versions (1.4.63
+  changed `ChoiceImpl`'s `serialVersionUID`), so old `logs/tap` captures stop decoding — archive
+  them (`bridge/logs/tap-<oldversion>/`) and replay against fresh captures.
 - Central deps that shadow dist jars (guava, gson, protobuf, jsoup, commons-lang3, reload4j)
   must stay version-identical to the dist's `mage-client/lib`.
 - JDK 26 needs `--add-opens=java.base/java.io=ALL-UNNAMED` (+ `java.lang`) and
   `-Djava.awt.headless=true` for the XMage session layer; the `-Pspike` exec config sets them.
 - XMage callbacks: always `callback.decompressData()` before `getData()`; read `Choice` payloads
   through typed getters; callbacks arrive on up to 10 threads (bridge serializes per seat pump).
-- **Never answer XMage's positional channel < 150 ms after the ask** — 1.4.60 `HumanPlayer` has a
-  lost-wakeup race that freezes the whole game (design.md §5). All sends must go through
+- **Never answer XMage's positional channel < 150 ms after the ask** — 1.4.60 `HumanPlayer` had a
+  lost-wakeup race that froze the whole game (design.md §5; source-fixed in 1.4.63, guard kept). All sends must go through
   `XmageAnswers` (paces automatically; SeatPump nudge-watchdog covers the tail). Never bypass it
   with raw `session.sendPlayer*`.
 - Logging is split: our code → slf4j/logback; mage classes → log4j-1.x API via reload4j

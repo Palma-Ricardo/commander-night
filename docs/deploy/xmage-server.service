@@ -18,7 +18,7 @@ WorkingDirectory=/opt/commander-night/xmage-dist/xmage/mage-server
 ExecStart=/opt/commander-night/xmage-dist/java/jre1.8.0_201/bin/java \
     -Xmx2048m \
     -Djava.awt.headless=true \
-    -jar lib/mage-server-1.4.60.jar
+    -jar lib/mage-server-1.4.63.jar
 Restart=on-failure
 RestartSec=5
 # A restart loses running games — systemd only restarts on

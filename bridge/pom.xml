@@ -25,7 +25,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>25</maven.compiler.release>
     <!-- Must match the dist under vendor/xmage-dist (design §1: exact-version handshake). -->
-    <xmage.version>1.4.60</xmage.version>
+    <xmage.version>1.4.63</xmage.version>
     <jackson.version>2.19.2</jackson.version>
     <!-- The live tier needs a running local XMage server; -Plive clears this. -->
     <surefire.excludedGroups>live</surefire.excludedGroups>
