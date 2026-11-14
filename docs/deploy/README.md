@@ -112,7 +112,7 @@ rsync -a --rsync-path="sudo rsync" --chown=commander:commander \
     target/night-bridge-*.jar vps:/opt/commander-night/bridge/night-bridge.jar
 rsync -a --delete --rsync-path="sudo rsync" --chown=commander:commander \
     target/lib/ vps:/opt/commander-night/bridge/lib/
-# target/lib/ is ~90 MB. mage-sets-1.4.60.jar alone is ~60 MB of that — deck
+# target/lib/ is ~90 MB. mage-sets-<version>.jar alone is ~60 MB of that — deck
 # import's CardResolver needs per-card implementation classes, which
 # CardInfo#createCard() loads reflectively at runtime, not just the metadata jars
 # the bridge compiles against. Trivial next to the ~150 MB card database it sits

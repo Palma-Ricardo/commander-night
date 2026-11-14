@@ -1,13 +1,13 @@
 # /etc/systemd/system/xmage-server.service
 #
-# XMage 1.4.60 — the authoritative rules engine. Runs on the
+# XMage 1.4.63 — the authoritative rules engine. Runs on the
 # dist's own bundled JRE 8, bound to loopback only: the bridge is its sole
 # client and the auth boundary. Set serverAddress="127.0.0.1" in
 # /opt/commander-night/xmage-dist/xmage/mage-server/config/config.xml —
 # the dist ships with 0.0.0.0.
 
 [Unit]
-Description=XMage server 1.4.60 (Commander Night rules engine)
+Description=XMage server 1.4.63 (Commander Night rules engine)
 After=network.target
 
 [Service]
