@@ -93,6 +93,24 @@ class CardResolverLiveTest {
     }
 
     /**
+     * 1.4.63's "SP//dr, Piloted by Peni" (SPM) has a literal <em>spaceless</em>
+     * "//" — the split-card respacing that every other form applies turns it into
+     * the nonexistent "SP // dr, …". The verbatim fallback must find it.
+     */
+    @Test
+    void spacelessDoubleSlashInNameResolves() {
+        CardResolver.Resolved bare = CardResolver.resolve(line("SP//dr, Piloted by Peni", null, null));
+        assertNotNull(bare.card(), () -> String.valueOf(bare.problem()));
+        assertEquals("SP//dr, Piloted by Peni", bare.card().getName());
+
+        CardResolver.Resolved printed = CardResolver.resolve(line("SP//dr, Piloted by Peni", "SPM", "147"));
+        assertNotNull(printed.card(), () -> String.valueOf(printed.problem()));
+        assertEquals("SPM", printed.card().getSetCode());
+        assertEquals("147", printed.card().getCardNumber());
+        assertNull(printed.warning());
+    }
+
+    /**
      * WotC's Universes Beyond bonus sheets reprint classic cards under new flavour
      * names/art (FF's "Through the Ages", set FCA). XMage files them under the
      * <em>original</em> card name, so the flavour name misses — but the set code +

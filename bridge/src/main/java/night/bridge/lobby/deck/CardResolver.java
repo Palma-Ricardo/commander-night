@@ -3,6 +3,7 @@ package night.bridge.lobby.deck;
 import mage.cards.decks.CardNameUtil;
 import mage.cards.repository.CardInfo;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
@@ -47,6 +48,9 @@ public final class CardResolver {
      * TxtDeckImporter} mangles it to the nonexistent {@code "Summon: Choco // Mog"}
      * and fails to import it. {@link #resolve} falls back to this form so we don't
      * inherit that bug.
+     *
+     * <p>Its {@code "//"} respacing still destroys a name whose literal slash is a
+     * <em>spaceless double</em> one — see {@link #normalizeVerbatim}.
      */
     static String normalizeBase(String rawName) {
         String name = CardNameUtil.normalizeCardName(rawName);
@@ -56,21 +60,37 @@ public final class CardResolver {
         return name;
     }
 
+    /**
+     * Unicode normalisation only — no slash rewriting at all. 1.4.63 added {@code
+     * "SP//dr, Piloted by Peni"} (SPM), whose name carries a literal spaceless
+     * {@code "//"}: both other forms respace it to {@code "SP // dr, …"}, which is
+     * no card. The last name fallback in {@link #resolve}.
+     */
+    static String normalizeVerbatim(String rawName) {
+        return CardNameUtil.normalizeCardName(rawName);
+    }
+
     public static Resolved resolve(DeckLine line) {
         // Try the split-normalised name first: this is XMage's behaviour and covers
         // every split card written with a bare slash. Only when that misses entirely
-        // (no such name in any printing) do we retry the name as written, which
-        // rescues real single-slash card names the split heuristic would destroy.
+        // (no such name in any printing) do we retry progressively less rewritten
+        // forms, which rescue real card names with a literal slash: "Summon:
+        // Choco/Mog" (single slash, survives normalizeBase) and "SP//dr, Piloted by
+        // Peni" (spaceless double slash, survives only normalizeVerbatim).
         String splitName = normalize(line.name());
         Resolved bySplit = resolveNamed(line, splitName);
         if (bySplit.card() != null) {
             return bySplit;
         }
-        String rawName = normalizeBase(line.name());
-        if (!rawName.equals(splitName)) {
-            Resolved byRaw = resolveNamed(line, rawName);
-            if (byRaw.card() != null) {
-                return byRaw;
+        List<String> tried = new ArrayList<>(List.of(splitName));
+        for (String name : List.of(normalizeBase(line.name()), normalizeVerbatim(line.name()))) {
+            if (tried.contains(name)) {
+                continue;
+            }
+            tried.add(name);
+            Resolved byName = resolveNamed(line, name);
+            if (byName.card() != null) {
+                return byName;
             }
         }
         // No card by that name in any form — but a name-independent set+number hit

@@ -134,6 +134,8 @@ public final class SeatPump implements AutoCloseable {
     private GameOver gameOverMsg;
     /** Seat recovery in flight (design §5) — positional answers are rejected meanwhile. */
     private boolean recovering;
+    /** Drops updates the 1.4.63 callback queue delivered behind newer state (protocol §15). */
+    private final UpdateOrder order = new UpdateOrder();
     /** Positional asks seen — the watchdog's only proof of life (see {@link #armNudge}). */
     private long askCount;
     private int nudges;
@@ -329,6 +331,7 @@ public final class SeatPump implements AutoCloseable {
             return;
         }
         recovering = true;
+        order.reset(); // the old session is gone; a new one numbers callbacks from 1
         logLine(LogEntry.Kind.STATUS, null, "reconnecting to the game server…", null, null);
         Thread.ofVirtual().name("recover-" + xmage.username()).start(this::recoveryLoop);
     }
@@ -461,6 +464,10 @@ public final class SeatPump implements AutoCloseable {
     }
 
     private void handle(ClientCallback cb) {
+        if (!order.admit(cb)) {
+            log.debug("stale {} #{} dropped — newer state already applied", cb.getMethod(), cb.getMessageId());
+            return;
+        }
         switch (cb.getMethod()) {
             case START_GAME -> startGame((TableClientMessage) cb.getData());
             case GAME_INIT -> {
@@ -482,7 +489,9 @@ public final class SeatPump implements AutoCloseable {
             }
             case GAME_INFORM_PERSONAL -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();
-                updateState(msg.getGameView());
+                if (!order.behind(cb)) {
+                    updateState(msg.getGameView());
+                }
                 logLine(LogEntry.Kind.PERSONAL, null, night.bridge.translate.Html.strip(msg.getMessage()), null, null);
             }
             case CHATMESSAGE -> chat((ChatMessage) cb.getData());
@@ -554,6 +563,9 @@ public final class SeatPump implements AutoCloseable {
                 String text = String.valueOf(cb.getData());
                 sink.send(Err.of(ErrorCode.UPSTREAM_ERROR, text));
                 logLine(LogEntry.Kind.ERROR, null, text, null, null);
+                if (GameCoordinator.endsGameOnError(text)) {
+                    serverErrorEnd();
+                }
             }
             case GAME_OVER -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();
@@ -744,6 +756,30 @@ public final class SeatPump implements AutoCloseable {
     private void chat(ChatMessage msg) {
         LogTranslator.chat(msg).ifPresent(line ->
                 logLine(line.kind(), line.turn(), line.text(), line.refs(), resolvePlayer(line.username())));
+        if (GameCoordinator.endsGameOnError(msg.getMessage())) {
+            serverErrorEnd(); // the "technical winner" inform
+        }
+    }
+
+    /**
+     * The game died on a server error (protocol §11). Before game.over this just
+     * flags the outcome. After it, the signal came late: 1.4.63 queues error and chat
+     * callbacks behind GAME_OVER when the seat is backed up. So the game.over this
+     * seat sent may name XMage's technical winner, and it's re-sent corrected.
+     */
+    private void serverErrorEnd() {
+        coordinator.recordServerError();
+        if (gameOverMsg == null) {
+            return;
+        }
+        GameCoordinator.Outcome outcome = coordinator.outcome();
+        // compare before building: building takes a seq, and an unsent seq is a gap
+        if (!winners(outcome).equals(gameOverMsg.winnerPlayerIds())
+                || !rewriteNames(Html.strip(outcome.reason())).equals(gameOverMsg.reason())) {
+            gameOverMsg = gameOverMsg(outcome);
+            sink.send(gameOverMsg);
+            log.info("game over corrected for this seat: {}", gameOverMsg.reason());
+        }
     }
 
     private void logLine(LogEntry.Kind kind, String turn, String text,
@@ -852,11 +888,15 @@ public final class SeatPump implements AutoCloseable {
         if (fsm != null) {
             fsm.clear();
         }
-        gameOverMsg = new GameOver(store.nextSeq(), gameIdStr, winners(outcome),
-                rewriteNames(Html.strip(outcome.reason())), true);
+        gameOverMsg = gameOverMsg(outcome);
         sink.send(gameOverMsg);
-        log.info("game over for this seat: {}", outcome.reason());
+        log.info("game over for this seat: {} ({} stale updates dropped)", outcome.reason(), order.dropped());
         coordinator.seatFinished();
+    }
+
+    private GameOver gameOverMsg(GameCoordinator.Outcome outcome) {
+        return new GameOver(store.nextSeq(), gameIdStr, winners(outcome),
+                rewriteNames(Html.strip(outcome.reason())), true);
     }
 
     private List<String> winners(GameCoordinator.Outcome outcome) {

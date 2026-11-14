@@ -27,10 +27,29 @@ public final class GameCoordinator {
     private static final Logger log = LoggerFactory.getLogger(GameCoordinator.class);
     private static final Pattern WINNER = Pattern.compile("Player (.+?) is the winner");
 
+    /**
+     * XMage 1.4.63's signals that a game was ended by a server error, not by play
+     * (protocol §11). The {@code GAME_ERROR} texts open its two crash paths ({@code
+     * GameController.endGameWithError} and {@code GameImpl}'s outer catch); the chat
+     * line is {@code GameImpl.endWithTechnicalWinner}'s inform, sent on both paths.
+     * The non-fatal "Game error occurred" (the game rolls back and goes on) is
+     * deliberately absent.
+     */
+    private static final List<String> SERVER_ERROR_END = List.of(
+            "Game stopped due server error",
+            "Game end on critical error",
+            "Game stopped due critical error, technical winner");
+
+    static final String SERVER_ERROR_REASON = "Game stopped by a server error — no winner";
+
     public record Seat(String userId, String displayName, SeatSession xmage, SeatPump pump) {
     }
 
-    /** {@code winnerName} is parsed from XMage's GAME_OVER text; null when unknown. */
+    /**
+     * {@code winnerName} is parsed from XMage's GAME_OVER text; null when unknown,
+     * and always null after a server-error end, whose "winner" is XMage's technical
+     * pick (highest life, then random), not a result.
+     */
     public record Outcome(String reason, String winnerName) {
     }
 
@@ -41,6 +60,7 @@ public final class GameCoordinator {
     private final List<Seat> seats = new ArrayList<>();
     private final AtomicBoolean registered = new AtomicBoolean();
     private final AtomicReference<Outcome> outcome = new AtomicReference<>();
+    private final AtomicBoolean serverError = new AtomicBoolean();
     private final AtomicInteger finishedSeats = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile String registeredGameId;
@@ -120,7 +140,22 @@ public final class GameCoordinator {
         }
     }
 
+    /** Whether {@code text} (a GAME_ERROR payload or a game chat line) says the game died. */
+    static boolean endsGameOnError(String text) {
+        return text != null && SERVER_ERROR_END.stream().anyMatch(text::contains);
+    }
+
+    /** Any seat saw a server-error end; every seat's game.over then names no winner. */
+    void recordServerError() {
+        if (serverError.compareAndSet(false, true)) {
+            log.warn("lobby {}: game ended by an XMage server error — reporting no winner", lobbyCode);
+        }
+    }
+
     Outcome outcome() {
+        if (serverError.get()) {
+            return new Outcome(SERVER_ERROR_REASON, null);
+        }
         Outcome o = outcome.get();
         return o != null ? o : new Outcome("Game over", null);
     }
