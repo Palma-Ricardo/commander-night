@@ -28,6 +28,11 @@ export function Game() {
   const game = useStore(appStores.game);
   const pendingMessage = useStore(appStores.prompt, s => s.pending?.message);
   const [browse, setBrowse] = useState<BrowseRequest | null>(null);
+  // Phone (mobile §M3): the log/chat column becomes a drawer behind a toggle —
+  // a 20rem sidebar on a 390px screen left the board ~50px. On desktop the toggle
+  // is hidden and the drawer wrapper is `display: contents`, so nothing changes.
+  const [logOpen, setLogOpen] = useState(false);
+  const unread = useStore(appStores.log, s => s.unreadChat);
   useShortcuts();
 
   const state = game.state;
@@ -103,7 +108,13 @@ export function Game() {
         </div>
       </div>
 
-      <LogPanel state={state} />
+      <button className="log-toggle" aria-expanded={logOpen} onClick={() => setLogOpen(o => !o)}>
+        {logOpen ? '✕ Close' : 'Log / chat'}
+        {!logOpen && unread > 0 && <span className="chat-unread">{unread}</span>}
+      </button>
+      <div className={logOpen ? 'log-drawer log-drawer-open' : 'log-drawer'}>
+        <LogPanel state={state} />
+      </div>
 
       {browse !== null && (
         <Modal title={browse.title} onClose={() => setBrowse(null)} suspendsShortcuts>

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   camera, rectVisible, safeArea, seatFocusRect, seatView, TABLE_VIEW, worldToScreen, screenToWorld,
-  HUD_RIGHT_OVERHANG,
+  HUD_RIGHT_OVERHANG, HUD_RIGHT_OVERHANG_COMPACT,
 } from '../src/camera/camera';
 import { CameraController } from '../src/camera/controller';
 import { seatQuadrantRect, WORLD } from '../src/layout/world';
 import { handBandHeight } from '../src/layout/screen';
-import { SUPPORTED_VIEWPORTS } from './helpers';
+import { PORTRAIT_PHONES, SUPPORTED_VIEWPORTS } from './helpers';
 
 const WORLD_RECT = { x: 0, y: 0, w: WORLD.w, h: WORLD.h };
 
@@ -276,5 +276,23 @@ describe('CameraController follow / override policy', () => {
     expect(c.view()).toEqual(TABLE_VIEW);
     c.keepVisible([], vp);                 // clears → back to the seat the user picked
     expect(c.view()).toEqual(seatView(2));
+  });
+});
+
+describe('camera framing on phones (mobile plan §M2)', () => {
+  it('a portrait phone still frames every seat at a usable scale', () => {
+    for (const vp of PORTRAIT_PHONES) {
+      for (let seat = 0; seat < 4; seat++) {
+        const preset = camera(seatView(seat), vp);
+        expect(rectVisible(preset, seatQuadrantRect(seat), vp), `seat ${seat} @ ${vp.w}x${vp.h}`).toBe(true);
+        expect(preset.scale).toBeGreaterThan(0.1);
+      }
+    }
+  });
+
+  it('a landscape phone reserves only the folded compass for a right seat', () => {
+    const vp = { w: 844, h: 390 };
+    expect(HUD_RIGHT_OVERHANG_COMPACT).toBeLessThan(HUD_RIGHT_OVERHANG);
+    expect(camera(seatView(2), vp).scale).toBeGreaterThan(0.15);
   });
 });

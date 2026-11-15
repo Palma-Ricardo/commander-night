@@ -77,4 +77,13 @@ export const SUPPORTED_VIEWPORTS: Size[] = [
   { w: 1920, h: 1080 },
   { w: 2560, h: 1440 },
   { w: 3440, h: 1440 },   // ultrawide
+  // Phones in landscape (mobile plan §M2) — the table client is landscape-first.
+  { w: 844, h: 390 },     // iPhone 12–15
+  { w: 932, h: 430 },     // iPhone Pro Max
+  { w: 915, h: 412 },     // Pixel 7
+  { w: 740, h: 360 },     // small Android
 ];
+
+/** Portrait phones: supported (the camera must still frame sanely) but not tuned —
+ *  the table shows a "rotate" hint there. */
+export const PORTRAIT_PHONES: Size[] = [{ w: 390, h: 844 }, { w: 412, h: 915 }];

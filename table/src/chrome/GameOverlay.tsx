@@ -10,7 +10,7 @@
 // shortcuts) and the background-tab nudge are mounted here, so they live only
 // where a game does.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import type { GameState } from '@night/core/protocol/protocol';
@@ -31,6 +31,8 @@ import { CarouselBar } from './CarouselBar';
 import { TurnControls } from './TurnControls';
 import { LogPanel, useRematchCode } from './LogPanel';
 import { HoverPreview } from './HoverPreview';
+import { InspectSheet } from './InspectSheet';
+import { PORTRAIT_PHONE_QUERY, useCompact, useMedia } from './compact';
 import { ManaSymbols } from './ManaSymbols';
 import { useShortcuts } from './shortcuts';
 import { startNudge } from './nudge';
@@ -96,6 +98,8 @@ export function GameOverlay() {
       </div>
 
       <HoverPreview />
+      <InspectSheet />
+      <RotateHint />
     </div>
   );
 }
@@ -196,13 +200,37 @@ const COMPASS_CELLS = [1, 2, 0, 3] as const;
 function Compass() {
   const state = useStore(appStores.game, s => s.state);
   const view = useStore(cameraHudStore, s => s.view);
+  // On a phone the minimap folds to one small button (mobile §M2): at 162px it
+  // covered a right seat's whole pile column. Tapping it unfolds the grid; picking
+  // a view (or tapping anywhere else) folds it again.
+  const compact = useCompact();
+  const [open, setOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent): void => {
+      if (navRef.current !== null && !navRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
   if (state === undefined) return null;
   const seats = displaySeats(state);
   const activeSeat = seatOfPlayer(state, state.turn.activePlayerId);
   const viewedSeat = view.kind === 'seat' ? view.seat : -1;
+  const pick = (go: () => void): void => { go(); setOpen(false); };
   const scene = () => getActiveScene();
+  if (compact && !open) {
+    const viewed = view.kind === 'seat' ? seats[view.seat]?.name ?? '—' : 'Table';
+    return (
+      <button className="compass-fold" data-cam="fold" onClick={() => setOpen(true)}
+        aria-label="Move the camera">
+        <span className="compass-fold-icon" aria-hidden="true">⌖</span>{viewed}
+      </button>
+    );
+  }
   return (
-    <nav className="compass" aria-label="Move the camera — keys 1–4, ` whole table, Esc follow">
+    <nav className="compass" ref={navRef} aria-label="Move the camera — keys 1–4, ` whole table, Esc follow">
       <h3>Viewport</h3>
       <div className="compass-grid">
         {COMPASS_CELLS.map(d => {
@@ -215,7 +243,7 @@ function Compass() {
               data-cam={`seat-${d}`}
               data-turn={d === activeSeat ? '1' : undefined}
               aria-current={d === viewedSeat}
-              onClick={() => scene()?.focusSeat(d)}
+              onClick={() => pick(() => scene()?.focusSeat(d))}
             >
               <span className="cq-nm">{p.name}</span>
               <b>{p.life}</b>
@@ -226,12 +254,35 @@ function Compass() {
           className="cq-all"
           data-cam="table"
           aria-current={view.kind === 'table'}
-          onClick={() => scene()?.showTable()}
+          onClick={() => pick(() => scene()?.showTable())}
         >
           Whole table
         </button>
       </div>
     </nav>
+  );
+}
+
+const ROTATE_KEY = 'night.table.rotateHintDismissed';
+
+/** Portrait phone: the four-seat table is a landscape object, so suggest turning
+ *  the phone (mobile §M2). Only a hint — the game stays fully playable upright —
+ *  and dismissed for the rest of the browser session. */
+function RotateHint() {
+  const portrait = useMedia(PORTRAIT_PHONE_QUERY);
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem(ROTATE_KEY) === '1'; } catch { return false; }
+  });
+  if (!portrait || dismissed) return null;
+  const dismiss = (): void => {
+    setDismissed(true);
+    try { sessionStorage.setItem(ROTATE_KEY, '1'); } catch { /* private mode */ }
+  };
+  return (
+    <div className="rotate-hint" role="status">
+      <span aria-hidden="true">⟲</span> Turn your phone sideways for the best view of the table
+      <button className="banner-dismiss" aria-label="dismiss" onClick={dismiss}>×</button>
+    </div>
   );
 }
 
@@ -246,11 +297,14 @@ function Camstate() {
     ? playerName(state, displaySeats(state)[view.seat]?.id)
     : 'the whole table';
   return (
-    <div className="camstate">
+    // A button, not a badge: tapping it is the touch twin of Esc — release the pin
+    // and resume following the active player (mobile plan §4).
+    <button className="camstate" onClick={() => getActiveScene()?.releaseCamera()}
+      title="Follow the active player again (Esc)">
       <span className="dot manual" />
       <span>Viewing <b>{target}</b></span>
-      <span className="hint">Esc</span>
-    </div>
+      <span className="hint">Follow · Esc</span>
+    </button>
   );
 }
 

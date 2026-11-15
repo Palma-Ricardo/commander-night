@@ -34,11 +34,26 @@ const HAND_ARC = 0.10;          // downward arc at the run's edge, as a fraction
 // carousel strip's ends (stripAlphaAt), kept in step deliberately.
 const HAND_FADE_CARDS = 0.7;
 
+/** A phone-sized viewport (mobile plan §M2). Mirrors COMPACT_QUERY in
+ *  chrome/compact.ts — the canvas fills the window, so the viewport the layout
+ *  sees *is* the one the CSS media query tests, and the felt math and the DOM
+ *  chrome flip to their compact forms together. */
+export const COMPACT_MAX_W = 900;
+export const COMPACT_MAX_H = 500;
+export function isCompactViewport(viewport: Size): boolean {
+  return viewport.w <= COMPACT_MAX_W || viewport.h <= COMPACT_MAX_H;
+}
+
 /** Height of the bottom band reserved for the hand. The camera fits the world
  *  into the viewport *above* this band, so every seat stays clear of the hand
  *  (design §13 exit criterion). Shared with the camera's safe area. */
 export function handBandHeight(viewport: Size): number {
-  return Math.max(150, Math.min(300, Math.round(viewport.h * 0.22)));
+  // The 150px floor is a desktop floor: on a 390px-tall landscape phone it ate
+  // 40% of the screen. Below ~600px tall it relaxes to a quarter of the height
+  // (≈98px at 390) — cards stay readable through the inspect sheet (mobile §M2).
+  // Continuous at the seam (0.25 × 600 = 150), so desktop sizes are unchanged.
+  const floor = Math.min(150, viewport.h * 0.25);
+  return Math.round(Math.max(floor, Math.min(300, viewport.h * 0.22)));
 }
 
 /** The hand fan + the stack pile, in screen (CSS-pixel) coordinates. `rightInset`
@@ -220,15 +235,21 @@ export function stackEffectText(item: StackItem): { label: string; lines: string
 }
 
 const STACK_MARGIN = 30;             // right edge → front card
+const STACK_MARGIN_COMPACT = 12;     // a phone has no pixels to spare at the edge
 const STACK_SLIVER = 0.15;           // fraction of a card width each buried item shows
 const STACK_SPAN_CARDS = 1;          // widest the fan ever spreads, in front-card widths
 const STACK_DEPTH_CAP = 8;           // buried-item falloff saturates here (deep stacks)
 
 /** Height of the stack's front card: a constant third of the viewport height, so
- *  the top of the stack reads at the same commanding size on every display. */
+ *  the top of the stack reads at the same commanding size on every display —
+ *  bounded by a quarter of the *width* too, which only bites on a tall-narrow
+ *  screen (w < 1.32·h, i.e. a portrait phone), where a third of the height was a
+ *  card so wide its gutter left the felt ~70px (mobile §M2). */
 function stackFrontHeight(viewport: Size): number {
-  return Math.round(viewport.h * 0.33);
+  return Math.round(Math.min(viewport.h * 0.33, viewport.w * 0.25));
 }
+const stackMargin = (viewport: Size): number =>
+  isCompactViewport(viewport) ? STACK_MARGIN_COMPACT : STACK_MARGIN;
 
 interface StackGeom { frontX: number; frontY: number; scale: number; cardW: number; step: number }
 
@@ -239,7 +260,7 @@ function stackGeometry(viewport: Size, rightInset: number, n: number): StackGeom
   const scale = frontH / CARD_TEX.h;
   const cardW = CARD_TEX.w * scale;
   const rightEdge = viewport.w - Math.max(0, rightInset);
-  const frontX = rightEdge - STACK_MARGIN - cardW / 2;
+  const frontX = rightEdge - stackMargin(viewport) - cardW / 2;
   // Centre the pile vertically in the play area (clear of the hand band below).
   const frontY = (viewport.h - handBandHeight(viewport)) / 2;
   // The fan steps left by a sliver per buried item, but never past its own strip:
@@ -249,7 +270,7 @@ function stackGeometry(viewport: Size, rightInset: number, n: number): StackGeom
   // ~seven items the slivers compress instead — depth still reads as "more of
   // them", which is all a buried sliver ever said.
   const baseStep = cardW * STACK_SLIVER;
-  const maxSpan = Math.min(cardW * STACK_SPAN_CARDS, rightEdge - cardW - STACK_MARGIN);
+  const maxSpan = Math.min(cardW * STACK_SPAN_CARDS, rightEdge - cardW - stackMargin(viewport));
   const step = Math.min(baseStep, maxSpan / Math.max(1, n - 1));
   return { frontX, frontY, scale, cardW, step };
 }
@@ -273,7 +294,7 @@ function stackGeometry(viewport: Size, rightInset: number, n: number): StackGeom
 export function stackGutterWidth(viewport: Size, stackSize: number): number {
   if (stackSize <= 0) return 0;
   const g = stackGeometry(viewport, 0, stackSize);
-  return g.cardW + 2 * STACK_MARGIN + (stackSize - 1) * g.step;
+  return g.cardW + 2 * stackMargin(viewport) + (stackSize - 1) * g.step;
 }
 
 /** The screen point of the top-of-stack card's centre — where a trigger ghost

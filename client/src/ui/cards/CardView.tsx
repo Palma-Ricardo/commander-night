@@ -11,6 +11,7 @@ import type { Card, Permanent } from '@night/core/protocol/protocol';
 import { affordanceFor } from '@night/core/state/selectors';
 import { answerObject, objectClick } from '../board/interact';
 import { hoverCard } from '../hover';
+import { useLongPress } from './long-press';
 import { ManaSymbols } from './ManaSymbols';
 
 export type CardSize = 'hand' | 'bf' | 'small' | 'grid' | 'preview';
@@ -65,7 +66,22 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
   if (selected) classes.push('card-selected');
   if (onClickOverride !== undefined) classes.push('hl-target');
 
+  const preview = (el: HTMLElement): void => {
+    if (redacted) return;
+    const r = el.getBoundingClientRect();
+    hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
+  };
+
+  // Touch (mobile §M3): holding a card previews it and opens its menu — the
+  // phone's stand-in for hover + right-click, so mana-only abilities are
+  // reachable. The click that ends the hold is swallowed, never a cast.
+  const longPress = useLongPress(el => {
+    preview(el);
+    if (aff?.kind === 'manaOnly' || aff?.kind === 'action') setMenuOpen(true);
+  });
+
   const handleClick = () => {
+    if (longPress.consumeClick()) return;
     if (onClickOverride !== undefined) return onClickOverride();
     if (aff === undefined || prompt.inflight) return;
     if (aff.kind === 'action' && aff.actions.filter(a => a.kind !== 'mana').length > 1) {
@@ -92,11 +108,14 @@ export function CardView({ card, size, priority = 1, interactive = true, onClick
       data-card-name={redacted ? undefined : card.name}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
-      onMouseEnter={e => {
-        if (redacted) return;
-        const r = e.currentTarget.getBoundingClientRect();
-        hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
-      }}
+      // A real mouse only: a phone fakes pointer/mouse enter on every tap, which
+      // popped a preview over the board each time you played a card. Touch
+      // previews by long-press instead (above).
+      onPointerEnter={e => { if (e.pointerType === 'mouse') preview(e.currentTarget); }}
+      onPointerDown={longPress.onPointerDown}
+      onPointerMove={longPress.onPointerMove}
+      onPointerUp={longPress.onPointerUp}
+      onPointerCancel={longPress.onPointerCancel}
       onMouseLeave={() => { hoverCard(undefined); setMenuOpen(false); }}
       role={aff !== undefined || onClickOverride !== undefined ? 'button' : undefined}
     >

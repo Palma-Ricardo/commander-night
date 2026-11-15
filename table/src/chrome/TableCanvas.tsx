@@ -20,6 +20,7 @@ import { toggleBrowse } from '../scene/carousel-store';
 import { objectClick } from './interact';
 import { hoverCard, hideHover, hoverStore, zoomPreview } from './hover';
 import { setCameraHud } from './camera-store';
+import { closeInspect, inspectCard } from './inspect-store';
 
 export function TableCanvas(): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -48,6 +49,10 @@ export function TableCanvas(): React.JSX.Element {
       // A graveyard/exile pile click (top card or bare footprint) toggles the
       // §4.4 browse fan on that pile.
       scene.onPileOpen = (playerId, zone) => toggleBrowse({ playerId, zone });
+
+      // Touch tap / long-press / right-click opens the inspect sheet (mobile plan
+      // §3) — the phone's way to read a card and its deliberate Cast step.
+      scene.onInspect = (id, card) => inspectCard(id, card);
 
       // Hover previews any face-up card, anchored beside the live actor (§9/§10).
       // The scene decides *when* to dismiss (it tracks the pointer against the card
@@ -95,6 +100,7 @@ export function TableCanvas(): React.JSX.Element {
 
     return () => {
       disposed = true;
+      closeInspect();
       for (const u of unsubs) u();
       observer?.disconnect();
       scene.destroy();

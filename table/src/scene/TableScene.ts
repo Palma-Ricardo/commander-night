@@ -38,6 +38,7 @@ import {
   camera, worldToScreen, screenToWorld, depthScaleAt, type CameraPreset, type CameraView,
 } from '../camera/camera';
 import { Director, type DirectorSink } from './Director';
+import { classifyPress, isTouchPointer, type PressVerdict } from './gesture';
 import { layoutKeyed, type StackLinks } from './keys';
 import { CAST_THRESHOLD, DRAG_HOME_MS, DRAG_SLOP_PX, PAGE_TURN_MS } from '../tuning';
 import { handFanAlphaAt, layoutHandFan, stackAnchor, type HandFan } from '../layout/screen';
@@ -313,6 +314,14 @@ export class TableScene implements DirectorSink {
    *  pointer, so down and up land on the same object) — the release handler
    *  raises this so handleActorTap ignores exactly that one tap. */
   private dragSwallowsTap = false;
+  /** The live press on a card, for the touch gestures (gesture.ts): long-press
+   *  to inspect, a sideways swipe to push the hand fan / carousel strip. Tracked
+   *  for every press; only a touch press ever leaves `pending` without dragging. */
+  private press?: {
+    key: string; objectId: Id; carousel: boolean; touch: boolean; scrollable: boolean;
+    startX: number; startY: number; t0: number; lastX: number; rowStart: number;
+    verdict: PressVerdict;
+  };
   /** True while the pending prompt targets a stack item (counter/copy/redirect):
    *  the pile un-fans into a clickable row so buried candidates are reachable (§7 T4). */
   private spreadStack = false;
@@ -331,6 +340,10 @@ export class TableScene implements DirectorSink {
    *  chooseTargets is already pending, else the buffered intent. */
   onPointTarget?: (objectId: Id) => void;
   onObjectHover?: (objectId: Id | undefined, anchor?: ScreenAnchor) => void;
+  /** Open the inspect sheet on a card (mobile plan §3): a touch tap on a card
+   *  whose tap would otherwise do nothing (or deliberately does nothing — a
+   *  playable hand card), a long-press on any card, or a desktop right-click. */
+  onInspect?: (objectId: Id, card?: Card) => void;
   /** A click on a graveyard/exile pile (its top card or its footprint) that no
    *  prompt affordance consumed — the chrome wires this to the §4.4 browse fan. */
   onPileOpen?: (playerId: Id, zone: BrowseZone) => void;
@@ -354,7 +367,9 @@ export class TableScene implements DirectorSink {
     this.app = new Application();
     await this.app.init({
       background: ROOM, antialias: true, resizeTo: parent,
-      resolution: window.devicePixelRatio || 1, autoDensity: true,
+      // Capped at 2×: phones report 3×, which nearly doubles the fill cost of an
+      // already-heavy perspective scene for a difference no one sees at arm's length.
+      resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true,
     });
     parent.appendChild(this.app.canvas);
     this.textures = new CardTextures(this.app.renderer, resolver);
@@ -422,8 +437,17 @@ export class TableScene implements DirectorSink {
     const onLeave = (): void => { this.pointer = undefined; };
     // The drag release listens on window, not the canvas — a card dragged past
     // the viewport edge must still cast or come home, never strand mid-air.
-    const onUp = (e: PointerEvent): void => this.endDrag(e);
-    const onCancel = (): void => this.cancelDrag();
+    // A lifted finger has no position: forget it, so the per-frame hover authority
+    // can never hold a lift or preview over the spot it left.
+    const onUp = (e: PointerEvent): void => {
+      this.endDrag(e);
+      this.press = undefined;
+      if (isTouchPointer(e.pointerType)) this.pointer = undefined;
+    };
+    const onCancel = (): void => { this.cancelDrag(); this.press = undefined; };
+    // The canvas never shows the browser's context menu: right-click inspects a
+    // card (rightclick on the actor), and a touch long-press is ours too.
+    const onContextMenu = (e: Event): void => e.preventDefault();
     // Wheel scrolls the open carousel, else the hand fan (§4.4, #8); Alt+wheel
     // zooms. Carousel closed and a hand that fits ⇒ the wheel does nothing.
     const onWheel = (e: WheelEvent): void => this.handleWheel(e);
@@ -439,6 +463,7 @@ export class TableScene implements DirectorSink {
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
     window.addEventListener('keydown', onKeyDown);
@@ -448,6 +473,7 @@ export class TableScene implements DirectorSink {
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
       window.removeEventListener('keydown', onKeyDown);
@@ -591,6 +617,7 @@ export class TableScene implements DirectorSink {
   frame(dtMs: number, preset: CameraPreset): void {
     for (const a of this.actors.values()) a.update(dtMs);
     for (const a of this.carouselActors.values()) a.update(dtMs);
+    this.updatePress();  // touch long-press / swipe verdicts, before the drag pin can claim the move
     this.updateDrag();   // the drag pin wins over any tween this frame (§9 drag-to-cast)
     this.advanceTimers(dtMs);
     this.effects.update(dtMs);
@@ -1098,10 +1125,11 @@ export class TableScene implements DirectorSink {
     // Every actor is hit-testable (§10: Pixi owns the table). Clicks route through
     // the pending prompt's affordance; hover previews any face-up card.
     actor.view.eventMode = 'static';
-    actor.view.on('pointerdown', () => this.maybeBeginDrag(actor));
-    actor.view.on('pointertap', () => this.handleActorTap(actor));
-    actor.view.on('pointerover', () => this.handleActorOver(actor));
+    actor.view.on('pointerdown', (e: FederatedPointerEvent) => this.handleActorDown(actor, e, false));
+    actor.view.on('pointertap', (e: FederatedPointerEvent) => this.handleActorTap(actor, e));
+    actor.view.on('pointerover', (e: FederatedPointerEvent) => this.handleActorOver(actor, e));
     actor.view.on('pointerout', () => this.handleActorOut(actor));
+    actor.view.on('rightclick', () => this.inspectActor(actor));
     return actor;
   }
 
@@ -1260,9 +1288,10 @@ export class TableScene implements DirectorSink {
     }
   }
 
-  private handleActorTap(actor: CardActor): void {
+  private handleActorTap(actor: CardActor, e: FederatedPointerEvent): void {
     if (this.dragSwallowsTap) { this.dragSwallowsTap = false; return; }
     if (actor.objectId === undefined) return;
+    const touch = isTouchPointer(e.pointerType);
     const zone = actor.placement.zone;
     const aff = this.currentPrompt !== undefined
       ? affordanceFor(this.currentPrompt, actor.objectId) : undefined;
@@ -1288,11 +1317,18 @@ export class TableScene implements DirectorSink {
     // onto the board past CAST_THRESHOLD, §9 — the same drag now lifts the
     // commander out of the command zone). A tap still answers everything else the
     // card can be — a discard pick's target, a payMana source.
+    //
+    // On touch there is no drag-free way to read a card first, so that same tap
+    // opens the inspect sheet instead: the card, big, with an explicit Cast button
+    // — still two deliberate steps, so #10's stray-cast guarantee holds (mobile
+    // plan §3). A touch tap on a card with no click meaning inspects it too.
     if (aff?.kind === 'action'
       && ((zone === 'hand' && actor.space === 'screen')
         || (zone === 'command' && actor.space === 'world'))) {
+      if (touch) this.inspectActor(actor);
       return;
     }
+    if (touch && !isClickable(aff)) { this.inspectActor(actor); return; }
     this.onObjectClick?.(actor.objectId);
   }
 
@@ -1390,12 +1426,15 @@ export class TableScene implements DirectorSink {
     const actor = new CardActor(key, e.id, this.textures.face(card, 'table', 0));
     actor.card = card;
     actor.space = 'screen';
-    // Tap + hover only — no pointerdown, so a carousel card can never arm a
-    // drag (it answers by click; §4.2 point drags belong to the felt).
+    // A carousel card can never arm a drag (it answers by click; §4.2 point drags
+    // belong to the felt) — its press is tracked only for the touch gestures
+    // (long-press to inspect, swipe to push the strip).
     actor.view.eventMode = 'static';
-    actor.view.on('pointertap', () => this.handleActorTap(actor));
-    actor.view.on('pointerover', () => this.handleActorOver(actor));
+    actor.view.on('pointerdown', (e: FederatedPointerEvent) => this.handleActorDown(actor, e, true));
+    actor.view.on('pointertap', (e: FederatedPointerEvent) => this.handleActorTap(actor, e));
+    actor.view.on('pointerover', (e: FederatedPointerEvent) => this.handleActorOver(actor, e));
     actor.view.on('pointerout', () => this.handleActorOut(actor));
+    actor.view.on('rightclick', () => this.inspectActor(actor));
     return actor;
   }
 
@@ -1454,6 +1493,79 @@ export class TableScene implements DirectorSink {
     if (this.scrollHandBy(delta)) e.preventDefault();
   }
 
+  // ── touch gestures (mobile plan §1–§2) ───────────────────────────────────────
+
+  /** A press on any card. Records the pointer from the press itself — a finger
+   *  delivers no pointermove before pointerdown, so the canvas-move tracker alone
+   *  left `pointer` unset and no drag could ever arm on touch — then tracks the
+   *  press for the touch gestures and arms the board drags (felt actors only). */
+  private handleActorDown(actor: CardActor, e: FederatedPointerEvent, carousel: boolean): void {
+    this.dragSwallowsTap = false;   // a fresh press always clears a stale swallow
+    this.pointer = { x: e.global.x, y: e.global.y };
+    this.press = undefined;
+    if (e.button !== 0 || actor.objectId === undefined) return;   // right button: rightclick inspects
+    const touch = isTouchPointer(e.pointerType);
+    const inHand = actor.space === 'screen' && actor.placement.zone === 'hand';
+    this.press = {
+      key: actor.key, objectId: actor.objectId, carousel, touch,
+      scrollable: carousel || inHand,
+      startX: e.global.x, startY: e.global.y, t0: performance.now(), lastX: e.global.x,
+      rowStart: this.handOffsetNow(), verdict: 'pending',
+    };
+    if (!carousel) this.maybeBeginDrag(actor);
+  }
+
+  /** Per-frame press verdict (gesture.ts), run before updateDrag so a sideways
+   *  swipe on the hand is claimed as a scroll before the cast lift can take it. */
+  private updatePress(): void {
+    const pr = this.press;
+    const p = this.pointer;
+    if (pr === undefined || p === undefined) return;
+    if (pr.verdict === 'hScroll') { this.scrollRow(pr, p.x); return; }
+    if (pr.verdict !== 'pending') return;
+    pr.verdict = classifyPress({
+      dx: p.x - pr.startX, dy: p.y - pr.startY, elapsedMs: performance.now() - pr.t0,
+      touch: pr.touch, scrollable: pr.scrollable, slop: DRAG_SLOP_PX,
+    });
+    if (pr.verdict === 'longPress' || pr.verdict === 'hScroll') {
+      // Either way the press is no longer a tap and no longer a drag candidate.
+      if (this.drag !== undefined && !this.drag.moved) this.drag = undefined;
+      this.dragSwallowsTap = true;
+    }
+    if (pr.verdict === 'longPress') {
+      const actor = this.actors.get(pr.key) ?? this.carouselActors.get(pr.key);
+      if (actor !== undefined) this.inspectActor(actor);
+    } else if (pr.verdict === 'hScroll') {
+      this.scrollRow(pr, p.x);
+    }
+  }
+
+  /** Push the hand fan / carousel strip with the finger: the row follows the
+   *  pointer's x travel, clamped exactly as the wheel's scroll is. */
+  private scrollRow(pr: NonNullable<TableScene['press']>, x: number): void {
+    if (pr.carousel) {
+      const content = this.carouselContentNow();
+      if (content !== undefined) {
+        const strip = layoutCarouselStrip(
+          content.entries.length, offsetFor(content.key), this.size, this.rightInset);
+        scrollCarousel(content.key, pr.lastX - x, strip.maxOffset);
+      }
+    } else {
+      const n = this.director?.presented?.me.hand.length ?? 0;
+      const fan = layoutHandFan(n, this.handOffsetNow(), this.size, this.rightInset);
+      setHandOffset(Math.min(Math.max(0, pr.rowStart + (pr.startX - x)), fan.maxOffset));
+    }
+    pr.lastX = x;
+  }
+
+  /** Open the inspect sheet on a face-up card (long-press, touch tap, right-click). */
+  private inspectActor(actor: CardActor): void {
+    if (actor.objectId === undefined || !actor.placement.faceUp) return;
+    this.hidePreview();
+    this.lowerHand();
+    this.onInspect?.(actor.objectId, actor.card);
+  }
+
   // ── drag-to-cast (prompts-on-the-table §9) ───────────────────────────────────
 
   /** A press arms a drag when the subject supports one. Arming is not dragging:
@@ -1470,7 +1582,6 @@ export class TableScene implements DirectorSink {
    *     never a click target either), and target/source affordances on hand
    *     cards keep their click-select meaning. */
   private maybeBeginDrag(actor: CardActor): void {
-    this.dragSwallowsTap = false;   // a fresh press always clears a stale swallow
     const prompt = this.currentPrompt;
     if (this.pointer === undefined || prompt === undefined || prompt.inflight) return;
     if (actor.objectId === undefined) return;
@@ -1633,7 +1744,11 @@ export class TableScene implements DirectorSink {
     return anyHit;
   }
 
-  private handleActorOver(actor: CardActor): void {
+  private handleActorOver(actor: CardActor, e: FederatedPointerEvent): void {
+    // A finger "hovers" only by pressing (touch fires pointerover on contact), so
+    // the hover lift and Alt preview are mouse-only; touch reads through the
+    // inspect sheet (long-press / tap) instead.
+    if (isTouchPointer(e.pointerType)) return;
     if (this.drag?.moved === true) return;   // a dragged card crossing others pops nothing
     if (actor.objectId === undefined || !actor.placement.faceUp) return;
     // Hand cards read via the in-place raise (§9) — no corner preview, and no Alt:
@@ -2315,9 +2430,12 @@ export class TableScene implements DirectorSink {
   scene(): NightScene {
     const actors: SceneActor[] = [];
     for (const a of this.actors.values()) {
+      const b = a.bounds();
+      const screen = { left: b.left, top: b.top, width: b.width, height: b.height };
       actors.push({
         key: a.key, objectId: a.objectId, zone: a.placement.zone, ownerId: a.placement.ownerId,
         x: a.pos.x, y: a.pos.y, faceUp: a.placement.faceUp, animating: a.animating,
+        screen,
       });
     }
     const view = this.director?.cameraView() ?? { kind: 'table' as const };

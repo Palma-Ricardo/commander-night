@@ -696,3 +696,89 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .stranded-targets { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
 .stranded-target { font-size: 0.8rem; padding: 0.25rem 0.6rem; }
 .stranded-target.card-selected { border-color: var(--accent); color: var(--accent); }
+
+/* ══ mobile / small screens (mobile plan §M3) ═══════════════════════════════
+   Same "the dock and the hand are never below the fold" contract as desktop
+   (the C5 pinned layout): the card regions still scroll internally. What changes
+   is what gets the width — the log becomes a drawer, opponents swipe sideways,
+   cards shrink, the hand scrolls. */
+
+.log-toggle { display: none; }
+.log-drawer { display: contents; }
+
+/* Long-pressing a card is ours (preview + menu), not the OS image callout. */
+.card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* The hover zoom is a mouse affordance: a tap would leave a hand card blown up. */
+@media (hover: none) {
+  .hand-slot:hover { transform: none !important; }
+}
+
+@media (max-width: 900px), (max-height: 500px) {
+  :root { --card-unit: clamp(3.6rem, min(15vw, 13vh), 5.6rem); }
+
+  .app { padding: 0.75rem; }
+  .app-game {
+    height: 100dvh; padding: max(0.3rem, env(safe-area-inset-top)) max(0.4rem, env(safe-area-inset-right))
+      max(0.3rem, env(safe-area-inset-bottom)) max(0.4rem, env(safe-area-inset-left));
+  }
+  .app-game .app-header { padding-bottom: 0.2rem; gap: 0.6rem; padding-right: 7rem; }
+  .app-game .app-header h1 { font-size: 0.85rem; }
+  .app-game .status { font-size: 0.75rem; }
+
+  .game { grid-template-columns: minmax(0, 1fr); padding-top: 0.3rem; gap: 0.4rem; }
+  .board { gap: 0.35rem; }
+
+  /* The log/chat drawer, over the board from the right. */
+  .log-toggle {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    position: fixed; z-index: 95; top: max(0.3rem, env(safe-area-inset-top)); right: max(0.4rem, env(safe-area-inset-right));
+    font-size: 0.8rem; padding: 0.35rem 0.7rem; min-height: 36px;
+  }
+  .log-drawer { display: none; }
+  .log-drawer-open {
+    display: flex; position: fixed; z-index: 90; top: 0; right: 0; bottom: 0;
+    width: min(24rem, 90vw); padding: 2.8rem 0.4rem max(0.4rem, env(safe-area-inset-bottom));
+    background: var(--bg); border-left: 1px solid var(--border); box-shadow: -10px 0 30px #000a;
+  }
+  .log-drawer-open .log-panel { flex: 1; }
+
+  /* Opponents: a sideways swipe, one seat (and a peek of the next) at a time. */
+  .opponents {
+    flex: 1 1 auto; min-height: 6.5rem;
+    overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  }
+  .opponent { flex: 0 0 min(85%, 30rem); scroll-snap-align: start; }
+  .my-area { min-height: 5rem; }
+  .battlefield-mine { min-height: 4rem; padding: 0.3rem; }
+
+  .control-bar { gap: 0.4rem; flex-wrap: wrap; }
+  .control-bar .status-line { font-size: 0.78rem; }
+  .prompt-dock { padding: 0.35rem 0.5rem; gap: 0.4rem; }
+  .prompt-dock button, .control-bar button { min-height: 40px; }
+  .dock-msg { font-size: 0.85rem; }
+  .dock-list-col { max-height: 9rem; }
+
+  /* The hand scrolls sideways instead of overflowing off both edges. */
+  .hand { justify-content: flex-start; overflow-x: auto; overflow-y: hidden; padding: 0.2rem 0.4rem; scroll-snap-type: x proximity; }
+  .hand-slot { scroll-snap-align: start; }
+  .hand-slot:first-child { margin-left: auto; }
+  .hand-slot:last-child { margin-right: auto; }
+
+  .stack-panel { max-height: 22dvh; }
+  .stack-item { flex-basis: 14rem; }
+  .reveal-panels { top: 2.5rem; max-width: 96vw; }
+  .reveal-cards { max-width: 92vw; }
+  .modal { max-width: 96vw; max-height: 90dvh; padding: 0.6rem; }
+  .card-menu { min-width: 10rem; max-width: 80vw; }
+  .card-menu button { min-height: 40px; }
+  .menu-pop { max-width: 90vw; }
+  .hover-preview { width: min(15rem, 55vw); }
+}
+
+/* Landscape phone: height is the scarce axis — opponents and my board split it. */
+@media (max-height: 500px) {
+  .opponents { min-height: 5rem; }
+  .opponent { flex-basis: min(48%, 26rem); }
+  .my-area { min-height: 4rem; }
+}

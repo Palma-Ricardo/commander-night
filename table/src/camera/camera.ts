@@ -25,7 +25,7 @@
 // PerspectiveMesh from its four projected corners, so cards keystone with the felt.
 
 import type { Point, Rect, Size } from '../layout/types';
-import { handBandHeight } from '../layout/screen';
+import { handBandHeight, isCompactViewport } from '../layout/screen';
 import { WORLD } from '../layout/world';
 
 export type CameraView = { kind: 'table' } | { kind: 'seat'; seat: number };
@@ -49,6 +49,11 @@ const SAFE_MARGIN = 16;          // inset from the window edges
 // those views (see camera()); the whole-table view and the left seats keep the
 // full felt width, where the compass merely clips an empty far corner.
 export const HUD_RIGHT_OVERHANG = 180;  // compass width + its margin + a small gap
+// On a phone the compass folds to one small button (mobile §M2), so a right seat
+// only has to clear that — reserving the desktop 180px on an 844px screen threw
+// away a fifth of the felt, and on a 390px portrait screen all of it.
+export const HUD_RIGHT_OVERHANG_COMPACT = 56;
+const SAFE_MARGIN_COMPACT = 6;
 const TABLE_FILL = 0.98;         // whole-table zoom leaves a thin rail
 const SEAT_FILL = 0.98;
 // How far a seat view reaches past the felt centre (world px). The framing is
@@ -124,11 +129,12 @@ function warpedBounds(rect: Rect, tilt: number): Rect {
  *  and the log side by side); a collapsed log reports 0 and the felt spreads back. */
 export function safeArea(viewport: Size, rightInset = 0): Rect {
   const band = handBandHeight(viewport);
+  const m = isCompactViewport(viewport) ? SAFE_MARGIN_COMPACT : SAFE_MARGIN;
   return {
-    x: SAFE_MARGIN,
-    y: SAFE_MARGIN,
-    w: Math.max(1, viewport.w - 2 * SAFE_MARGIN - Math.max(0, rightInset)),
-    h: Math.max(1, viewport.h - band - SAFE_MARGIN),
+    x: m,
+    y: m,
+    w: Math.max(1, viewport.w - 2 * m - Math.max(0, rightInset)),
+    h: Math.max(1, viewport.h - band - m),
   };
 }
 
@@ -174,7 +180,8 @@ export function camera(view: CameraView, viewport: Size, rightInset = 0): Camera
   // Reserve the compass overhang only for a right-column seat, whose pile column
   // runs under it; the whole-table view and left seats keep the full felt width.
   const clearCompass = view.kind === 'seat' && !seatCorner(view.seat).left;
-  const area = safeArea(viewport, rightInset + (clearCompass ? HUD_RIGHT_OVERHANG : 0));
+  const overhang = isCompactViewport(viewport) ? HUD_RIGHT_OVERHANG_COMPACT : HUD_RIGHT_OVERHANG;
+  const area = safeArea(viewport, rightInset + (clearCompass ? overhang : 0));
   if (view.kind === 'table') {
     // Whole world, warped, centred in the safe area.
     const b = warpedBounds({ x: 0, y: 0, w: WORLD.w, h: WORLD.h }, TILT_TABLE);

@@ -51,18 +51,22 @@ function Panel({ p, busy }: { p: DistributePrompt; busy: boolean }) {
     <div className={`distribute-panel${busy ? ' dock-busy' : ''}`}>
       <div className="distribute-chips">
         {p.among.map((row, i) => (
-          <button
-            key={row.id}
-            className="distribute-chip"
-            data-row={row.id}
-            disabled={busy}
-            title="click +1 · right-click −1"
-            onClick={() => bump(i, 1)}
-            onContextMenu={(e: ReactMouseEvent) => { e.preventDefault(); bump(i, -1); }}
-          >
-            <span className="chip-label">{row.label}</span>
-            <b className="chip-count">{amounts[i]}</b>
-          </button>
+          <span key={row.id} className="distribute-row">
+            <button
+              className="distribute-chip"
+              data-row={row.id}
+              disabled={busy}
+              title="click +1 · right-click −1"
+              onClick={() => bump(i, 1)}
+              onContextMenu={(e: ReactMouseEvent) => { e.preventDefault(); bump(i, -1); }}
+            >
+              <span className="chip-label">{row.label}</span>
+              <b className="chip-count">{amounts[i]}</b>
+            </button>
+            {/* Touch has no right button: a visible −1 (mobile §4). */}
+            <button className="distribute-minus" disabled={busy} aria-label={`${row.label} −1`}
+              onClick={() => bump(i, -1)}>−</button>
+          </span>
         ))}
       </div>
       <p className={valid ? 'muted' : 'error'}>

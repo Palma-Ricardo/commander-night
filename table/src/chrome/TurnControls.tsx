@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { appActions, appStores } from '../app';
 import type { GameState } from '@night/core/protocol/protocol';
+import { useCompact } from './compact';
 
 type SkipMode = NonNullable<GameState['me']['skip']>;
 
@@ -39,8 +40,8 @@ function MenuButton({ label, className, menu, testId }: {
     const onDown = (e: MouseEvent) => {
       if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
 
   return (
@@ -55,17 +56,37 @@ export function TurnControls() {
   const state = useStore(appStores.game, s => s.state);
   const over = useStore(appStores.game, s => s.over !== undefined);
   const autoMana = useStore(appStores.game, s => s.autoMana);
+  const compact = useCompact();
   if (state === undefined || over) return null;
 
   const active = state.me.skip;
   const send = (p: Promise<void>) => void p.catch(e => console.warn('[action]', e));
+
+  const tableItems = (
+    <>
+      {state.rollbackTurnsAllowed && (
+        <>
+          <button data-table="rollback-0" onClick={() => send(appActions.requestRollback(0))}>
+            Rollback: restart this turn
+          </button>
+          <button data-table="rollback-1" onClick={() => send(appActions.requestRollback(1))}>
+            Rollback: to previous turn
+          </button>
+        </>
+      )}
+      <button data-table="trigger-reset" onClick={() => send(appActions.resetTriggerOrder())}>
+        Reset trigger ordering
+      </button>
+      <FullscreenItem />
+    </>
+  );
 
   return (
     <span className="turn-controls">
       <MenuButton
         testId="skip-menu"
         className={active !== undefined ? 'skip-active' : undefined}
-        label={active !== undefined ? `Skipping ${SKIP_LABEL[active]}` : 'Skip'}
+        label={active !== undefined ? (compact ? 'Skipping' : `Skipping ${SKIP_LABEL[active]}`) : 'Skip'}
         menu={
           <>
             {SKIP_ITEMS.map(item => (
@@ -85,30 +106,28 @@ export function TurnControls() {
         }
       />
 
-      <label className="auto-mana" title="let the server pay costs from obvious sources (§9)">
-        <input type="checkbox" checked={autoMana}
-          onChange={() => send(appActions.setAutoMana(!autoMana))} />
-        auto-mana
-      </label>
+      {/* A phone folds auto-mana into the Table menu (mobile §M2): the corner
+          row has to fit beside the hand. */}
+      {!compact && (
+        <label className="auto-mana" title="let the server pay costs from obvious sources (§9)">
+          <input type="checkbox" checked={autoMana}
+            onChange={() => send(appActions.setAutoMana(!autoMana))} />
+          auto-mana
+        </label>
+      )}
 
       <MenuButton
         testId="table-menu"
-        label="Table"
+        label={compact ? '☰' : 'Table'}
         menu={
           <>
-            {state.rollbackTurnsAllowed && (
-              <>
-                <button data-table="rollback-0" onClick={() => send(appActions.requestRollback(0))}>
-                  Rollback: restart this turn
-                </button>
-                <button data-table="rollback-1" onClick={() => send(appActions.requestRollback(1))}>
-                  Rollback: to previous turn
-                </button>
-              </>
+            {compact && (
+              <button data-table="auto-mana" className={autoMana ? 'menu-on' : undefined}
+                onClick={() => send(appActions.setAutoMana(!autoMana))}>
+                {autoMana ? '✓ ' : ''}Auto-mana
+              </button>
             )}
-            <button data-table="trigger-reset" onClick={() => send(appActions.resetTriggerOrder())}>
-              Reset trigger ordering
-            </button>
+            {tableItems}
           </>
         }
       />
@@ -116,6 +135,19 @@ export function TurnControls() {
       <ConcedeControl />
     </span>
   );
+}
+
+/** Fullscreen (mobile §M2): on a phone the browser's URL bar eats a fifth of a
+ *  landscape screen. Hidden where the API is missing (iPhone Safari — there, Add
+ *  to Home Screen opens the table fullscreen via the web manifest instead). */
+function FullscreenItem() {
+  if (typeof document === 'undefined' || document.fullscreenEnabled !== true) return null;
+  const on = document.fullscreenElement !== null;
+  const toggle = (): void => {
+    const p = on ? document.exitFullscreen() : document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    void p.catch(e => console.warn('[fullscreen]', e));
+  };
+  return <button data-table="fullscreen" onClick={toggle}>{on ? 'Exit fullscreen' : 'Fullscreen'}</button>;
 }
 
 /** Concede is irreversible → type-to-confirm (§7), in a corner pop-panel
@@ -133,8 +165,8 @@ function ConcedeControl() {
     const onDown = (e: MouseEvent) => {
       if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
 
   return (

@@ -11,6 +11,8 @@ import type { GameState, LogEntry } from '@night/core/protocol/protocol';
 import { findObject, playerName, rematchCode } from '@night/core/state/selectors';
 import { getActiveScene } from '../scene/TableScene';
 import { hoverCard, hideHover } from './hover';
+import { inspectCard } from './inspect-store';
+import { isCompact, useCompact } from './compact';
 import { ManaText } from './ManaSymbols';
 
 const COLLAPSE_KEY = 'night.table.logCollapsed';
@@ -22,13 +24,17 @@ export function LogPanel({ state }: { state: GameState }) {
   const entries = useStore(appStores.log, s => s.entries);
   const unread = useStore(appStores.log, s => s.unreadChat);
   const [tab, setTab] = useState<'log' | 'chat'>('log');
-  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const compact = useCompact();
+  // A phone always opens the game with the log folded — it would cover a third of
+  // the felt — whatever the desktop preference says (mobile §M2).
+  const [collapsed, setCollapsed] = useState(() => isCompact() || readCollapsed());
   const listRef = useRef<HTMLOListElement>(null);
   const asideRef = useRef<HTMLElement>(null);
   const stickBottom = useRef(true);
 
   const setCollapsedPersist = (v: boolean): void => {
     setCollapsed(v);
+    if (isCompact()) return;   // a phone's open/close is momentary, not a preference
     try { localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0'); } catch { /* private mode */ }
   };
 
@@ -38,19 +44,23 @@ export function LogPanel({ state }: { state: GameState }) {
   // slim reopen tab). setLogInset is the *camera* gutter, framing the felt clear
   // of the open panel — 0 when collapsed, so the felt spreads back under the thin
   // tab. Re-measured on resize; retries for the async scene mount.
+  //
+  // Compact (phone): the open log is an *overlay drawer*, not a rail — it reserves
+  // nothing, so the felt and the chrome stay where they are underneath it and
+  // nothing re-frames when you peek at the log (mobile §M2).
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const root = document.documentElement;
     const apply = (): void => {
-      const el = collapsed ? null : asideRef.current;
+      const el = collapsed || compact ? null : asideRef.current;
       const width = el === null ? 0 : el.getBoundingClientRect().width;
-      root.style.setProperty('--rail-w', collapsed ? '2.1rem' : `${Math.round(width)}px`);
+      root.style.setProperty('--rail-w', collapsed || compact ? '2.1rem' : `${Math.round(width)}px`);
       getActiveScene()?.setLogInset(el === null ? 0 : Math.max(0, window.innerWidth - el.getBoundingClientRect().left));
     };
     let raf = 0;
     const tick = (): void => {
       apply();
-      if (!collapsed && getActiveScene() === null) raf = requestAnimationFrame(tick);
+      if (!collapsed && !compact && getActiveScene() === null) raf = requestAnimationFrame(tick);
     };
     tick();
     window.addEventListener('resize', apply);
@@ -60,7 +70,7 @@ export function LogPanel({ state }: { state: GameState }) {
       root.style.setProperty('--rail-w', '0px');
       getActiveScene()?.setLogInset(0);
     };
-  }, [collapsed]);
+  }, [collapsed, compact]);
 
   const shown = tab === 'log' ? entries : entries.filter(e => e.kind === 'chat');
 
@@ -179,6 +189,8 @@ function LogText({ entry, state }: { entry: LogEntry; state: GameState }) {
           hoverCard(card, { left: r.left, top: r.top, width: r.width, height: r.height });
         } : undefined}
         onMouseLeave={card !== undefined ? () => hideHover('dom') : undefined}
+        // A tap has no hover: open the card in the inspect sheet instead (mobile §4).
+        onClick={card !== undefined ? () => { hideHover('dom'); inspectCard(card.id, card); } : undefined}
       >
         {m.name}
       </span>,

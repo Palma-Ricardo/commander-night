@@ -75,6 +75,10 @@ export interface SceneActor {
   x: number;
   y: number;
   faceUp: boolean;
+  /** The card face's on-screen rect, CSS px (table client only) — `x`/`y` are
+   *  world coords for felt actors, so a touch test taps through this instead, and
+   *  can aim at the visible strip of an overlapped hand card. */
+  screen?: { left: number; top: number; width: number; height: number };
   /** the director is mid-animation on this actor (table client only). */
   animating: boolean;
 }

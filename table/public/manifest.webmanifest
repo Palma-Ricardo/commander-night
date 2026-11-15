@@ -1,0 +1,11 @@
+{
+  "name": "Commander Night",
+  "short_name": "Commander Night",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0e0b08",
+  "theme_color": "#0e0b08",
+  "icons": [{ "src": "/cardback.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

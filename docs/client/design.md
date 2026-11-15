@@ -30,7 +30,7 @@ Companion documents:
 | Navigation | **No router lib** — a screen enum (`home → lobby → game → postGame`) driven by session/lobby/game stores, plus one hash deep-link: `#/join/<CODE>` | The screens are a pipeline, not a site. The deep link is the whole invite UX: the host sends one URL and friends land in the join form with the code filled. |
 | Card images | **Scryfall** by `set`+`collectorNumber` (protocol §1: no client card DB), cached + rate-limited, always backed by a text-frame fallback (§9) | The only external dependency at runtime — and a *soft* one: every card is fully playable as text if Scryfall is down or the identity doesn't resolve. |
 | Tests | **vitest** (unit + corpus + replay) and **Playwright** against a real bridge + XMage (the client's live tier, §13) | Mirrors the bridge's tier ladder; the Playwright auto-player is the client-side twin of the bridge's live-tier auto-answering seat. |
-| Target platform | **Desktop browsers** (current Chrome/Firefox/Safari); mobile layout is v2 | Friends' night is laptops. Phone *lock/sleep* still works via resume (§5) — it's the layout that's deferred, not the reconnect. |
+| Target platform | **Desktop browsers** (current Chrome/Firefox/Safari); mobile layout is v2 — **done 2026-11-14**, see `docs/plans/2026-11-14-mobile.md` | Friends' night is laptops. Phone *lock/sleep* still works via resume (§5) — it's the layout that's deferred, not the reconnect. |
 
 ## 2. Load envelope (from bridge measurements, 2026-07-16..18)
 
@@ -400,3 +400,5 @@ design §14).
 5. **DFC both-faces preview** (protocol §16.4) — Scryfall has both faces; the state model
    sends one. Revisit when a real DFC annoys someone at the table.
 6. **Mobile layout** — v2, per §1. The protocol needs nothing new; it's purely CSS/layout work.
+   **Done 2026-11-14** (`docs/plans/2026-11-14-mobile.md` §5): compact single-column layout, log
+   drawer, swipeable opponents, long-press card menu.

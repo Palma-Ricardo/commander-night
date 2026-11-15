@@ -177,6 +177,8 @@ button.danger { background: var(--error); color: #14161a; }
 .camstate .dot { width: 6px; height: 6px; border-radius: 50%; background: #5e86a6; box-shadow: 0 0 8px #5e86a6; }
 .camstate b { color: var(--text); font-weight: 600; }
 .camstate .hint { color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 9px; }
+button.camstate { font: inherit; font-size: 11px; cursor: pointer; }
+button.camstate:hover { border-color: var(--brass); }
 
 /* ── bottom-left: floating mana pool ─────────────────────────────────────── */
 
@@ -557,6 +559,8 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 .distribute-panel.dock-busy { opacity: 0.75; }
 .distribute-panel p { margin: 0; font-size: 0.85rem; }
 .distribute-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
+.distribute-row { display: inline-flex; align-items: stretch; gap: 2px; }
+.distribute-minus { padding: 0.4rem 0.6rem; font-weight: 700; }
 .distribute-chip { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.7rem; }
 .chip-count { font-size: 1.05rem; min-width: 1.2rem; text-align: center; }
 
@@ -658,3 +662,133 @@ button.pool-spend { display: inline-flex; align-items: center; gap: 0.25rem; }
 }
 .toast-error { border-color: var(--error); }
 .toast-info { border-color: var(--accent); }
+
+/* ── inspect sheet (mobile plan §3): one card, big, with its buttons ────────── */
+
+.inspect-backdrop {
+  position: fixed; inset: 0; z-index: 210;
+  background: #000a; display: flex; align-items: center; justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+           max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.inspect-sheet {
+  display: flex; gap: 1rem; align-items: stretch;
+  max-width: min(46rem, 100%); max-height: 100%;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem;
+  box-shadow: 0 12px 40px #000c;
+}
+.inspect-card { flex: none; height: min(30rem, calc(100dvh - 48px)); aspect-ratio: 63 / 88; }
+.inspect-card > img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+.inspect-card .text-frame { width: 100%; height: 100%; font-size: 0.8rem; }
+.inspect-side { display: flex; flex-direction: column; gap: 0.5rem; min-width: 11rem; max-width: 20rem; min-height: 0; }
+.inspect-name { font-weight: 700; font-size: 1.05rem; }
+.inspect-oracle { overflow-y: auto; font-size: 0.85rem; line-height: 1.35; color: var(--text); flex: 1 1 auto; min-height: 0; }
+.inspect-oracle p { margin: 0 0 0.4rem; }
+.inspect-abilities { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: var(--muted); }
+.inspect-buttons { display: flex; flex-direction: column; gap: 0.45rem; margin-top: auto; }
+.inspect-buttons button { min-height: 44px; font-size: 1rem; }
+
+/* Portrait phones: the card on top, the buttons in a row beneath it. */
+@media (orientation: portrait) and (max-width: 700px) {
+  .inspect-sheet { flex-direction: column; align-items: center; }
+  .inspect-card { height: auto; width: min(70vw, calc((100dvh - 260px) * 63 / 88)); }
+  .inspect-side { max-width: none; width: 100%; }
+  .inspect-oracle { max-height: 6rem; }
+  .inspect-buttons { flex-direction: row; flex-wrap: wrap; }
+  .inspect-buttons button { flex: 1 1 8rem; }
+}
+
+/* ── compact: phones and small windows (mobile plan §M2) ───────────────────
+   Keep in step with COMPACT_QUERY (chrome/compact.ts) and isCompactViewport
+   (layout/screen.ts): the felt math flips at the same breakpoint. The table is
+   landscape-first, so most of this is about a ~390px-tall screen: everything
+   shrinks toward the edges, nothing reserves width, and every control keeps a
+   finger-sized target. */
+
+.compass-fold, .rotate-hint { display: none; }
+
+@media (max-width: 900px), (max-height: 500px) {
+  /* In a game the brand is noise on a phone and the bar sits on the far-left seat:
+     show it only while the connection needs attention. */
+  .table-root.in-game .table-statusbar .brand { display: none; }
+  .table-root.in-game .table-statusbar:has(.status-ready) { display: none; }
+  .table-statusbar { top: max(4px, env(safe-area-inset-top)); left: max(6px, env(safe-area-inset-left)); font-size: 0.7rem; flex-wrap: wrap; max-width: 60vw; }
+  .table-screen > * { padding: 1.5rem 0.9rem 1.5rem; }
+  .toaster { right: 0.5rem; bottom: 0.5rem; max-width: min(24rem, 90vw); }
+
+  .ribbon {
+    top: max(4px, env(safe-area-inset-top)); padding: 0.2rem 0.6rem; font-size: 0.62rem; gap: 0.35rem;
+    max-width: calc(100vw - 140px); overflow: hidden; white-space: nowrap;
+  }
+  .instruction-line {
+    top: calc(max(4px, env(safe-area-inset-top)) + 26px);
+    font-size: 0.8rem; padding: 0.3rem 0.7rem; max-width: calc(100vw - 150px);
+  }
+  .camstate { top: calc(max(4px, env(safe-area-inset-top)) + 34px); left: max(6px, env(safe-area-inset-left)); padding: 4px 8px; }
+
+  /* The folded compass: one small button; the grid unfolds on tap. */
+  .hud-topright { top: max(4px, env(safe-area-inset-top)); right: calc(var(--rail-w) + max(6px, env(safe-area-inset-right))); }
+  .compass-fold {
+    display: inline-flex; align-items: center; gap: 0.35rem; min-height: 36px; max-width: 8.5rem;
+    padding: 0.2rem 0.6rem; font-size: 0.75rem; font-weight: 600; color: var(--text);
+    background: rgba(11, 16, 13, 0.9); border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .compass-fold-icon { color: var(--brass); font-size: 1rem; }
+  .cq { min-height: 40px; }
+  .cq-all { min-height: 34px; }
+
+  /* The log is an overlay drawer, never a rail (LogPanel reserves nothing). */
+  .log-panel { width: min(22rem, 88vw); z-index: 60; padding-right: max(0.6rem, env(safe-area-inset-right)); }
+  .log-reopen { padding: 0.6rem 0.3rem; right: env(safe-area-inset-right); }
+
+  .mana-pool-window { left: max(6px, env(safe-area-inset-left)); bottom: max(6px, env(safe-area-inset-bottom)); padding: 3px 6px; }
+  .mana-pool-window h4 { display: none; }
+
+  /* The corner: compact rows that hug the bottom-right, finger-sized. */
+  .dock-corner {
+    right: calc(var(--rail-w) + max(6px, env(safe-area-inset-right)));
+    bottom: max(6px, env(safe-area-inset-bottom)); gap: 4px; max-width: min(26rem, 62vw);
+  }
+  .turn-controls { padding: 0.2rem 0.35rem; gap: 0.3rem; }
+  .turn-controls button, .concede-btn { min-height: 34px; padding: 0.2rem 0.55rem; font-size: 0.8rem; }
+  .turn-controls kbd, .corner-cluster kbd { display: none; }
+  .corner-cluster { padding: 0.3rem 0.4rem; gap: 0.35rem; }
+  .corner-cluster button { min-height: 44px; padding: 0.3rem 0.8rem; font-size: 0.9rem; }
+  .pay-panel, .request-panel { padding: 0.35rem 0.5rem; gap: 0.4rem; }
+  .pay-panel button, .request-panel button { min-height: 40px; }
+  .pay-panel.pay-anchored { max-width: min(20rem, 90vw); }
+
+  /* Menus open upward from the bottom-right corner — anchor them right so they
+     never run off the screen edge, and let them scroll on a short screen. */
+  .menu-pop { left: auto; right: 0; min-width: 12rem; max-width: 90vw; max-height: 70dvh; overflow-y: auto; }
+  .menu-pop button { min-height: 40px; font-size: 0.9rem; }
+
+  /* Centre panels: cap to the screen, scroll inside. */
+  .amount-selector button { min-width: 44px; min-height: 44px; }
+  .option-list { width: min(17.5rem, 90vw); max-height: 75dvh; }
+  .option-list button { min-height: 40px; }
+  .option-tiles { max-width: 94vw; max-height: 80dvh; overflow-y: auto; padding: 0.6rem; gap: 0.6rem; top: 40%; }
+  .option-tile { min-height: 44px; }
+  .pile-choice { max-width: 96vw; max-height: 80dvh; top: 40%; padding: 0.6rem; gap: 0.8rem; }
+  .distribute-panel { bottom: auto; top: 40%; transform: translate(-50%, -50%); max-width: 94vw; }
+  .distribute-chip, .distribute-minus { min-height: 44px; }
+  .carousel-bar { max-width: 94vw; gap: 0.4rem; padding: 0.2rem 0.6rem; }
+  .carousel-bar .pile-filter { width: 7rem; }
+  .carousel-close { min-width: 36px; min-height: 36px; }
+
+  .board-banner, .over-banner { font-size: 0.8rem; padding: 0.35rem 0.7rem; max-width: 94vw; }
+
+  /* The hover preview is a mouse affordance; on a phone the inspect sheet reads. */
+  .hover-preview { width: min(16rem, 40vw); }
+}
+
+/* Portrait phone: the rotate hint, low-centre above the hand. */
+@media (orientation: portrait) and (pointer: coarse) and (max-width: 700px) {
+  .rotate-hint {
+    display: flex; align-items: center; gap: 0.5rem;
+    position: fixed; left: 50%; top: 40%; transform: translateX(-50%); z-index: 50; width: max-content; max-width: 88vw;
+    background: color-mix(in srgb, var(--panel) 94%, #000 6%); border: 1px solid var(--brass);
+    border-radius: 10px; padding: 0.6rem 0.9rem; font-size: 0.9rem; box-shadow: 0 8px 30px #000a;
+  }
+}

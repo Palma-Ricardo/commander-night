@@ -14,12 +14,18 @@ const modalSpell = (chosen: string[]): StackItem =>
      text: ['Choose two —', '• A.', '• B.', ...chosen.map(m => `Chosen mode: ${m}`)] });
 
 describe('handBandHeight', () => {
-  it('clamps between 150 and 300 across window sizes', () => {
-    for (const vp of [...SUPPORTED_VIEWPORTS, { w: 800, h: 400 }, { w: 3840, h: 2160 }]) {
+  it('clamps between 150 and 300 across desktop window sizes', () => {
+    for (const vp of [...SUPPORTED_VIEWPORTS, { w: 3840, h: 2160 }].filter(v => v.h >= 600)) {
       const h = handBandHeight(vp);
       expect(h).toBeGreaterThanOrEqual(150);
       expect(h).toBeLessThanOrEqual(300);
     }
+  });
+
+  it('relaxes the floor on a short phone screen, continuously at the seam', () => {
+    expect(handBandHeight({ w: 844, h: 390 })).toBe(98);           // a quarter, not 150 (40%)
+    expect(handBandHeight({ w: 1000, h: 600 })).toBe(150);
+    expect(handBandHeight({ w: 1000, h: 590 })).toBeGreaterThan(145);
   });
 
   it('a tall 1440p window reserves a taller band than a 1080p one (the hand grows with room)', () => {
