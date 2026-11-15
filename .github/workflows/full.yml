@@ -59,9 +59,15 @@ jobs:
 
       - uses: ./.github/actions/xmage-server
 
+      # Coverage goals (bridge/src/test/java/night/bridge/live/Coverage.java) append
+      # rows to this table: things a random game may or may not exercise. Never failures.
       - name: mvn -Plive test
         working-directory: bridge
-        run: mvn -B -Plive test
+        run: |
+          echo '### Coverage goals' >> "$GITHUB_STEP_SUMMARY"
+          echo '| | Test | Coverage goal | Detail |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
+          mvn -B -Plive test
 
       # The live tests skip themselves (assumeTrue) when no server answers on :17171, so
       # a broken setup would otherwise pass green. Only these three skip by design: they
@@ -140,7 +146,12 @@ jobs:
       - name: playwright test ${{ matrix.spec }}
         env:
           NIGHT_CLIENT: table
-        run: npx playwright test -c e2e/playwright.config.ts ${{ matrix.spec }}
+        # Coverage goals (e2e/coverage.ts) append rows to this table; never failures.
+        run: |
+          echo '### Coverage goals: ${{ matrix.spec }}' >> "$GITHUB_STEP_SUMMARY"
+          echo '| | Test | Coverage goal | Detail |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
+          npx playwright test -c e2e/playwright.config.ts ${{ matrix.spec }}
 
       - if: failure()
         uses: actions/upload-artifact@v7

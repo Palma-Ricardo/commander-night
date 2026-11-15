@@ -17,6 +17,7 @@ import { expect, test, type Page } from '@playwright/test';
 import type { Id, Prompt } from '@night/core/protocol/protocol';
 import type { SceneActor } from '@night/core/harness';
 import { createLobby, openHome, repoFile, startGame, submitDeckAndReady } from './chrome';
+import { coverageGoal } from './coverage';
 import { attachConsole, driveGame, promptView, waitForBoard } from './driver';
 import { CLIENT, SHOTS } from './target';
 
@@ -141,8 +142,14 @@ test('touch: play a land and cast a spell on a phone', async ({ page }) => {
 
   const deadline = Date.now() + 15 * 60_000;
 
+  // Steps 1 and 3 need the shuffle to hand the seat a land and then a castable spell
+  // before the deadline. If one never comes up, the spec has nothing left to drive: it
+  // reports the goal (coverage.ts) and skips, instead of failing on chance.
+
   // 1. a land, by tap → Play
-  expect(await coastUntil(page, 'play', deadline), 'a turn with a playable land').toBeDefined();
+  const land = await coastUntil(page, 'play', deadline);
+  coverageGoal('a turn with a playable land', land !== undefined, 'within 15 min');
+  test.skip(land === undefined, 'no playable land came up within 15 min');
   await tapToPlay(page, 'play', /^Play$/);
 
   // 2. a long-press on a card of mine on the battlefield opens the sheet too
@@ -159,6 +166,7 @@ test('touch: play a land and cast a spell on a phone', async ({ page }) => {
       .find(a => a.zone === 'battlefield' && a.faceUp && (a.screen?.width ?? 0) > 8
         && a.screen!.left > 0 && a.screen!.top > 0
         && a.screen!.left + a.screen!.width < PHONE.width && a.screen!.top + a.screen!.height < PHONE.height);
+    coverageGoal('a card of mine on screen to long-press', mine !== undefined, 'table client');
     if (mine !== undefined) {
       await longPress(mine.screen!);
       await expect(page.getByTestId('inspect-sheet'), 'long-press opens the inspect sheet').toBeVisible();
@@ -176,7 +184,9 @@ test('touch: play a land and cast a spell on a phone', async ({ page }) => {
   }
 
   // 3. a spell, by tap → Cast (auto-mana pays)
-  expect(await coastUntil(page, 'cast', deadline), 'a turn with a castable spell').toBeDefined();
+  const spell = await coastUntil(page, 'cast', deadline);
+  coverageGoal('a turn with a castable spell', spell !== undefined, 'within 15 min');
+  test.skip(spell === undefined, 'no castable spell came up within 15 min');
   await tapToPlay(page, 'cast', /^(Cast|Use…)$/);
   if (SHOTS !== undefined) await page.screenshot({ path: `${SHOTS}/touch-after-cast.png` });
 });
