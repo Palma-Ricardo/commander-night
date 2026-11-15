@@ -9,8 +9,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 8 * * *'   # 08:00 UTC (02:00 US Central)
-  push:                   # TEMPORARY: validation before merge; remove before merging
-    branches: [ci-full-tier]
 
 concurrency:
   group: full-${{ github.ref }}
@@ -84,6 +82,7 @@ jobs:
         with:
           name: live-diagnostics
           if-no-files-found: ignore
+          retention-days: 14   # mostly callback taps: ~270 MB per failed live run
           path: |
             bridge/target/surefire-reports/
             bridge/logs/tap/
@@ -148,6 +147,7 @@ jobs:
         with:
           name: e2e-${{ matrix.spec }}-diagnostics
           if-no-files-found: ignore
+          retention-days: 14   # mostly callback taps: ~270 MB per failed live run
           path: |
             e2e/artifacts/
             e2e/test-results/
