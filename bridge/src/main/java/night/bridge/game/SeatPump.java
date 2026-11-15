@@ -35,6 +35,7 @@ import night.bridge.translate.PromptTranslator;
 import night.bridge.translate.RevealLatch;
 import night.bridge.translate.ViewTranslator;
 import night.bridge.xmage.SeatSession;
+import night.bridge.xmage.TableRecipe;
 import night.bridge.xmage.XmageAnswers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -139,6 +140,8 @@ public final class SeatPump implements AutoCloseable {
     /** Positional asks seen — the watchdog's only proof of life (see {@link #armNudge}). */
     private long askCount;
     private int nudges;
+    /** Early mulligan asks (protocol §8): when this seat's hand is ready before XMage asks it. */
+    private final MulliganWindow mulligan = new MulliganWindow(TableRecipe.FREE_MULLIGANS);
 
     public SeatPump(String seatLabel, SeatSession xmage, ClientSink sink,
                     GameCoordinator coordinator, int logRingCapacity, int backfillSend,
@@ -221,6 +224,9 @@ public final class SeatPump implements AutoCloseable {
                         "reconnecting to the game server — try again in a moment"));
                 return;
             }
+            GamePrompt answering = fsm.pending();
+            boolean liveMulligan = answering != null && !fsm.preAskPending()
+                    && mulligan.open() && MulliganWindow.isMulliganAsk(answering);
             PromptFsm.Outcome outcome = fsm.answer(cmd.promptId(), cmd.answer());
             log.debug("answer promptId={} -> {}", cmd.promptId(), outcome);
             switch (outcome) {
@@ -229,12 +235,21 @@ public final class SeatPump implements AutoCloseable {
                 case PromptFsm.Outcome.Applied(GamePrompt revived) -> {
                     reply.accept(new Ack(cmd.id()));
                     promptDone(cmd.promptId(), PromptDone.Reason.ANSWERED);
+                    if (liveMulligan && cmd.answer() instanceof Answer.Confirm(boolean value)) {
+                        mulligan.decided(value);
+                    }
                     if (revived != null) {
                         // back to waiting on the client, not on XMage — don't arm
                         present(revived);
                     } else {
                         armNudge();
                     }
+                }
+                // early mulligan answer: held until XMage asks (§8), so nothing to watch yet
+                case PromptFsm.Outcome.Held(boolean value) -> {
+                    reply.accept(new Ack(cmd.id()));
+                    promptDone(cmd.promptId(), PromptDone.Reason.ANSWERED);
+                    log.debug("early mulligan answer held: {}", value ? "mulligan" : "keep");
                 }
                 // whole-set replay in flight — promptDone follows its resolution (§8)
                 case PromptFsm.Outcome.ReplayStarted() -> {
@@ -499,7 +514,12 @@ public final class SeatPump implements AutoCloseable {
             case GAME_ASK -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();
                 updateState(msg.getGameView());
-                dialog(PromptTranslator.confirm(fsm.nextPromptId(), msg));
+                GamePrompt prompt = PromptTranslator.confirm(fsm.nextPromptId(), msg);
+                if (mulligan.open() && MulliganWindow.isMulliganAsk(prompt)) {
+                    mulliganAsk(prompt);
+                } else {
+                    dialog(prompt);
+                }
             }
             case GAME_SELECT -> {
                 GameClientMessage msg = (GameClientMessage) cb.getData();
@@ -585,6 +605,72 @@ public final class SeatPump implements AutoCloseable {
             }
             default -> log.debug("ignoring callback {}", cb.getMethod());
         }
+        offerMulligan();
+    }
+
+    /**
+     * XMage asks this seat to keep or mulligan (protocol §8). If the seat already answered
+     * early, relay that answer now and show nothing. If its early prompt is still open, that
+     * prompt simply becomes the live one. Otherwise present XMage's ask as usual.
+     */
+    private void mulliganAsk(GamePrompt prompt) {
+        Boolean held = fsm.takeHeld();
+        if (held != null) {
+            askCount++;
+            nudges = 0;
+            answers.bool(held);   // XmageAnswers paces it ≥150 ms after the ask
+            mulligan.decided(held);
+            log.debug("mulligan ask answered from the held early decision: {}", held ? "mulligan" : "keep");
+            armNudge();
+            return;
+        }
+        if (fsm.preAskPending()) {
+            if (fsm.pending().message().equals(prompt.message())) {
+                askCount++;
+                nudges = 0;
+                fsm.adoptPreAsk();
+                log.debug("mulligan ask adopted early prompt {}", fsm.pending().promptId());
+                return;
+            }
+            log.warn("early mulligan text '{}' != XMage's '{}' — re-presenting",
+                    fsm.pending().message(), prompt.message());
+        }
+        dialog(prompt);   // supersedes a mismatched early prompt
+        mulligan.asked(lastState);
+    }
+
+    /**
+     * After every callback: if this seat is idle in the mulligan window with a fresh, final
+     * hand, ask it now instead of waiting for XMage to reach it in turn order (protocol §8).
+     * When the window closes, anything early that's left is withdrawn.
+     */
+    private void offerMulligan() {
+        if (fsm == null || lastState == null || over || !mulligan.open()) {
+            return;
+        }
+        if (mulligan.closesOn(lastState)) {
+            GamePrompt withdrawn = fsm.withdrawPreAsk();
+            if (withdrawn != null) {
+                promptDone(withdrawn.promptId(), PromptDone.Reason.SUPERSEDED);
+            }
+            if (fsm.takeHeld() != null) {
+                log.warn("mulligan window closed with an early decision XMage never asked for");
+            }
+            return;
+        }
+        if (recovering || fsm.pending() != null || fsm.replaying() || fsm.hasHeld()) {
+            return;
+        }
+        String message = mulligan.offer(lastState);
+        if (message == null) {
+            return;
+        }
+        GamePrompt prompt = GamePrompt.confirm(fsm.nextPromptId(), message,
+                MulliganWindow.YES_TEXT, MulliganWindow.NO_TEXT).emitted(store.nextSeq(), gameIdStr);
+        fsm.presentPreAsk(prompt);
+        sink.send(prompt);
+        log.debug("early mulligan ask {}: {}", prompt.promptId(), message);
+        driver.onPrompt(prompt, lastState);
     }
 
     /**
@@ -697,6 +783,9 @@ public final class SeatPump implements AutoCloseable {
         }
         GamePrompt superseded = fsm.pending();
         if (superseded != null) {
+            if (fsm.preAskPending()) {
+                mulligan.withdrawn();   // unanswered; offer that hand again when idle
+            }
             promptDone(superseded.promptId(), PromptDone.Reason.SUPERSEDED);
         }
         GamePrompt emitted = prompt.emitted(store.nextSeq(), gameIdStr);

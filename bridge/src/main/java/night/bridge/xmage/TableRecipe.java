@@ -29,6 +29,8 @@ public final class TableRecipe {
 
     static final String GAME_TYPE = "Commander Free For All";
     static final String DECK_TYPE = "Variant Magic - Commander";
+    /** CR 103.5c — see {@link #createAndStart}; the seat pump's early mulligan ask counts on it. */
+    public static final int FREE_MULLIGANS = 1;
 
     public record HumanSeat(SeatSession session, DeckCardLists deck) {
     }
@@ -57,6 +59,12 @@ public final class TableRecipe {
         options.setAttackOption(MultiplayerAttackOption.MULTIPLE);
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
+        // CR 103.5c: in a multiplayer game the first mulligan is free (doesn't count
+        // toward cards bottomed or mulligans allowed). XMage doesn't infer this from the
+        // game type — it's a table option (its own client's "Free mulligans" spinner),
+        // and MatchOptions defaults it to 0, so without this the first mulligan asked
+        // "Mulligan down to 6 cards?". LondonMulligan honors it (deduction 0 on the first).
+        options.setFreeMulligans(FREE_MULLIGANS);
         // Every table is all-human to XMage now (bridge-hosted AI seats are HUMAN
         // sessions), so the rollback (protocol §9 requestRollback) that friends'
         // night wants is always available: there is no COMPUTER_MAD simulation whose

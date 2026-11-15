@@ -553,7 +553,9 @@ final class LiveHarness {
                 int seen = repeats.merge("confirm|" + message, 1, Integer::sum);
                 boolean yes;
                 if (message.contains("Mulligan")) {
-                    yes = false;                       // keep every hand
+                    // mulligan twice, then keep: the free one (CR 103.5c), then a paid one
+                    // with a bottom pick, so the live tier covers the early asks (protocol §8)
+                    yes = repeats.merge("mulligans", 1, Integer::sum) <= 2;
                 } else if (message.contains("Pass anyway") || message.contains("mana pool")) {
                     yes = true;                        // don't wedge on floating mana
                 } else {

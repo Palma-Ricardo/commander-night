@@ -44,6 +44,14 @@ public final class PromptFsm {
         record Applied(GamePrompt revived) implements Outcome {
         }
 
+        /**
+         * An early mulligan ask answered before XMage asked (protocol §8). Nothing was
+         * sent; the decision is held for {@link #takeHeld}. ack + promptDone(answered),
+         * and no watchdog: XMage hasn't heard anything yet.
+         */
+        record Held(boolean mulligan) implements Outcome {
+        }
+
         /** Whole-set picks accepted, replay in flight: ack only — promptDone follows resolution. */
         record ReplayStarted() implements Outcome {
         }
@@ -99,6 +107,10 @@ public final class PromptFsm {
     /** Positional prompt shelved by an out-of-band playerRequest (§8). */
     private GamePrompt parked;
     private Replay replay;
+    /** The pending prompt is an early mulligan ask XMage hasn't made yet (protocol §8). */
+    private boolean preAsk;
+    /** An early mulligan answer waiting for XMage's ask. */
+    private Boolean held;
 
     public PromptFsm(XmageAnswers answers) {
         this.answers = answers;
@@ -123,7 +135,9 @@ public final class PromptFsm {
 
     public GamePrompt present(GamePrompt prompt, UUID requestData) {
         GamePrompt superseded = pending;
-        if (prompt.kind() == GamePrompt.Kind.PLAYER_REQUEST
+        // never park an early ask: revived, it would read as live and its answer
+        // would reach XMage before XMage asked
+        if (prompt.kind() == GamePrompt.Kind.PLAYER_REQUEST && !preAsk
                 && pending != null && pending.kind() != GamePrompt.Kind.PLAYER_REQUEST) {
             parked = pending;
         } else {
@@ -132,7 +146,49 @@ public final class PromptFsm {
         }
         pending = prompt;
         pendingRequestData = prompt.kind() == GamePrompt.Kind.PLAYER_REQUEST ? requestData : null;
+        preAsk = false;
         return superseded;
+    }
+
+    /**
+     * Presents an early mulligan ask (protocol §8): a confirm XMage hasn't made yet.
+     * Answering it holds the decision ({@link Outcome.Held}) instead of sending it.
+     */
+    public GamePrompt presentPreAsk(GamePrompt prompt) {
+        GamePrompt superseded = present(prompt, null);
+        preAsk = true;
+        return superseded;
+    }
+
+    public boolean preAskPending() {
+        return pending != null && preAsk;
+    }
+
+    /** XMage made the ask the pending early prompt stands for. From now on it's an ordinary live prompt. */
+    public void adoptPreAsk() {
+        preAsk = false;
+    }
+
+    /** Withdraws an unanswered early ask (the window closed). Returns it, or null if none was pending. */
+    public GamePrompt withdrawPreAsk() {
+        if (!preAskPending()) {
+            return null;
+        }
+        GamePrompt withdrawn = pending;
+        pending = null;
+        preAsk = false;
+        return withdrawn;
+    }
+
+    public boolean hasHeld() {
+        return held != null;
+    }
+
+    /** The held early decision (clearing it), or null. */
+    public Boolean takeHeld() {
+        Boolean h = held;
+        held = null;
+        return h;
     }
 
     public void clear() {
@@ -140,6 +196,8 @@ public final class PromptFsm {
         pendingRequestData = null;
         parked = null;
         replay = null;
+        preAsk = false;
+        held = null;
     }
 
     /**
@@ -193,6 +251,15 @@ public final class PromptFsm {
         if (replay != null) {
             return new Outcome.Rejected(ErrorCode.PROMPT_STALE,
                     "this prompt's answer was already submitted and is being applied");
+        }
+        if (preAsk) {
+            if (!(answer instanceof Answer.Confirm(boolean value))) {
+                return invalid("a confirm prompt takes {type:'confirm'}");
+            }
+            held = value;
+            pending = null;
+            preAsk = false;
+            return new Outcome.Held(value);
         }
         Outcome outcome = apply(answer);
         if (outcome instanceof Outcome.Applied) {

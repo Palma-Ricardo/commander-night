@@ -117,6 +117,64 @@ class PromptFsmTest {
         assertRejected(fsm.answer(1, new Answer.Pick(CANDIDATE)), ErrorCode.INVALID_ANSWER);
     }
 
+    // ---- early mulligan asks (protocol §8) ----
+
+    private GamePrompt mulligan() {
+        return GamePrompt.confirm(fsm.nextPromptId(), "Mulligan for free, draw another 7 cards?",
+                "Mulligan", "Keep");
+    }
+
+    @Test
+    void earlyAnswerIsHeldNotSent() {
+        fsm.presentPreAsk(mulligan());
+        assertTrue(fsm.preAskPending());
+        PromptFsm.Outcome.Held held = assertInstanceOf(PromptFsm.Outcome.Held.class,
+                fsm.answer(1, new Answer.Confirm(true)));
+        assertTrue(held.mulligan());
+        assertTrue(sent.isEmpty(), "XMage hasn't asked yet; sent=" + sent);
+        assertNull(fsm.pending());
+        assertTrue(fsm.hasHeld());
+        assertEquals(Boolean.TRUE, fsm.takeHeld());
+        assertNull(fsm.takeHeld(), "taken once");
+    }
+
+    @Test
+    void earlyAskRejectsNonConfirmAnswers() {
+        fsm.presentPreAsk(mulligan());
+        assertRejected(fsm.answer(1, new Answer.Cancel()), ErrorCode.INVALID_ANSWER);
+        assertTrue(fsm.preAskPending());
+    }
+
+    @Test
+    void adoptedEarlyAskAnswersLive() {
+        fsm.presentPreAsk(mulligan());
+        fsm.adoptPreAsk();   // XMage asked while the seat was still thinking
+        assertInstanceOf(PromptFsm.Outcome.Applied.class, fsm.answer(1, new Answer.Confirm(false)));
+        assertEquals(new Sent("sendPlayerBoolean", List.of(GAME, false)), lastSent());
+        assertTrue(!fsm.hasHeld());
+    }
+
+    @Test
+    void earlyAskIsNeverParkedByAPlayerRequest() {
+        fsm.presentPreAsk(mulligan());
+        fsm.present(GamePrompt.playerRequest(fsm.nextPromptId(), "Allow?", "k",
+                List.of(GamePrompt.Option.byKey(PromptFsm.DISMISS_KEY, "No"))));
+        PromptFsm.Outcome.Applied applied = assertInstanceOf(PromptFsm.Outcome.Applied.class,
+                fsm.answer(2, new Answer.Option(PromptFsm.DISMISS_KEY)));
+        assertNull(applied.revived(), "a revived early ask would read as live");
+    }
+
+    @Test
+    void withdrawingAnEarlyAskLeavesNothingPending() {
+        GamePrompt early = mulligan();
+        fsm.presentPreAsk(early);
+        assertEquals(early, fsm.withdrawPreAsk());
+        assertNull(fsm.pending());
+        assertNull(fsm.withdrawPreAsk());
+        fsm.present(GamePrompt.confirm(fsm.nextPromptId(), "Pay 2 life?", null, null));
+        assertNull(fsm.withdrawPreAsk(), "a live prompt is never withdrawn");
+    }
+
     // ---- priority ----
 
     private void presentPriority() {
