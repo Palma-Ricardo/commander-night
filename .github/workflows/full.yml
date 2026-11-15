@@ -1,0 +1,158 @@
+# Full tier: everything that needs a running XMage server. The bridge live tests
+# (mvn -Plive) and the e2e Playwright specs against the table client: the live job and
+# one e2e job per spec, all in parallel, each with its own XMage server. Runs on demand
+# ("Run workflow", any branch) and nightly on main, where it's skipped if main's head
+# already passed a full run.
+name: Full
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'   # 08:00 UTC (02:00 US Central)
+  push:                   # TEMPORARY: validation before merge; remove before merging
+    branches: [ci-full-tier]
+
+concurrency:
+  group: full-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # the gate job lists this workflow's past runs
+
+jobs:
+  gate:
+    name: Changed since last full run?
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != schedule ]; then echo run=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow full.yml --branch main \
+                   --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "main ($GITHUB_SHA) already passed a full run; skipping"
+            echo run=false >> "$GITHUB_OUTPUT"
+          else
+            echo run=true >> "$GITHUB_OUTPUT"
+          fi
+
+  live:
+    name: Bridge live tests
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            25
+          cache: maven
+          cache-dependency-path: bridge/pom.xml
+
+      - uses: ./.github/actions/xmage-server
+
+      - name: mvn -Plive test
+        working-directory: bridge
+        run: mvn -B -Plive test
+
+      # The live tests skip themselves (assumeTrue) when no server answers on :17171, so
+      # a broken setup would otherwise pass green. Only these three skip by design: they
+      # need tap captures from a dev machine or a deployed endpoint.
+      - name: No unexpected skips
+        working-directory: bridge/target/surefire-reports
+        run: |
+          expected='PublicEndpointGameTest|PayManaAnchorReplayTest|EventCoverageReplayTest'
+          skipped=$(grep -l '<skipped' TEST-*.xml | sed 's/^TEST-night\.bridge\.//; s/\.xml$//' \
+                      | grep -vE "\.($expected)$" || true)
+          if [ -n "$skipped" ]; then
+            echo "::error::unexpected skipped tests: $(echo $skipped)"
+            exit 1
+          fi
+
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-diagnostics
+          if-no-files-found: ignore
+          path: |
+            bridge/target/surefire-reports/
+            bridge/logs/tap/
+            ${{ runner.temp }}/xmage-server.log
+
+  e2e:
+    name: e2e ${{ matrix.spec }} (table)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    # resilience alone took ~46 min on a runner-sized container.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        spec: [autoplayer, resilience, touch, two-browser]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            25
+          cache: maven
+          cache-dependency-path: bridge/pom.xml
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - uses: ./.github/actions/xmage-server
+
+      - name: Start the bridge and the table dev server
+        run: |
+          (cd bridge && nohup mvn -B -q -Prun compile exec:exec > "$RUNNER_TEMP/bridge.log" 2>&1 &)
+          (cd table && nohup npm run dev > "$RUNNER_TEMP/table.log" 2>&1 &)
+          # Vite binds localhost to ::1, so probe by name, not 127.0.0.1.
+          for i in $(seq 1 90); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8484) 2>/dev/null && curl -sf -o /dev/null http://localhost:5273; then
+              echo "bridge + table up after $((i * 2)) s"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::bridge (:8484) or table dev server (:5273) not up within 180 s"
+          tail -30 "$RUNNER_TEMP/bridge.log" "$RUNNER_TEMP/table.log"
+          exit 1
+
+      - name: playwright test ${{ matrix.spec }}
+        env:
+          NIGHT_CLIENT: table
+        run: npx playwright test -c e2e/playwright.config.ts ${{ matrix.spec }}
+
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-${{ matrix.spec }}-diagnostics
+          if-no-files-found: ignore
+          path: |
+            e2e/artifacts/
+            e2e/test-results/
+            test-results/
+            bridge/logs/tap/
+            ${{ runner.temp }}/bridge.log
+            ${{ runner.temp }}/table.log
+            ${{ runner.temp }}/xmage-server.log
