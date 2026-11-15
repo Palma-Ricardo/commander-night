@@ -43,17 +43,8 @@
       <artifactId>mage</artifactId>
       <version>${xmage.version}</version>
     </dependency>
-    <!-- Per-card implementation classes. CardInfo#createCard() looks these up by
-         class name via reflection at runtime (CardImpl#createCard); nothing
-         compiles against them directly, so runtime scope. Needed wherever a
-         resolved card must answer ability questions instead of just metadata
-         ones — e.g. DeckAssembler's commander-pairing validators. -->
-    <dependency>
-      <groupId>org.mage</groupId>
-      <artifactId>mage-sets</artifactId>
-      <version>${xmage.version}</version>
-      <scope>runtime</scope>
-    </dependency>
+    <!-- mage-sets and jspf-core (runtime-only, not on Central) live in the
+         xmage-runtime profile below so CI can skip them. -->
     <!-- JBoss Remoting transport used by mage.remote — runtime only. -->
     <dependency>
       <groupId>org.jboss.remoting</groupId>
@@ -89,12 +80,6 @@
       <groupId>trove</groupId>
       <artifactId>trove</artifactId>
       <version>1.0.2</version>
-      <scope>runtime</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.googlecode.jspf</groupId>
-      <artifactId>jspf-core</artifactId>
-      <version>0.9.1</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>
@@ -198,6 +183,13 @@
 
   <build>
     <plugins>
+      <!-- Pinned: older Maven (e.g. Ubuntu's 3.8.7) defaults to compiler 3.1,
+           which ignores maven.compiler.release and fails at "source 5". -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.16.0</version>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
@@ -210,6 +202,41 @@
   </build>
 
   <profiles>
+    <!-- Runtime-only XMage jars that are not on Central (installed from the
+         dist by install-xmage-jars.sh). On unless -Dxmage.unit-only is set —
+         CI's unit tier passes it and so needs only mage + mage-common.
+         Property activation, not activeByDefault: the latter would switch
+         off whenever another profile (-Plive, -Pdist, ...) is named. -->
+    <profile>
+      <id>xmage-runtime</id>
+      <activation>
+        <property>
+          <name>!xmage.unit-only</name>
+        </property>
+      </activation>
+      <dependencies>
+        <!-- Per-card implementation classes. CardInfo#createCard() looks these
+             up by class name via reflection at runtime (CardImpl#createCard);
+             nothing compiles against them directly, so runtime scope. Needed
+             wherever a resolved card must answer ability questions instead of
+             just metadata ones — e.g. DeckAssembler's commander-pairing
+             validators. -->
+        <dependency>
+          <groupId>org.mage</groupId>
+          <artifactId>mage-sets</artifactId>
+          <version>${xmage.version}</version>
+          <scope>runtime</scope>
+        </dependency>
+        <!-- Plugin framework referenced by mage-common. -->
+        <dependency>
+          <groupId>com.googlecode.jspf</groupId>
+          <artifactId>jspf-core</artifactId>
+          <version>0.9.1</version>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
     <!-- Live-integration tier (design §13): boots the whole bridge in the test
          JVM and plays a real game against a local XMage server, which must
          already be running. Usage:
