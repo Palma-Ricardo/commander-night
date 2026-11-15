@@ -106,9 +106,7 @@ Rule: **every piece of mutable state has exactly one owning executor; nothing el
   by async Jetty writes. Overflow (pathologically slow client) → close the socket; the client
   reconnects into the resume flow, which is cheap by design (keyframe + prompt + log tail).
 - No watchdog *auto-pass* in the real bridge (the spike's 8 s nudge was a greedy-bot hack).
-  Untimed tables mean XMage waits for humans indefinitely; that is the desired behavior. The
-  M3 lost-wakeup *nudge* watchdog (§5) is different in kind: it re-pokes XMage's answer
-  channel with a rejected sentinel, never answers on the player's behalf.
+  Untimed tables mean XMage waits for humans indefinitely; that is the desired behavior.
 
 ## 5. XMage session layer
 
@@ -122,31 +120,21 @@ Per-seat `SeatSession implements MageClient`, connected via `new SessionImpl(thi
 - Keepalive `ping()` on the scheduler; JBoss lease handles transport-level liveness.
 - `GameView.canPlayObjects` is the playable list; mana abilities are *not* priority actions
   (the floating-mana ask-loop lesson — encoded in `PromptTranslator`, protocol §8 `priority`).
-- **The lost-wakeup race** (discovered M3, 2026-07-17; **source-fixed upstream in 1.4.63** —
+- **The lost-wakeup race** (discovered M3, 2026-07-17; **source-fixed upstream in 1.4.63**:
   `waitForResponse` now checks `!response.hasAnswer()` inside the `synchronized (response)` block
-  before `wait()`, so an early notify can no longer be lost. The guard below is kept as a cheap
-  safety net; the 1.4.63 live tier passed with it in place, 2026-11-14). 1.4.60's `HumanPlayer.waitForResponse`
-  sets `responseOpenedForAnswer = true` *before* entering a predicate-less `response.wait()`;
-  an answer whose `notifyAll` lands in that gap is lost, and the game thread waits forever —
-  the whole game freezes until the seat disconnects. Jstack-verified live
-  (`HumanPlayer.java:337`). Crucially, **arrival-time pacing cannot close the race**: every
-  `setResponse*` first parks in `waitResponseOpen()` — a 100 ms spin-poll on that non-volatile
-  flag — so an answer reaching the server while the flag is still closed is *delivered on the
-  flag edge*, racing the game thread's monitor entry no matter how late it was sent (live-
-  verified: 150 ms pacing alone still wedged 6 of 8 games). Human clients rarely lose because
-  their answers arrive long after the flag opens, with the game thread safely parked — the
-  spike's 8 s auto-pass "hack" never wedged because it was unknowingly re-notifying. The
-  guard is therefore two-part: `XmageAnswers` paces every positional send ≥150 ms after the
-  ask (human timing profile — shrinks exposure), and the `SeatPump` watchdog is the actual
-  guarantee: 6 s with *no new ask* after an answer → nudge the channel with the sentinel
-  `new UUID(0,0)` — every ask kind validates-and-rejects it by re-firing the ask
-  (source-verified), so a false positive (AI thinking long) is harmless, while a nudge fired
-  into a parked `wait()` cannot itself be edge-lost. State updates and chat are *not* proof
-  of life (they flow from other seats' activity while the game thread stays wedged) — only a
-  fresh ask or game-over stands the watchdog down. It nudges with exponential backoff (6 s
-  doubling to a 60 s cap) indefinitely and never declares the seat lost: ask-silence is not
-  evidence of loss (AIs think 30 s+ on big boards — live-observed at T45), and transport
-  loss is the session layer's job to detect.
+  before `wait()`, so an early notify can no longer be lost). 1.4.60's `HumanPlayer.waitForResponse`
+  set `responseOpenedForAnswer = true` *before* entering a predicate-less `response.wait()`; an
+  answer whose `notifyAll` landed in that gap was lost, and the whole game froze. `XmageAnswers`
+  still paces every positional send ≥150 ms after the ask (human timing profile, a cheap habit
+  that costs ≤150 ms per answer).
+- **The positional channel parks early sends.** Every `setResponse*` first spins in
+  `waitResponseOpen()` until the seat's next ask opens, for up to 30 s, then delivers. So a send
+  from a seat XMage isn't asking isn't dropped: it lands on that seat's *next* ask, whatever it
+  is. The bridge therefore sends exactly one positional answer per ask and nothing else. The one
+  exception is the recovery nudge below. Live incident (prod game K32ZYQ, 2026-11-15): a sentinel
+  sent while other seats were deciding parked, hit ai1's first priority, and made XMage re-fire
+  it. The brain answered both asks, so every later answer reached XMage one ask late, and a
+  priority / "Pass anyway?" pair looped 14,000 times (`SeatPumpReplayTest` replays the tap).
 
 **Seat recovery (best-effort, v1 — implemented M4, live-verified M5):** if a seat's XMage
 session drops mid-game (`MageClient.disconnected`, filtered for our own connectStop/connectStart
@@ -156,14 +144,16 @@ answers are rejected (`UPSTREAM_ERROR` non-fatal) while a virtual thread retries
 handshake — `setRestoreSessionId(previous session id)` before `connectStart` — which the server
 matches in `Session.validateUser` to flag a reconnection and re-attach the user's active tables
 (`User.onReconnect`, source-verified 1.4.60); the pump then re-runs `joinGame` + chat join.
-Success → status line, fresh keyframe, pending-prompt re-emit, then an **immediate watchdog
-nudge**: `GameController.join` does NOT re-fire an in-flight ask on rejoin (source-verified
-1.4.60 — join only re-registers the session), and an ask that fired into the dying socket may
-never have reached the bridge at all, so the sentinel forces a parked game thread to re-fire it
-on the new session right away (benign if nothing is pending). Live incident 2026-07-18: without
-this, a seat dropped exactly as an ask fired sat promptless ~50 s until the backoff ladder's
-third nudge. The nudge watchdog stands down while recovery is in flight (transport gone);
-`recovered()` restarts its ladder. 5 failures → `error UPSTREAM_ERROR fatal:true` to that
+Success → status line, fresh keyframe, pending-prompt re-emit, then **one nudge**: the sentinel
+`new UUID(0,0)`, which every ask kind validates, rejects, and answers by re-firing the ask
+(source-verified). `GameController.join` does NOT re-fire an in-flight ask on rejoin
+(source-verified 1.4.60: join only re-registers the session), and an ask that fired into the
+dying socket may never have reached the bridge at all, so the nudge makes a game thread waiting
+on this seat re-fire it on the new session right away. Live incident 2026-07-18: a seat dropped
+exactly as an ask fired sat with no prompt for ~50 s. It can't be skipped when no prompt is
+pending, because the lost ask is exactly that case. Residual risk: if XMage is waiting on another
+seat, the nudge parks and lands on this seat's next ask (see above). A browser can't answer
+before the re-fire supersedes its prompt; an AI seat could. 5 failures → `error UPSTREAM_ERROR fatal:true` to that
 seat, game continues for the others. Bridge process death still loses the game (protocol §14);
 process-level re-attach is v2. Live-verified 2026-07-18 (`SeatRecoveryLiveTest`, live tier):
 SIGSTOP the server mid-game with a prompt pending → the 10 s session ping trips detection in
@@ -327,8 +317,7 @@ at most one pending prompt; bridge-monotonic `promptId`; answers fenced by `prom
   `PlayerType.HUMAN` `SessionImpl` + `SeatPump` (like a human seat) with a drop `ClientSink` and an
   `AiSeatDriver`; on each presented prompt an in-JVM `Brain` (`night.bridge.ai`) decides an answer
   and submits it through the *same* `SeatPump.answer` path a browser uses, so all FSM
-  validation, promptId fencing, the ≥150 ms `XmageAnswers` pacing, and the nudge watchdog apply
-  unchanged (the AI is just another answer *source*). v1 `FirstLegalMoveBrain` is the productionized
+  validation, promptId fencing, and the ≥150 ms `XmageAnswers` pacing apply unchanged (the AI is just another answer *source*). v1 `FirstLegalMoveBrain` is the productionized
   live-tier auto-player (`LiveHarness.autoAnswer`); stronger play slots in behind `Brain`. AI decks
   come from `config.sampleDecksDir` (any supported format, auto-detected). XMage's `COMPUTER_MAD` is
   no longer used at all.

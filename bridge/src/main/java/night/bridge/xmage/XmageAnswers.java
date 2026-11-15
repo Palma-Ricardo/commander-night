@@ -28,15 +28,15 @@ import java.util.function.LongSupplier;
  *
  * <p><b>1.4.63:</b> fixed upstream — {@code waitForResponse} now re-checks
  * {@code response.hasAnswer()} under the monitor before {@code wait()}. The
- * guard below stays as a safety net (costs ≤150 ms per answer); retire it only
- * after the nudge watchdog has been observed never firing on 1.4.63.
+ * pacing below stays (costs ≤150 ms per answer): every positional send waits
+ * until ≥{@link #PACE_MILLIS} after the last callback arrived, the human timing
+ * profile.
  *
- * <p>Two-part guard: every positional send here waits until
- * ≥{@link #PACE_MILLIS} after the last callback arrived — the human timing
- * profile, which usually lands after the flag is open and the game thread is
- * safely parked — and the {@code SeatPump#armNudge} watchdog covers the rest:
- * a nudge fires only after seconds of ask-silence, when the game thread is
- * guaranteed parked in {@code wait()}, so the nudge's notify cannot be lost.
+ * <p><b>The positional channel parks early sends.</b> A send from a seat XMage
+ * isn't asking waits server-side in {@code waitResponseOpen} for up to 30 s and
+ * is then delivered to that seat's next ask, whatever it is. So every send that
+ * isn't an answer to the seat's current ask (like {@link #nudge}) may consume a
+ * future ask.
  */
 public final class XmageAnswers {
 
@@ -47,9 +47,10 @@ public final class XmageAnswers {
 
     /**
      * Never a real object id (XMage mints random v4 UUIDs): every ask kind
-     * validates it, rejects it, and re-fires the ask — so it either wakes a
-     * lost-notify-wedged game thread or is discarded server-side. Source-
-     * verified against 1.4.60 HumanPlayer for all ten prompt kinds.
+     * validates it, rejects it, and re-fires the ask. Source-verified against
+     * 1.4.60 HumanPlayer for all ten prompt kinds. A re-fired ask is a second
+     * ask, so answering both the original and the re-fire puts the seat one
+     * answer ahead (see the class doc).
      */
     public static final UUID NUDGE = new UUID(0, 0);
 
@@ -126,9 +127,9 @@ public final class XmageAnswers {
         session.sendPlayerAction(action, gameId, data);
     }
 
-    /** The watchdog's wedge-breaker — see {@link #NUDGE}. Deliberately unpaced. */
+    /** Makes a waiting ask re-fire (seat recovery only) — see {@link #NUDGE}. Deliberately unpaced. */
     public void nudge() {
-        log.warn("nudging XMage's positional channel with the sentinel UUID (lost-wakeup guard)");
+        log.info("nudging XMage's positional channel with the sentinel UUID (seat recovery)");
         session.sendPlayerUUID(gameId, NUDGE);
     }
 }

@@ -47,7 +47,7 @@ public final class PromptFsm {
         /**
          * An early mulligan ask answered before XMage asked (protocol §8). Nothing was
          * sent; the decision is held for {@link #takeHeld}. ack + promptDone(answered),
-         * and no watchdog: XMage hasn't heard anything yet.
+         * and nothing is sent: XMage hasn't asked yet.
          */
         record Held(boolean mulligan) implements Outcome {
         }

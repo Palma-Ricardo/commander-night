@@ -13,14 +13,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link BudgetedBrain} caps a single decision: it returns the primary's answer when
  * it finishes in time, and the fallback's answer (interrupting the primary) when it
- * overruns. A primary exception surfaces unchanged, as if the wrapped brain had been
- * called directly, so the driver's own failure handling is preserved.
+ * overruns or throws, so a seat always gets an answer.
  */
 class BudgetedBrainTest {
 
@@ -73,7 +71,7 @@ class BudgetedBrainTest {
     }
 
     @Test
-    void primaryExceptionsPropagateUnchanged() {
+    void fallsBackWhenThePrimaryThrows() {
         IllegalStateException boom = new IllegalStateException("brain bug");
         Brain broken = (state, prompt, c) -> {
             throw boom;
@@ -85,10 +83,8 @@ class BudgetedBrainTest {
         };
         BudgetedBrain brain = new BudgetedBrain(broken, fallback, Duration.ofSeconds(2));
 
-        IllegalStateException thrown =
-                assertThrows(IllegalStateException.class, () -> brain.decide(null, PROMPT, ctx));
-        assertSame(boom, thrown);                     // same instance, not rewrapped
-        assertTrue(!fallbackCalled.get(), "fallback is for timeouts, not for primary failures");
+        assertEquals(new Answer.Confirm(false), brain.decide(null, PROMPT, ctx));
+        assertTrue(fallbackCalled.get(), "a brain bug must not leave the prompt unanswered");
     }
 
     @Test

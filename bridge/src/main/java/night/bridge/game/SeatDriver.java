@@ -8,8 +8,8 @@ import night.bridge.proto.state.GameState;
  * prompt goes out over the WebSocket and the answer returns asynchronously as a
  * {@code game.answer} command. A bridge-hosted AI seat uses {@link AiSeatDriver},
  * which answers the prompt in-JVM through the same {@link SeatPump#answer} path —
- * so all PromptFsm validation, promptId fencing, XmageAnswers pacing, and the
- * nudge watchdog apply unchanged (the AI is just another answer <em>source</em>).
+ * so all PromptFsm validation, promptId fencing, and XmageAnswers pacing apply
+ * unchanged (the AI is just another answer <em>source</em>).
  *
  * <p>{@link #onPrompt} is invoked on the seat pump thread the instant a prompt is
  * presented. Both arguments are deep-immutable snapshots (records + immutable

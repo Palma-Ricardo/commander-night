@@ -37,9 +37,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * fallback answer is returned regardless, so the game always advances. A degenerate
  * brain that both ignores interruption <em>and</em> keeps mutating {@code ctx} past
  * the deadline could race the fallback's own {@code ctx} reads; the worst case is a
- * {@code ConcurrentModificationException} out of the fallback, which the driver
- * treats like any brain failure (leaves the prompt pending, the nudge watchdog
- * re-fires it) — the seat still never wedges.
+ * {@code ConcurrentModificationException} out of the fallback.
+ *
+ * <p><b>On a primary exception</b> the fallback answers too: nothing makes XMage
+ * re-ask a prompt nobody answers, so an unanswered prompt stalls the seat for good.
+ * Only a failure of the fallback itself reaches the driver.
  */
 public final class BudgetedBrain implements Brain {
 
@@ -60,9 +62,7 @@ public final class BudgetedBrain implements Brain {
 
     @Override
     public Answer decide(GameState state, GamePrompt prompt, BrainContext ctx) {
-        // Answer on success, Throwable on failure — the worker never lets one escape,
-        // so the primary's exceptions surface to the caller exactly as a direct throw
-        // would (preserving the driver's existing "leave pending, re-fire" self-heal).
+        // Answer on success, Throwable on failure — the worker never lets one escape.
         AtomicReference<Object> outcome = new AtomicReference<>();
         Thread worker = Thread.ofVirtual()
                 .name("brain-budget-" + prompt.promptId())
@@ -89,7 +89,13 @@ public final class BudgetedBrain implements Brain {
                     budget.toMillis(), prompt.promptId(), prompt.kind());
             return fallback.decide(state, prompt, ctx);
         }
-        return unwrap(outcome.get());
+        Object result = outcome.get();
+        if (result instanceof RuntimeException e) {
+            log.warn("brain failed on prompt {} ({}) — falling back to first-legal",
+                    prompt.promptId(), prompt.kind(), e);
+            return fallback.decide(state, prompt, ctx);
+        }
+        return unwrap(result);
     }
 
     /** The worker's result: the {@link Answer} it produced, or its failure re-thrown. */

@@ -68,24 +68,6 @@ public final class SeatPump implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(SeatPump.class);
 
-    /**
-     * Lost-wakeup watchdog (see {@link XmageAnswers} race doc): if no new ask
-     * arrives for this long after we sent a positional answer, XMage's game
-     * thread may be wedged in its predicate-less {@code response.wait()}
-     * (jstack-verified against 1.4.60, 2026-07-17) and gets nudged with the
-     * sentinel UUID — which every ask kind validates, rejects and re-fires. By
-     * nudge time a wedged game thread is long parked in {@code wait()}, so
-     * unlike a prompt-time answer the nudge's notify cannot be edge-lost. A
-     * false positive (an AI thinking — live-observed at 30 s+ on big boards)
-     * parks in XMage's {@code waitResponseOpen} spin and is rejected at the
-     * next real ask, which simply re-fires — harmless. Because ask-silence is
-     * NOT evidence of seat loss (transport loss is the session layer's job),
-     * the watchdog never gives up: it keeps nudging with exponential backoff
-     * up to {@link #NUDGE_MAX_DELAY_MILLIS} until an ask or game-over arrives.
-     */
-    private static final long NUDGE_DELAY_MILLIS = 6_000;
-    private static final long NUDGE_MAX_DELAY_MILLIS = 60_000;
-
     /** Seat recovery (design §5): reconnect attempts after XMage transport loss. */
     private static final long[] RECOVER_BACKOFF_MILLIS = {2_000, 4_000, 8_000, 15_000, 15_000};
 
@@ -137,9 +119,8 @@ public final class SeatPump implements AutoCloseable {
     private boolean recovering;
     /** Drops updates the 1.4.63 callback queue delivered behind newer state (protocol §15). */
     private final UpdateOrder order = new UpdateOrder();
-    /** Positional asks seen — the watchdog's only proof of life (see {@link #armNudge}). */
+    /** Positional asks seen, for the debug log. */
     private long askCount;
-    private int nudges;
     /** Early mulligan asks (protocol §8): when this seat's hand is ready before XMage asks it. */
     private final MulliganWindow mulligan = new MulliganWindow(TableRecipe.FREE_MULLIGANS);
 
@@ -239,10 +220,7 @@ public final class SeatPump implements AutoCloseable {
                         mulligan.decided(value);
                     }
                     if (revived != null) {
-                        // back to waiting on the client, not on XMage — don't arm
-                        present(revived);
-                    } else {
-                        armNudge();
+                        present(revived);   // back to waiting on the client
                     }
                 }
                 // early mulligan answer: held until XMage asks (§8), so nothing to watch yet
@@ -252,10 +230,7 @@ public final class SeatPump implements AutoCloseable {
                     log.debug("early mulligan answer held: {}", value ? "mulligan" : "keep");
                 }
                 // whole-set replay in flight — promptDone follows its resolution (§8)
-                case PromptFsm.Outcome.ReplayStarted() -> {
-                    reply.accept(new Ack(cmd.id()));
-                    armNudge();
-                }
+                case PromptFsm.Outcome.ReplayStarted() -> reply.accept(new Ack(cmd.id()));
             }
         });
     }
@@ -393,17 +368,18 @@ public final class SeatPump implements AutoCloseable {
         joinGameAndChat();
         logLine(LogEntry.Kind.STATUS, null, "reconnected to the game server", null, null);
         regroundBrowser();
-        // XMage does NOT re-fire an in-flight ask on rejoin (1.4.60
-        // GameController.join only re-registers the session), and an ask that
-        // fired into the dying socket may never have reached this seat at all
-        // (live-observed 2026-07-18: ~50 s promptless limbo until the backoff
-        // ladder's third nudge). Nudge immediately: a game thread parked in
-        // waitForResponse re-fires its ask on the new session; with nothing
-        // pending the sentinel is benign (see {@link #armNudge}).
+        // XMage does NOT re-fire an in-flight ask on rejoin (GameController.join only
+        // re-registers the session), and an ask that fired into the dying socket may
+        // never have reached this seat (live-observed 2026-07-18: ~50 s with no prompt).
+        // One nudge makes a game thread waiting on this seat re-fire its ask on the new
+        // session. It can't be conditioned on a pending prompt: the lost ask is exactly
+        // the case where none is pending. Residual risk: if XMage is waiting on another
+        // seat, the nudge parks (≤30 s) and lands on this seat's next ask, which XMage
+        // re-fires. An AI seat that answers both the ask and its re-fire is then one
+        // answer ahead (the K32ZYQ failure). That takes a reconnect plus a sub-60 ms
+        // answer, and only the in-JVM brain answers that fast.
         if (answers != null) {
-            nudges = 0;
             answers.nudge();
-            armNudge();
         }
     }
 
@@ -617,17 +593,14 @@ public final class SeatPump implements AutoCloseable {
         Boolean held = fsm.takeHeld();
         if (held != null) {
             askCount++;
-            nudges = 0;
             answers.bool(held);   // XmageAnswers paces it ≥150 ms after the ask
             mulligan.decided(held);
             log.debug("mulligan ask answered from the held early decision: {}", held ? "mulligan" : "keep");
-            armNudge();
             return;
         }
         if (fsm.preAskPending()) {
             if (fsm.pending().message().equals(prompt.message())) {
                 askCount++;
-                nudges = 0;
                 fsm.adoptPreAsk();
                 log.debug("mulligan ask adopted early prompt {}", fsm.pending().promptId());
                 return;
@@ -673,44 +646,6 @@ public final class SeatPump implements AutoCloseable {
         driver.onPrompt(prompt, lastState);
     }
 
-    /**
-     * Arms the lost-wakeup watchdog after a positional answer left for XMage.
-     * The only proof the game thread heard us is the <em>next ask</em> (or game
-     * over): state updates and chat can keep flowing from other seats' activity
-     * while the game thread stays wedged, so they must NOT stand the watchdog
-     * down — it re-checks {@link #askCount} and keeps nudging through the noise
-     * (benign on false positives; see field doc). Seat recovery is the one
-     * stand-down: the transport is gone, so nudging can't help; {@link #recovered}
-     * restarts the ladder with an immediate nudge once the seat has rejoined.
-     */
-    private void armNudge() {
-        long armedAt = askCount;
-        long delay = Math.min(NUDGE_DELAY_MILLIS << Math.min(nudges, 8), NUDGE_MAX_DELAY_MILLIS);
-        log.debug("watchdog armed at ask #{} (delay {}ms, nudges {})", armedAt, delay, nudges);
-        Thread.ofVirtual().name("nudge-" + xmage.username()).start(() -> {
-            try {
-                Thread.sleep(delay);
-                exec.execute(() -> {
-                    // recovering: the transport is down — nudging is pointless and
-                    // the recovery path restarts the ladder itself in recovered()
-                    if (over || answers == null || recovering || askCount != armedAt) {
-                        log.debug("watchdog stood down (over={} recovering={} askCount={} armedAt={})",
-                                over, recovering, askCount, armedAt);
-                        return;
-                    }
-                    nudges++;
-                    log.warn("no ask for {}ms after an answer — nudging XMage (#{})", delay, nudges);
-                    answers.nudge();
-                    armNudge();
-                });
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (java.util.concurrent.RejectedExecutionException e) {
-                // pump closed while we slept — nothing to guard anymore
-            }
-        });
-    }
-
     private void startGame(TableClientMessage msg) {
         gameId = msg.getGameId();
         playerId = msg.getPlayerId();
@@ -748,17 +683,17 @@ public final class SeatPump implements AutoCloseable {
         // must read the same as the one it replaces (protocol §5).
         GamePrompt prompt = PromptNames.rewrite(rawPrompt, this::rewriteNames);
         askCount++;
-        nudges = 0;
         PromptFsm.Flow flow = fsm.onDialog(prompt);
         log.debug("ask #{} {} promptId={} -> {}", askCount, prompt.kind(), prompt.promptId(),
                 flow.getClass().getSimpleName());
         switch (flow) {
             case PromptFsm.Flow.Present() -> present(prompt);
-            case PromptFsm.Flow.Consumed() -> armNudge();
+            case PromptFsm.Flow.Consumed() -> {
+                // replay continuation sent; nothing to show
+            }
             case PromptFsm.Flow.Completed(long promptId) -> {
                 promptDone(promptId, PromptDone.Reason.ANSWERED);
                 presentDeferred();
-                armNudge();
             }
             case PromptFsm.Flow.CompletedThenPresent(long promptId) -> {
                 promptDone(promptId, PromptDone.Reason.ANSWERED);

@@ -16,8 +16,7 @@ import java.util.concurrent.RejectedExecutionException;
  * Drives a bridge-hosted AI seat: on each presented prompt a {@link Brain}
  * decides an answer and submits it through the seat's own {@link SeatPump}, the
  * same entry a browser answer takes — so PromptFsm validation, promptId
- * fencing, the ≥150 ms XmageAnswers pacing, and the nudge watchdog all apply
- * unchanged. Replaces XMage's server-side {@code COMPUTER_MAD}: no
+ * fencing, and the ≥150 ms XmageAnswers pacing all apply unchanged. Replaces XMage's server-side {@code COMPUTER_MAD}: no
  * alpha-beta simulation, no per-node {@code Game} clones.
  *
  * <p>Threading: {@link #onPrompt} runs on the pump thread but only hands the
@@ -52,10 +51,10 @@ public final class AiSeatDriver implements SeatDriver {
                     Answer answer = brain.decide(state, prompt, ctx);
                     pump.submitAnswer(promptId, answer);
                 } catch (RuntimeException e) {
-                    // A brain failure leaves the prompt pending; the seat's nudge
-                    // watchdog re-fires the ask, so a transient bug self-heals and a
-                    // persistent one stalls just this seat (visibly), never the game.
-                    log.warn("brain failed on prompt {} ({}) — leaving it pending",
+                    // BudgetedBrain already falls back to first-legal on a brain bug, so
+                    // this is the fallback itself failing. The prompt stays pending and
+                    // the seat stalls, visibly: nothing makes XMage re-ask.
+                    log.error("brain and fallback failed on prompt {} ({}) — seat stalls",
                             promptId, prompt.kind(), e);
                 }
             });

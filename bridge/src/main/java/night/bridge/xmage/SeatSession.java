@@ -43,6 +43,12 @@ public final class SeatSession implements MageClient {
         this.session = new SessionImpl(this);
     }
 
+    /** Over a given session, for replaying captured callbacks through a seat pump in tests. */
+    public SeatSession(String username, Session session) {
+        this.username = username;
+        this.session = session;
+    }
+
     /** Where callbacks go — the seat pump's enqueue. Must be set before connect(). */
     public void sink(Consumer<ClientCallback> sink) {
         this.sink = sink;

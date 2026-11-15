@@ -75,10 +75,11 @@ npx playwright test -c e2e/playwright.config.ts two-browser   # one spec (12 s s
   `-Djava.awt.headless=true` for the XMage session layer; the `-Pspike` exec config sets them.
 - XMage callbacks: always `callback.decompressData()` before `getData()`; read `Choice` payloads
   through typed getters; callbacks arrive on up to 10 threads (bridge serializes per seat pump).
-- **Never answer XMage's positional channel < 150 ms after the ask** — 1.4.60 `HumanPlayer` had a
-  lost-wakeup race that froze the whole game (design.md §5; source-fixed in 1.4.63, guard kept). All sends must go through
-  `XmageAnswers` (paces automatically; SeatPump nudge-watchdog covers the tail). Never bypass it
-  with raw `session.sendPlayer*`.
+- **Exactly one positional answer per XMage ask, sent through `XmageAnswers`** (it paces each send
+  ≥150 ms after the ask). XMage parks a send from a seat it isn't asking for up to 30 s and
+  delivers it to that seat's *next* ask. So any extra send, like a speculative "nudge", shifts every
+  later answer one ask late. That wedged prod game K32ZYQ in a 14,000-lap loop (design.md §5).
+  Never bypass it with raw `session.sendPlayer*`.
 - Logging is split: our code → slf4j/logback; mage classes → log4j-1.x API via reload4j
   (`log4j.properties`). Never add an `slf4j-reload4j` binding.
 
