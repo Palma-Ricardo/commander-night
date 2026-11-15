@@ -66,7 +66,9 @@ npx playwright test -c e2e/playwright.config.ts two-browser   # one spec (12 s s
 - **XMage version is pinned (1.4.63, upgraded from 1.4.60 on 2026-11-14)** and the bridge must compile against the dist's own jars —
   the server rejects any non-exact `MageVersion` handshake. On upgrade: replace
   `vendor/xmage-dist`, re-run the install script, bump `xmage.version` in `bridge/pom.xml`,
-  regenerate golden fixtures. XMage serialization is *not* stable across versions (1.4.63
+  regenerate golden fixtures, and publish the new `mage`/`mage-common` jars as an
+  `xmage-jars-<version>` GitHub release + update the checksums in `.github/workflows/ci.yml`
+  (CI's unit tier runs `mvn test -Dxmage.unit-only`, which needs only those two jars). XMage serialization is *not* stable across versions (1.4.63
   changed `ChoiceImpl`'s `serialVersionUID`), so old `logs/tap` captures stop decoding — archive
   them (`bridge/logs/tap-<oldversion>/`) and replay against fresh captures.
 - Central deps that shadow dist jars (guava, gson, protobuf, jsoup, commons-lang3, reload4j)
