@@ -23,6 +23,7 @@
 import { CanvasSource, Container, Graphics, type Renderer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { Card, ScryfallResolver } from '@night/core';
 import backArtUrl from '../assets/cards/Back.png';
+import { CPU_CANVAS } from './canvas2d';
 import { manaCostRow, richText } from './richtext';
 
 export type Tier = 'table' | 'detail' | 'artbox';
@@ -421,7 +422,7 @@ function portraitArtCanvas(image: HTMLImageElement, size: { w: number; h: number
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', CPU_CANVAS);
   if (ctx === null) throw new Error('no 2d context');
   ctx.imageSmoothingQuality = 'high';
   roundedClip(ctx, w, h, radius);
@@ -446,7 +447,7 @@ function artboxCanvas(card: Card, image?: HTMLImageElement): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = w * R;
   canvas.height = h * R;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', CPU_CANVAS);
   if (ctx === null) throw new Error('no 2d context');
   ctx.scale(R, R);       // draw in logical coords; the backing store is R× denser
   ctx.imageSmoothingQuality = 'high';

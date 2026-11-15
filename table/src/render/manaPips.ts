@@ -18,6 +18,7 @@ const MANA_URL: Record<string, string> = Object.fromEntries(
     import.meta.glob<string>('../assets/mana/*.svg', { eager: true, import: 'default' }),
   ).map(([p, url]) => [p.slice(p.lastIndexOf('/') + 1, -4), url]),
 );
+import { CPU_CANVAS } from './canvas2d';
 import tapUrl from '../assets/misc/T.svg';
 MANA_URL.T = tapUrl;
 
@@ -45,7 +46,7 @@ function rasterize(url: string): Promise<Texture | undefined> {
         const canvas = document.createElement('canvas');
         canvas.width = RASTER;
         canvas.height = RASTER;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', CPU_CANVAS);
         if (ctx === null) { resolve(undefined); return; }
         ctx.drawImage(image, 0, 0, RASTER, RASTER);
         resolve(Texture.from(canvas));
