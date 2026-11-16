@@ -46,10 +46,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * </ul>
  *
  * The driver and its exit assertions live in
- * {@link LiveHarness#playFullGame(Client)}; this test supplies the
- * in-process stack it runs against. Requires a local XMage server on 17171
- * (skipped otherwise): run {@code mvn -Plive test}. This doubles as the
- * JDK-26 session-layer soak.
+ * {@link LiveHarness#playFullGame(Client, java.nio.file.Path)}; this test supplies
+ * the in-process stack it runs against, and plays {@link LiveHarness#AGGRO_DECK}
+ * so the combat assertion has creatures to declare with. Requires a local XMage
+ * server on 17171 (skipped otherwise): run {@code mvn -Plive test}. This doubles
+ * as the JDK-26 session-layer soak.
  */
 @Tag("live")
 class LiveGameTest {
@@ -71,7 +72,7 @@ class LiveGameTest {
         Javalin app = new WsEndpoint(new Codec(), registry, lobby, games, gateway::health).buildApp();
         app.start("127.0.0.1", 0);
         try {
-            LiveHarness.playFullGame(Client.connect(app.port(), "solo"));
+            LiveHarness.playFullGame(Client.connect(app.port(), "solo"), LiveHarness.AGGRO_DECK);
         } finally {
             app.stop();
             lobby.close();

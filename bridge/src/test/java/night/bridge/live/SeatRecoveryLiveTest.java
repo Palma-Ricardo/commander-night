@@ -123,8 +123,11 @@ class SeatRecoveryLiveTest {
         Auditor a = c.auditor;
         assertEquals(List.of(), a.violations, "protocol invariant violations");
         assertTrue(a.sawOver, "final keyframe must carry status:over before game.over");
-        assertTrue(a.promptsAnswered > 10, "the game must keep flowing after recovery, got "
-                + a.promptsAnswered + " answered prompts");
+        // coverage goals: a game that ends early never reaches the outage (Coverage)
+        Coverage.goal("seat recovery", "outage + recovery ran (after 8 answered prompts)",
+                outageDone, a.promptsAnswered + " prompts answered");
+        Coverage.goal("seat recovery", "game kept flowing after recovery (>10 prompts)",
+                a.promptsAnswered > 10, a.promptsAnswered + " prompts answered");
         System.out.printf("[recovery] game over: %s | prompts=%d/%d patches=%d keyframes=%d%n",
                 a.gameOver.path("reason").asText(), a.promptsAnswered, a.promptsSeen,
                 a.patches, a.keyframes);

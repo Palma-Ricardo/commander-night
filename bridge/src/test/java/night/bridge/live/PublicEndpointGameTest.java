@@ -36,6 +36,6 @@ class PublicEndpointGameTest {
         // and games run short, so the combat-declaration assertion needs a deck
         // that fights early — 2/2 Tasigur runs ended combat-less (2026-07-18)
         LiveHarness.playFullGame(Client.connect(URI.create(endpoint), "public"),
-                LiveHarness.SAMPLE_DECK.resolveSibling("Zurgo Helmsmasher RWB.dck"));
+                LiveHarness.AGGRO_DECK);
     }
 }
