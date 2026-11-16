@@ -1,0 +1,49 @@
+name: XMage server
+description: >
+  Install the pinned XMage dist from XMage's official release, install its jars into the
+  local Maven repo, link the card DB, and start the server on :17171 (Java 8, -Xmx2048m
+  like prod). Expects actions/setup-java to have installed Java 8 and 25 (25 as default).
+
+runs:
+  using: composite
+  steps:
+    - name: Download the XMage dist
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # On an XMage upgrade, update these with the new official zip (and xmage.version
+        # in bridge/pom.xml).
+        XMAGE_TAG: xmage_1.4.63V1
+        XMAGE_ZIP: mage-full_1.4.63-dev_2026-10-31_09-42.zip
+        XMAGE_ZIP_SHA256: f48e69a2583720800ab6a447458ede73bded5cb21905b0d9658a6052ab43908a
+      run: |
+        cd "$RUNNER_TEMP"
+        gh release download "$XMAGE_TAG" --repo magefree/mage --pattern "$XMAGE_ZIP"
+        echo "$XMAGE_ZIP_SHA256  $XMAGE_ZIP" | sha256sum -c
+        mkdir -p "$GITHUB_WORKSPACE/vendor/xmage-dist"
+        # -q, and `|| [ $? -eq 1 ]`: a few sample-deck filenames are mis-encoded in the zip;
+        # unzip warns and exits 1 for those but extracts everything.
+        unzip -q "$XMAGE_ZIP" -d "$GITHUB_WORKSPACE/vendor/xmage-dist" || [ $? -eq 1 ]
+        rm "$XMAGE_ZIP"
+
+    - name: Install XMage jars + link the card DB
+      shell: bash
+      run: |
+        ./bridge/install-xmage-jars.sh
+        ln -sfn vendor/xmage-dist/xmage/mage-server/db db
+        ln -sfn ../vendor/xmage-dist/xmage/mage-server/db bridge/db
+
+    - name: Start the XMage server
+      shell: bash
+      run: |
+        cd vendor/xmage-dist/xmage/mage-server
+        nohup "$JAVA_HOME_8_X64/bin/java" -Xmx2048m -Djava.awt.headless=true \
+          -jar lib/mage-server-*.jar > "$RUNNER_TEMP/xmage-server.log" 2>&1 &
+        # First start builds the card DB (~95k cards) before listening: ~20 s.
+        for i in $(seq 1 90); do
+          if (exec 3<>/dev/tcp/127.0.0.1/17171) 2>/dev/null; then echo "XMage up after $((i * 2)) s"; exit 0; fi
+          sleep 2
+        done
+        echo "::error::XMage server did not open :17171 within 180 s"
+        tail -50 "$RUNNER_TEMP/xmage-server.log"
+        exit 1
